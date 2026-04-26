@@ -92,6 +92,19 @@ def fmt_hours(v: float) -> str:
     return f"{float(v):.2f}".replace(".", ",") + " Std."
 
 
+def fmt_v_input(v_hours: float) -> str:
+    """Shows the original V amount in the admin input.
+
+    Internally v_hours is stored already divided by 14 for the calculation.
+    In the admin screen, the user enters and sees the original amount.
+    """
+    amount = round(float(v_hours or 0) * 14.0, 2)
+    if abs(amount) < 0.0001:
+        return ""
+    text = f"{amount:.2f}".replace(".", ",")
+    return text[:-3] if text.endswith(",00") else text
+
+
 def signed_class(v: float) -> str:
     v = float(v or 0)
     return "pos" if v > 0 else "neg" if v < 0 else "zero"
@@ -927,7 +940,7 @@ def admin_months():
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b></td>
         <td data-label="Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
         <td data-label="Abrechnung"><input form="save-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
-        <td data-label="V"><input form="save-{{ d['id'] }}" name="v_hours" value="" placeholder="Betrag"></td>
+        <td data-label="V"><input form="save-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"></td>
         <td data-label="Zuschüsse / Abzüge">
           <div class="mini-form"><select form="save-{{ d['id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
@@ -992,7 +1005,7 @@ def admin_months():
       });
     });
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, fmt_signed=fmt_signed, fmt_hours=fmt_hours, signed_class=signed_class)
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, signed_class=signed_class)
     return base_page("Monatsdaten", body, "months")
 
 
