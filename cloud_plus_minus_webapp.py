@@ -573,7 +573,7 @@ def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month
 
     create_pdf_report(pdf_path, f"Monatsübersicht {driver['name']} – {MONATE[month]} {year}", "+ - Stunden", ["Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller\nStand","Neuer\nStand"], [[
         driver["name"], fmt_hours(row["worked_hours"]), fmt_hours(row["payroll_hours"]), fmt_hours(abs(row["v_hours"])),
-        format_value_comment(row["bonus_hours"], row["bonus_comment"], hours=True), format_value_comment(row["deduction_hours"], row["deduction_comment"], hours=True),
+        (row["bonus_comment"] or "-").strip() or "-", (row["deduction_comment"] or "-").strip() or "-",
         fmt_signed(row["difference_hours"]), fmt_signed(row["previous_balance"]), fmt_signed(row["new_balance"])
     ]], extra_story=extra_story)
     ts = now_iso()
