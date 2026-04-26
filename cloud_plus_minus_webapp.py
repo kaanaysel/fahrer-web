@@ -385,6 +385,69 @@ def delete_attachment_file(relative_path: str) -> None:
     except Exception:
         pass
 
+
+def delete_relative_file(relative_path: str) -> None:
+    try:
+        path = DATA_ROOT / relative_path
+        if path.exists() and path.is_file():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def delete_driver_files(conn: sqlite3.Connection, driver_id: int) -> None:
+    for r in conn.execute("SELECT relative_path FROM documents WHERE driver_id=?", (driver_id,)).fetchall():
+        delete_relative_file(r["relative_path"])
+    for r in conn.execute("""
+        SELECT af.relative_path
+        FROM adjustment_files af
+        JOIN adjustment_items ai ON ai.id=af.adjustment_item_id
+        JOIN monthly_data m ON m.id=ai.monthly_data_id
+        WHERE m.driver_id=?
+    """, (driver_id,)).fetchall():
+        delete_relative_file(r["relative_path"])
+
+
+def delete_month_files(conn: sqlite3.Connection, monthly_id: int) -> None:
+    month_row = conn.execute("SELECT driver_id, year, month FROM monthly_data WHERE id=?", (monthly_id,)).fetchone()
+    if not month_row:
+        return
+    did, year, month = int(month_row["driver_id"]), int(month_row["year"]), int(month_row["month"])
+    for r in conn.execute("SELECT relative_path FROM documents WHERE driver_id=? AND year=? AND month=?", (did, year, month)).fetchall():
+        delete_relative_file(r["relative_path"])
+    for r in conn.execute("""
+        SELECT af.relative_path
+        FROM adjustment_files af
+        JOIN adjustment_items ai ON ai.id=af.adjustment_item_id
+        WHERE ai.monthly_data_id=?
+    """, (monthly_id,)).fetchall():
+        delete_relative_file(r["relative_path"])
+
+
+def cleanup_empty_dirs(root: Path) -> None:
+    try:
+        if not root.exists():
+            return
+        for current, dirs, files in os.walk(root, topdown=False):
+            path = Path(current)
+            try:
+                if path != root and not any(path.iterdir()):
+                    path.rmdir()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def month_has_real_data(row: sqlite3.Row, adjustment_count: int = 0, document_count: int = 0, file_count: int = 0) -> bool:
+    numeric = ["worked_hours", "payroll_hours", "v_hours", "bonus_hours", "deduction_hours", "adjustment_hours", "difference_hours"]
+    if any(abs(float(row[k] or 0)) > 0.0001 for k in numeric):
+        return True
+    text = ["bonus_comment", "deduction_comment", "comment", "admin_info"]
+    if any((row[k] or "").strip() for k in text):
+        return True
+    return adjustment_count > 0 or document_count > 0 or file_count > 0
+
 # ---------------- PDF ----------------
 def _pdf_table(data: List[List[str]], widths: List[float]) -> Table:
     styles = getSampleStyleSheet()
@@ -583,7 +646,7 @@ def base_page(title: str, body: str, active: str = "dashboard") -> str:
     nav = [
         ("dashboard","Dashboard",url_for("admin_dashboard")), ("drivers","Fahrer",url_for("admin_drivers")),
         ("months","Monatsdaten",url_for("admin_months")), ("import","PDF-Import",url_for("admin_import_pdf")),
-        ("exports","Export/Backup",url_for("admin_exports")), ("portal","Fahrerportal",url_for("driver_login")),
+        ("exports","Export/Backup",url_for("admin_exports")), ("cleanup","Aufräumen",url_for("admin_cleanup")), ("portal","Fahrerportal",url_for("driver_login")),
     ]
     flashes = "".join(f'<div class="flash {"ok" if c=="ok" else "err"}">{m}</div>' for c,m in get_flashed_messages(with_categories=True))
     return render_template_string("""
@@ -915,12 +978,190 @@ def admin_import_pdf():
 @admin_login_required
 def admin_exports():
     with db_conn() as conn:
-        years = [r["year"] for r in conn.execute("SELECT DISTINCT year FROM monthly_data ORDER BY year DESC").fetchall()]
+        month_rows = conn.execute("""
+            SELECT m.year, m.month,
+                   COUNT(*) AS total_rows,
+                   SUM(CASE WHEN ABS(COALESCE(m.worked_hours,0))>0.0001
+                              OR ABS(COALESCE(m.payroll_hours,0))>0.0001
+                              OR ABS(COALESCE(m.v_hours,0))>0.0001
+                              OR ABS(COALESCE(m.bonus_hours,0))>0.0001
+                              OR ABS(COALESCE(m.deduction_hours,0))>0.0001
+                              OR ABS(COALESCE(m.adjustment_hours,0))>0.0001
+                              OR ABS(COALESCE(m.difference_hours,0))>0.0001
+                              OR TRIM(COALESCE(m.bonus_comment,''))<>''
+                              OR TRIM(COALESCE(m.deduction_comment,''))<>''
+                              OR TRIM(COALESCE(m.comment,''))<>''
+                              OR TRIM(COALESCE(m.admin_info,''))<>''
+                              OR EXISTS(SELECT 1 FROM adjustment_items ai WHERE ai.monthly_data_id=m.id)
+                              OR EXISTS(SELECT 1 FROM documents doc WHERE doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month)
+                            THEN 1 ELSE 0 END) AS filled_rows
+            FROM monthly_data m
+            GROUP BY m.year, m.month
+            HAVING filled_rows > 0
+            ORDER BY m.year DESC, m.month DESC
+        """).fetchall()
     body = render_template_string("""
-    <div class="card"><h2>Export & Backup</h2><div class="actions"><a class="btn primary" href="{{ url_for('download_backup_json') }}">Backup JSON herunterladen</a><a class="btn" href="{{ url_for('download_backup_csv') }}">Monatsdaten CSV herunterladen</a></div></div>
-    <div class="card"><h2>Monats-PDFs</h2><div class="driver-grid">{% for y in years %}{% for m,n in months.items() %}<a class="month-card" href="{{ url_for('download_month_export', year=y, month=m) }}"><strong>{{ n }} {{ y }}</strong>PDF herunterladen</a>{% endfor %}{% endfor %}</div></div>
-    """, years=years, months=MONATE)
+    <div class="card"><h2>Export & Backup</h2><div class="actions"><a class="btn primary" href="{{ url_for('download_backup_json') }}">Backup JSON herunterladen</a><a class="btn" href="{{ url_for('download_backup_csv') }}">Monatsdaten CSV herunterladen</a><a class="btn danger" href="{{ url_for('admin_cleanup') }}">Aufräumen / Löschen</a></div><p class="download-note">Hier werden nur Monate angezeigt, die echte Daten enthalten. Leere automatisch erzeugte Monate erscheinen nicht mehr.</p></div>
+    <div class="card"><h2>Monats-PDFs</h2>{% if month_rows %}<div class="driver-grid">{% for r in month_rows %}<a class="month-card" href="{{ url_for('download_month_export', year=r['year'], month=r['month']) }}"><strong>{{ months[r['month']] }} {{ r['year'] }}</strong>PDF herunterladen<br><span class="muted">{{ r['filled_rows'] }} Eintrag/Einträge</span></a>{% endfor %}</div>{% else %}<p class="muted">Noch keine echten Monatsdaten vorhanden.</p>{% endif %}</div>
+    """, month_rows=month_rows, months=MONATE)
     return base_page("Export/Backup", body, "exports")
+
+
+@app.route("/admin/cleanup", methods=["GET", "POST"])
+@admin_login_required
+def admin_cleanup():
+    with db_conn() as conn:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            confirm = request.form.get("confirm", "") == "JA"
+            if not confirm:
+                flash("Bitte zum Löschen das Kontrollkästchen bestätigen.", "err")
+            elif action == "delete_selected_months":
+                ids = [int(x) for x in request.form.getlist("monthly_ids") if x.isdigit()]
+                if not ids:
+                    flash("Keine Monate ausgewählt.", "err")
+                else:
+                    affected_drivers = set()
+                    for mid in ids:
+                        row = conn.execute("SELECT driver_id FROM monthly_data WHERE id=?", (mid,)).fetchone()
+                        if row:
+                            affected_drivers.add(int(row["driver_id"]))
+                        delete_month_files(conn, mid)
+                        conn.execute("DELETE FROM monthly_data WHERE id=?", (mid,))
+                    for did in affected_drivers:
+                        recalc_driver(conn, did)
+                    cleanup_empty_dirs(FILES_DIR); cleanup_empty_dirs(ATTACHMENTS_DIR)
+                    audit(conn, "cleanup_delete_months", ",".join(map(str, ids)))
+                    conn.commit()
+                    flash(f"{len(ids)} Monatsdatensatz/Datensätze gelöscht.", "ok")
+            elif action == "delete_empty_months":
+                rows = conn.execute("""
+                    SELECT m.*,
+                           (SELECT COUNT(*) FROM adjustment_items ai WHERE ai.monthly_data_id=m.id) AS adjustment_count,
+                           (SELECT COUNT(*) FROM documents doc WHERE doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month) AS document_count,
+                           (SELECT COUNT(*) FROM adjustment_files af JOIN adjustment_items ai ON ai.id=af.adjustment_item_id WHERE ai.monthly_data_id=m.id) AS file_count
+                    FROM monthly_data m
+                    ORDER BY m.year, m.month
+                """).fetchall()
+                delete_ids = [int(r["id"]) for r in rows if not month_has_real_data(r, int(r["adjustment_count"]), int(r["document_count"]), int(r["file_count"]))]
+                for mid in delete_ids:
+                    delete_month_files(conn, mid)
+                    conn.execute("DELETE FROM monthly_data WHERE id=?", (mid,))
+                recalc_all(conn)
+                cleanup_empty_dirs(FILES_DIR); cleanup_empty_dirs(ATTACHMENTS_DIR)
+                audit(conn, "cleanup_delete_empty_months", str(len(delete_ids)))
+                conn.commit()
+                flash(f"{len(delete_ids)} leere automatisch erzeugte Monate gelöscht.", "ok")
+            elif action == "delete_selected_drivers":
+                ids = [int(x) for x in request.form.getlist("driver_ids") if x.isdigit()]
+                if not ids:
+                    flash("Keine Fahrer ausgewählt.", "err")
+                else:
+                    for did in ids:
+                        delete_driver_files(conn, did)
+                        conn.execute("DELETE FROM drivers WHERE id=?", (did,))
+                    cleanup_empty_dirs(FILES_DIR); cleanup_empty_dirs(ATTACHMENTS_DIR)
+                    audit(conn, "cleanup_delete_drivers", ",".join(map(str, ids)))
+                    conn.commit()
+                    flash(f"{len(ids)} Fahrer inkl. Monatsdaten, PDFs und Anhänge gelöscht.", "ok")
+            elif action == "delete_selected_years":
+                years = [int(x) for x in request.form.getlist("years") if x.isdigit()]
+                if not years:
+                    flash("Keine Jahre ausgewählt.", "err")
+                else:
+                    mids = []
+                    for y in years:
+                        mids.extend([int(r["id"]) for r in conn.execute("SELECT id FROM monthly_data WHERE year=?", (y,)).fetchall()])
+                    affected_drivers = set()
+                    for mid in mids:
+                        row = conn.execute("SELECT driver_id FROM monthly_data WHERE id=?", (mid,)).fetchone()
+                        if row:
+                            affected_drivers.add(int(row["driver_id"]))
+                        delete_month_files(conn, mid)
+                        conn.execute("DELETE FROM monthly_data WHERE id=?", (mid,))
+                    for did in affected_drivers:
+                        recalc_driver(conn, did)
+                    cleanup_empty_dirs(FILES_DIR); cleanup_empty_dirs(ATTACHMENTS_DIR)
+                    audit(conn, "cleanup_delete_years", ",".join(map(str, years)))
+                    conn.commit()
+                    flash(f"Jahr(e) gelöscht: {', '.join(map(str, years))}.", "ok")
+            elif action == "delete_generated_exports":
+                removed = 0
+                if EXPORT_DIR.exists():
+                    for f in EXPORT_DIR.rglob("*"):
+                        if f.is_file():
+                            try:
+                                f.unlink(); removed += 1
+                            except Exception:
+                                pass
+                cleanup_empty_dirs(EXPORT_DIR)
+                audit(conn, "cleanup_delete_exports", str(removed))
+                conn.commit()
+                flash(f"{removed} Export-Datei(en) von der Disk gelöscht. Sie werden bei Bedarf neu erzeugt.", "ok")
+            elif action == "vacuum_db":
+                conn.commit()
+                conn.execute("VACUUM")
+                flash("SQLite-Datenbank wurde komprimiert.", "ok")
+            else:
+                flash("Unbekannte Aktion.", "err")
+
+        recalc_all(conn); conn.commit()
+        drivers = conn.execute("""
+            SELECT d.id, d.name, d.username, d.is_active,
+                   COUNT(m.id) AS month_count,
+                   COALESCE((SELECT new_balance FROM monthly_data mm WHERE mm.driver_id=d.id ORDER BY year DESC, month DESC, id DESC LIMIT 1), d.starting_balance) AS balance
+            FROM drivers d
+            LEFT JOIN monthly_data m ON m.driver_id=d.id
+            GROUP BY d.id
+            ORDER BY d.name COLLATE NOCASE
+        """).fetchall()
+        months = conn.execute("""
+            SELECT m.id, m.year, m.month, d.name AS driver_name,
+                   m.worked_hours, m.payroll_hours, m.v_hours, m.bonus_hours, m.deduction_hours, m.difference_hours, m.admin_info,
+                   (SELECT COUNT(*) FROM adjustment_items ai WHERE ai.monthly_data_id=m.id) AS adjustment_count,
+                   (SELECT COUNT(*) FROM documents doc WHERE doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month) AS document_count,
+                   (SELECT COUNT(*) FROM adjustment_files af JOIN adjustment_items ai ON ai.id=af.adjustment_item_id WHERE ai.monthly_data_id=m.id) AS file_count
+            FROM monthly_data m
+            JOIN drivers d ON d.id=m.driver_id
+            ORDER BY m.year DESC, m.month DESC, d.name COLLATE NOCASE
+        """).fetchall()
+        month_view = []
+        for r in months:
+            is_real = month_has_real_data(r, int(r["adjustment_count"]), int(r["document_count"]), int(r["file_count"]))
+            month_view.append({"row": r, "is_real": is_real})
+        years = conn.execute("SELECT DISTINCT year FROM monthly_data ORDER BY year DESC").fetchall()
+        empty_count = sum(1 for m in month_view if not m["is_real"])
+        real_count = sum(1 for m in month_view if m["is_real"])
+        docs_count = conn.execute("SELECT COUNT(*) AS c FROM documents").fetchone()["c"]
+        files_count = conn.execute("SELECT COUNT(*) AS c FROM adjustment_files").fetchone()["c"]
+
+    body = render_template_string("""
+    <div class="card">
+      <h2>Aufräumen & Löschen</h2>
+      <p class="muted">Vor großen Löschaktionen zuerst ein Backup herunterladen. Gelöschte Fahrer/Monate werden direkt aus der SQLite-Datenbank und die dazugehörigen PDF-/Anhang-Dateien von der Disk entfernt.</p>
+      <div class="actions"><a class="btn primary" href="{{ url_for('download_backup_json') }}">Backup JSON herunterladen</a><a class="btn" href="{{ url_for('download_backup_csv') }}">CSV herunterladen</a><a class="btn" href="{{ url_for('admin_exports') }}">Zurück zu Export</a></div>
+    </div>
+    <div class="grid grid-4"><div class="kpi">Echte Monate<b>{{ real_count }}</b></div><div class="kpi">Leere Monate<b>{{ empty_count }}</b></div><div class="kpi">PDFs<b>{{ docs_count }}</b></div><div class="kpi">Anhänge<b>{{ files_count }}</b></div></div>
+
+    <div class="card"><h2>Schnell aufräumen</h2><div class="grid grid-3">
+      <form method="post" onsubmit="return confirm('Alle leeren Monate wirklich löschen?')"><input type="hidden" name="action" value="delete_empty_months"><label><input style="width:auto" type="checkbox" name="confirm" value="JA" required> bestätigen</label><button class="danger">Leere Monate löschen</button><p class="download-note">Löscht automatisch erzeugte Monate ohne Stunden, Kommentare, Positionen, PDFs oder Anhänge.</p></form>
+      <form method="post" onsubmit="return confirm('Generierte Export-PDFs wirklich von der Disk löschen?')"><input type="hidden" name="action" value="delete_generated_exports"><label><input style="width:auto" type="checkbox" name="confirm" value="JA" required> bestätigen</label><button class="danger">Export-Dateien löschen</button><p class="download-note">Monats-Export-PDFs werden bei erneutem Klick automatisch neu erstellt.</p></form>
+      <form method="post"><input type="hidden" name="action" value="vacuum_db"><input type="hidden" name="confirm" value="JA"><button>SQLite komprimieren</button><p class="download-note">Gibt nach Löschungen Speicher in der SQLite-Datei frei.</p></form>
+    </div></div>
+
+    <div class="card"><h2>Monate verwalten</h2><form method="post" onsubmit="return confirm('Ausgewählte Monatsdatensätze wirklich löschen?')"><input type="hidden" name="action" value="delete_selected_months">
+      <div class="actions" style="margin-bottom:10px"><button type="button" onclick="document.querySelectorAll('.month-check').forEach(x=>x.checked=true)">Alle auswählen</button><button type="button" onclick="document.querySelectorAll('.month-check').forEach(x=>x.checked=false)">Auswahl entfernen</button><label style="width:auto;margin:0"><input style="width:auto" type="checkbox" name="confirm" value="JA" required> Löschen bestätigen</label><button class="danger">Ausgewählte Monate löschen</button></div>
+      <div class="table-wrap"><table style="min-width:980px"><tr><th></th><th>Status</th><th>Monat</th><th>Fahrer</th><th>Stunden</th><th>Abrechnung</th><th>V</th><th>Positionen</th><th>PDF</th><th>Anhänge</th></tr>{% for m in month_view %}{% set r=m.row %}<tr><td><input class="month-check" style="width:auto" type="checkbox" name="monthly_ids" value="{{ r['id'] }}"></td><td>{% if m.is_real %}<span class="badge">Daten</span>{% else %}<span class="muted">leer</span>{% endif %}</td><td>{{ months_name[r['month']] }} {{ r['year'] }}</td><td>{{ r['driver_name'] }}</td><td>{{ fmt_hours(r['worked_hours']) }}</td><td>{{ fmt_hours(r['payroll_hours']) }}</td><td>{{ fmt_hours(r['v_hours']) }}</td><td>{{ r['adjustment_count'] }}</td><td>{{ r['document_count'] }}</td><td>{{ r['file_count'] }}</td></tr>{% endfor %}</table></div>
+    </form></div>
+
+    <div class="card"><h2>Fahrer verwalten/löschen</h2><form method="post" onsubmit="return confirm('Ausgewählte Fahrer wirklich komplett löschen? Alle Monatsdaten, PDFs und Anhänge werden gelöscht.')"><input type="hidden" name="action" value="delete_selected_drivers">
+      <div class="actions" style="margin-bottom:10px"><button type="button" onclick="document.querySelectorAll('.driver-check').forEach(x=>x.checked=true)">Alle auswählen</button><button type="button" onclick="document.querySelectorAll('.driver-check').forEach(x=>x.checked=false)">Auswahl entfernen</button><label style="width:auto;margin:0"><input style="width:auto" type="checkbox" name="confirm" value="JA" required> Löschen bestätigen</label><button class="danger">Ausgewählte Fahrer löschen</button></div>
+      <div class="table-wrap"><table style="min-width:760px"><tr><th></th><th>Fahrer</th><th>Benutzername</th><th>Aktiv</th><th>Monate</th><th>Saldo</th></tr>{% for d in drivers %}<tr><td><input class="driver-check" style="width:auto" type="checkbox" name="driver_ids" value="{{ d['id'] }}"></td><td>{{ d['name'] }}</td><td>{{ d['username'] }}</td><td>{{ 'ja' if d['is_active'] else 'nein' }}</td><td>{{ d['month_count'] }}</td><td class="{{ signed_class(d['balance']) }}">{{ fmt_signed(d['balance']) }}</td></tr>{% endfor %}</table></div>
+    </form></div>
+
+    <div class="card"><h2>Ganze Jahre löschen</h2><form method="post" onsubmit="return confirm('Ausgewählte Jahre wirklich komplett löschen?')"><input type="hidden" name="action" value="delete_selected_years"><div class="actions">{% for y in years %}<label style="width:auto"><input style="width:auto" type="checkbox" name="years" value="{{ y['year'] }}"> {{ y['year'] }}</label>{% endfor %}<label style="width:auto"><input style="width:auto" type="checkbox" name="confirm" value="JA" required> Löschen bestätigen</label><button class="danger">Ausgewählte Jahre löschen</button></div></form></div>
+    """, drivers=drivers, month_view=month_view, years=years, real_count=real_count, empty_count=empty_count, docs_count=docs_count, files_count=files_count, months_name=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class)
+    return base_page("Aufräumen", body, "cleanup")
 
 # ---------------- driver portal ----------------
 @app.route("/login", methods=["GET","POST"])
