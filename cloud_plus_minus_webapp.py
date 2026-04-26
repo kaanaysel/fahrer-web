@@ -440,12 +440,30 @@ def cleanup_empty_dirs(root: Path) -> None:
 
 
 def month_has_real_data(row: sqlite3.Row, adjustment_count: int = 0, document_count: int = 0, file_count: int = 0) -> bool:
+    """Return True only when a month contains real entered data.
+
+    Some overview queries select only a subset of monthly_data columns. SQLite Row
+    raises IndexError when a missing column is accessed, so this helper must read
+    values defensively.
+    """
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+
+    def get_value(key: str, default: Any = 0) -> Any:
+        return row[key] if key in keys else default
+
     numeric = ["worked_hours", "payroll_hours", "v_hours", "bonus_hours", "deduction_hours", "adjustment_hours", "difference_hours"]
-    if any(abs(float(row[k] or 0)) > 0.0001 for k in numeric):
-        return True
+    for k in numeric:
+        try:
+            if abs(float(get_value(k, 0) or 0)) > 0.0001:
+                return True
+        except Exception:
+            pass
+
     text = ["bonus_comment", "deduction_comment", "comment", "admin_info"]
-    if any((row[k] or "").strip() for k in text):
-        return True
+    for k in text:
+        if str(get_value(k, "") or "").strip():
+            return True
+
     return adjustment_count > 0 or document_count > 0 or file_count > 0
 
 # ---------------- PDF ----------------
