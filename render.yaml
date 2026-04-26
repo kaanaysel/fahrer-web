@@ -13,6 +13,8 @@ services:
         generateValue: true
       - key: PORTAL_DATA_DIR
         value: /var/data
+      - key: DATABASE_URL
+        sync: false
     disk:
       name: fahrer-cloud-data
       mountPath: /var/data
