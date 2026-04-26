@@ -984,23 +984,58 @@ def admin_import_pdf():
                 tmp = DATA_ROOT / "tmp_import.pdf"; f.save(tmp)
                 try:
                     entries = extract_payroll_entries_from_pdf(tmp)
+                    created_count = 0
+                    imported_count = 0
                     for e in entries:
                         did, status = guess_driver_match(conn, e["name"])
+                        created_driver = False
+                        username = ""
+
+                        if not did and e.get("name"):
+                            # Fahrer fehlt im System: automatisch anlegen.
+                            # Standard-Passwort ist bewusst "0", damit der Fahrer sofort einloggen kann.
+                            ts = now_iso()
+                            username = make_unique_username(conn, slugify(e["name"]))
+                            ext = next_external_id(conn)
+                            cur = conn.execute(
+                                """
+                                INSERT INTO drivers(
+                                    external_driver_id, name, username, password_hash,
+                                    starting_balance, is_active, created_at, updated_at
+                                ) VALUES(?,?,?,?,0,1,?,?)
+                                """,
+                                (ext, e["name"].strip(), username, generate_password_hash("0"), ts, ts),
+                            )
+                            did = int(cur.lastrowid)
+                            created_driver = True
+                            created_count += 1
+                            status = "Fahrer automatisch angelegt · Passwort: 0"
+                            audit(conn, "driver_auto_create_from_pdf", f"{e['name']} username={username}")
+                        elif did:
+                            drow = get_driver_by_db_id(conn, did)
+                            username = drow["username"] if drow else ""
+
                         if did and e.get("year") and e.get("month"):
                             monthly_id = get_or_create_month_row(conn, did, int(e["year"]), int(e["month"]))
-                            conn.execute("UPDATE monthly_data SET v_hours=?, updated_at=? WHERE id=?", (abs(float(e["v_hours"])), now_iso(), monthly_id))
+                            conn.execute(
+                                "UPDATE monthly_data SET v_hours=?, updated_at=? WHERE id=?",
+                                (abs(float(e["v_hours"])), now_iso(), monthly_id),
+                            )
                             recalc_month_adjustments(conn, monthly_id)
-                            recalc_driver(conn,did); create_driver_pdf(conn,did,e["year"],e["month"])
-                            status += " · importiert"
-                        results.append({**e,"driver_id":did,"status":status})
-                    conn.commit(); flash(f"PDF-Import fertig: {len(results)} Einträge erkannt.", "ok")
+                            recalc_driver(conn, did)
+                            create_driver_pdf(conn, did, int(e["year"]), int(e["month"]))
+                            imported_count += 1
+                            status += " · V importiert und gespeichert"
+
+                        results.append({**e, "driver_id": did, "username": username, "created_driver": created_driver, "status": status})
+                    conn.commit(); flash(f"PDF-Import fertig: {len(results)} Einträge erkannt, {imported_count} V-Werte gespeichert, {created_count} Fahrer automatisch angelegt.", "ok")
                 except Exception as ex:
                     flash(str(ex), "err")
                 try: tmp.unlink()
                 except Exception: pass
     body = render_template_string("""
-    <div class="card"><h2>Lohn-PDF importieren</h2><p class="muted">Importiert Verpflegungszuschuss als V-Stunden, ordnet Fahrer automatisch zu und erzeugt Fahrer-PDFs neu.</p><form method="post" enctype="multipart/form-data"><input type="file" name="file" accept="application/pdf" required><button class="primary" style="margin-top:12px">Importieren</button></form></div>
-    {% if results %}<div class="card"><h2>Import-Ergebnis</h2><div class="table-wrap"><table><tr><th>Seite</th><th>Name in PDF</th><th>Monat</th><th>V-Betrag</th><th>V-Stunden</th><th>Status</th></tr>{% for r in results %}<tr><td>{{ r.page }}</td><td>{{ r.name }}</td><td>{{ months.get(r.month, r.month) }} {{ r.year }}</td><td>{{ r.v_source_amount }}</td><td>{{ r.v_hours }}</td><td>{{ r.status }}</td></tr>{% endfor %}</table></div></div>{% endif %}
+    <div class="card"><h2>Lohn-PDF importieren</h2><p class="muted">Importiert Verpflegungszuschuss als V-Stunden, ordnet Fahrer automatisch zu und erzeugt Fahrer-PDFs neu. Fehlt ein Fahrer, wird er automatisch angelegt. Standard-Passwort: <b>0</b>.</p><form method="post" enctype="multipart/form-data"><input type="file" name="file" accept="application/pdf" required><button class="primary" style="margin-top:12px">Importieren</button></form></div>
+    {% if results %}<div class="card"><h2>Import-Ergebnis</h2><div class="table-wrap"><table><tr><th>Seite</th><th>Name in PDF</th><th>Benutzername</th><th>Monat</th><th>V-Betrag</th><th>V-Stunden</th><th>Status</th></tr>{% for r in results %}<tr><td>{{ r.page }}</td><td>{{ r.name }}</td><td>{{ r.username or '-' }}</td><td>{{ months.get(r.month, r.month) }} {{ r.year }}</td><td>{{ r.v_source_amount }}</td><td>{{ r.v_hours }}</td><td>{{ r.status }}</td></tr>{% endfor %}</table></div></div>{% endif %}
     """, results=results, months=MONATE)
     return base_page("PDF-Import", body, "import")
 
