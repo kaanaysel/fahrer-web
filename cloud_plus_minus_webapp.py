@@ -26,7 +26,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 try:
     from pypdf import PdfReader
-except Exception:  # optional, only needed for payroll PDF import
+except Exception:
     PdfReader = None
 
 APP_NAME = "Plus/Minus Cloud"
@@ -53,8 +53,8 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1500px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:980px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}
-@media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:980px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}
+@media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}}
 """
 
 # ---------------- basic helpers ----------------
@@ -75,7 +75,8 @@ def normalize(text: str) -> str:
 
 def slugify(text: str) -> str:
     repl = {"ä":"ae","ö":"oe","ü":"ue","ß":"ss","Ä":"ae","Ö":"oe","Ü":"ue"}
-    for a,b in repl.items(): text = text.replace(a,b)
+    for a,b in repl.items():
+        text = text.replace(a,b)
     s = re.sub(r"[^a-zA-Z0-9._-]+", ".", (text or "").strip().lower())
     s = re.sub(r"\.+", ".", s).strip(".")
     return s or "fahrer"
@@ -96,15 +97,18 @@ def signed_class(v: float) -> str:
 
 def parse_hours(raw: str) -> float:
     text = (raw or "").strip().lower().replace(" ", "")
-    if not text: return 0.0
+    if not text:
+        return 0.0
     if re.fullmatch(r"[+-]?\d+[:h]\d{1,2}", text):
         sign = -1 if text.startswith("-") else 1
         clean = text[1:] if text[:1] in "+-" else text
         h, m = re.split(r"[:h]", clean)
-        if int(m) >= 60: raise ValueError("Minuten müssen kleiner als 60 sein.")
+        if int(m) >= 60:
+            raise ValueError("Minuten müssen kleiner als 60 sein.")
         return sign * (int(h) + int(m) / 60)
     direct = text.replace(",", ".")
-    if re.fullmatch(r"[+-]?\d+(\.\d+)?", direct): return float(direct)
+    if re.fullmatch(r"[+-]?\d+(\.\d+)?", direct):
+        return float(direct)
     nums = re.findall(r"[+-]?\d+(?:[\.,]\d+)?", text)
     if nums and ("+" in text or any(ch.isalpha() for ch in text)):
         return round(sum(float(n.replace(",", ".")) for n in nums), 2)
@@ -116,7 +120,6 @@ def parse_german_money(raw: str) -> float:
 
 
 def compute_difference(worked: float, payroll: float, v: float, bonus: float, deduction: float) -> float:
-    # deduction is stored as a negative number, exactly like your desktop app
     return round(float(worked) - (float(payroll) + abs(float(v))) + float(bonus) + float(deduction), 2)
 
 
@@ -129,8 +132,10 @@ def make_unique_username(conn: sqlite3.Connection, username: str, exclude_id: Op
             row = conn.execute("SELECT id FROM drivers WHERE lower(username)=lower(?) AND id<>?", (candidate, exclude_id)).fetchone()
         else:
             row = conn.execute("SELECT id FROM drivers WHERE lower(username)=lower(?)", (candidate,)).fetchone()
-        if not row: return candidate
-        candidate = f"{base}.{n}"; n += 1
+        if not row:
+            return candidate
+        candidate = f"{base}.{n}"
+        n += 1
 
 # ---------------- database ----------------
 def db_conn() -> sqlite3.Connection:
@@ -190,11 +195,21 @@ def db_conn() -> sqlite3.Connection:
         details TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS adjustment_items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monthly_data_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        hours REAL NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(monthly_data_id) REFERENCES monthly_data(id) ON DELETE CASCADE
+    );
     """)
-    # lightweight migrations for your current SQLite
+
     cols = {r[1] for r in conn.execute("PRAGMA table_info(drivers)").fetchall()}
     if "starting_balance" not in cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN starting_balance REAL NOT NULL DEFAULT 0")
+
     cols = {r[1] for r in conn.execute("PRAGMA table_info(monthly_data)").fetchall()}
     for name, ddl in {
         "bonus_hours":"ALTER TABLE monthly_data ADD COLUMN bonus_hours REAL NOT NULL DEFAULT 0",
@@ -202,7 +217,9 @@ def db_conn() -> sqlite3.Connection:
         "deduction_hours":"ALTER TABLE monthly_data ADD COLUMN deduction_hours REAL NOT NULL DEFAULT 0",
         "deduction_comment":"ALTER TABLE monthly_data ADD COLUMN deduction_comment TEXT NOT NULL DEFAULT ''",
     }.items():
-        if name not in cols: conn.execute(ddl)
+        if name not in cols:
+            conn.execute(ddl)
+
     conn.commit()
     return conn
 
@@ -220,9 +237,62 @@ def next_external_id(conn: sqlite3.Connection) -> int:
     return int(row["m"] or 0) + 1
 
 
+def get_or_create_month_row(conn: sqlite3.Connection, driver_id: int, year: int, month: int) -> int:
+    row = conn.execute(
+        "SELECT id FROM monthly_data WHERE driver_id=? AND year=? AND month=?",
+        (driver_id, year, month),
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    cur = conn.execute(
+        "INSERT INTO monthly_data(driver_id, year, month, updated_at) VALUES(?,?,?,?)",
+        (driver_id, year, month, now_iso()),
+    )
+    return int(cur.lastrowid)
+
+
+def recalc_month_adjustments(conn: sqlite3.Connection, monthly_data_id: int) -> None:
+    items = conn.execute(
+        "SELECT kind, hours, note FROM adjustment_items WHERE monthly_data_id=? ORDER BY id",
+        (monthly_data_id,),
+    ).fetchall()
+
+    bonus = round(sum(abs(float(i["hours"] or 0)) for i in items if i["kind"] == "bonus"), 2)
+    deduction = round(-sum(abs(float(i["hours"] or 0)) for i in items if i["kind"] == "deduction"), 2)
+
+    bonus_comment = "\n".join(
+        f'{fmt_hours(abs(float(i["hours"] or 0)))} - {i["note"]}'
+        for i in items if i["kind"] == "bonus"
+    )
+    deduction_comment = "\n".join(
+        f'{fmt_hours(-abs(float(i["hours"] or 0)))} - {i["note"]}'
+        for i in items if i["kind"] == "deduction"
+    )
+
+    conn.execute(
+        """
+        UPDATE monthly_data
+        SET bonus_hours=?, bonus_comment=?, deduction_hours=?, deduction_comment=?,
+            adjustment_hours=?, comment=?, updated_at=?
+        WHERE id=?
+        """,
+        (
+            bonus,
+            bonus_comment,
+            deduction,
+            deduction_comment,
+            round(bonus + deduction, 2),
+            (bonus_comment + "\n" + deduction_comment).strip(),
+            now_iso(),
+            monthly_data_id,
+        ),
+    )
+
+
 def recalc_driver(conn: sqlite3.Connection, driver_id: int) -> None:
     driver = get_driver_by_db_id(conn, driver_id)
-    if not driver: return
+    if not driver:
+        return
     balance = float(driver["starting_balance"] or 0)
     rows = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? ORDER BY year, month, id", (driver_id,)).fetchall()
     for r in rows:
@@ -255,7 +325,8 @@ def _pdf_table(data: List[List[str]], widths: List[float]) -> Table:
 
 def create_pdf_report(pdf_path: Path, title: str, subtitle: str, headers: List[str], rows: List[List[str]], wide: bool = True) -> None:
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    if pdf_path.exists(): pdf_path.unlink()
+    if pdf_path.exists():
+        pdf_path.unlink()
     pagesize = landscape(A4) if wide else A4
     page_width = pagesize[0]
     margin = 8 * mm
@@ -283,7 +354,8 @@ def format_value_comment(value: float, comment: str, hours: bool = False) -> str
 def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month: int) -> Optional[int]:
     driver = get_driver_by_db_id(conn, driver_id)
     row = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (driver_id, year, month)).fetchone()
-    if not driver or not row: return None
+    if not driver or not row:
+        return None
     driver_slug = slugify(driver["name"]) + f"-{driver['id']}"
     safe_name = secure_filename(f"{month:02d}_{MONATE.get(month, str(month))}_{year}.pdf")
     relative_path = Path("pdfs") / driver_slug / str(year) / safe_name
@@ -305,7 +377,8 @@ def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month
 def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
     rows = conn.execute("SELECT m.*, d.name FROM monthly_data m JOIN drivers d ON d.id=m.driver_id WHERE m.year=? AND m.month=? ORDER BY d.name COLLATE NOCASE", (year, month)).fetchall()
     pdf_rows = [[f"{MONATE[month]} {year}", r["name"], fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_hours(abs(r["v_hours"])), format_value_comment(r["bonus_hours"], r["bonus_comment"], True), format_value_comment(r["deduction_hours"], r["deduction_comment"], True), fmt_signed(r["difference_hours"]), fmt_signed(r["previous_balance"]), fmt_signed(r["new_balance"])] for r in rows]
-    if not pdf_rows: pdf_rows = [[f"{MONATE[month]} {year}","Keine Einträge","-","-","-","-","-","-","-","-"]]
+    if not pdf_rows:
+        pdf_rows = [[f"{MONATE[month]} {year}","Keine Einträge","-","-","-","-","-","-","-","-"]]
     path = EXPORT_DIR / str(year) / f"{month:02d}_{MONATE[month]}_{year}.pdf"
     create_pdf_report(path, f"Monatsübersicht {MONATE[month]} {year}", "Plus/Minus-Stunden pro Fahrer", ["Monat","Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller Stand","Neuer Stand"], pdf_rows)
     return path
@@ -318,7 +391,8 @@ def extract_payroll_entries_from_pdf(pdf_path: Path) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     for page_no, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
-        if "Verpflegungszuschuss" not in text: continue
+        if "Verpflegungszuschuss" not in text:
+            continue
         month_match = re.search(r"für\s+([A-Za-zÄÖÜäöüß]+)\s+(\d{4})", text)
         month_name = month_match.group(1) if month_match else ""
         year = int(month_match.group(2)) if month_match else None
@@ -328,7 +402,8 @@ def extract_payroll_entries_from_pdf(pdf_path: Path) -> List[Dict[str, Any]]:
         driver_name = re.sub(r"\s+", " ", name_match.group(1)).strip() if name_match else ""
         v_match = re.search(r"9650\s+Verpflegungszuschuss\s+([0-9\.]+,\d{2}-?)", text)
         v_amount = parse_german_money(v_match.group(1).replace("-", "")) if v_match else None
-        if not driver_name or v_amount is None: continue
+        if not driver_name or v_amount is None:
+            continue
         month_num = next((i for i,n in MONATE.items() if normalize(n)==normalize(month_name)), None)
         entries.append({"page":page_no,"name":driver_name,"personalnummer":personalnummer,"month_name":month_name,"year":year,"month":month_num,"v_source_amount":round(v_amount,2),"v_hours":round(v_amount/14.0,2)})
     return entries
@@ -336,15 +411,19 @@ def extract_payroll_entries_from_pdf(pdf_path: Path) -> List[Dict[str, Any]]:
 
 def guess_driver_match(conn: sqlite3.Connection, source_name: str) -> Tuple[Optional[int], str]:
     drivers = conn.execute("SELECT id,name FROM drivers WHERE is_active=1").fetchall()
-    if not drivers: return None, "Kein Fahrer im System"
+    if not drivers:
+        return None, "Kein Fahrer im System"
     source_norm = normalize(source_name)
     exact = [d for d in drivers if normalize(d["name"]) == source_norm]
-    if len(exact) == 1: return int(exact[0]["id"]), "Exakter Treffer"
+    if len(exact) == 1:
+        return int(exact[0]["id"]), "Exakter Treffer"
     best, ratio = None, 0.0
     for d in drivers:
         r = SequenceMatcher(None, source_norm, normalize(d["name"])).ratio()
-        if r > ratio: best, ratio = d, r
-    if best and ratio >= 0.84: return int(best["id"]), f"Ähnlicher Treffer ({int(ratio*100)}%)"
+        if r > ratio:
+            best, ratio = d, r
+    if best and ratio >= 0.84:
+        return int(best["id"]), f"Ähnlicher Treffer ({int(ratio*100)}%)"
     return None, "Nicht gefunden"
 
 # ---------------- auth ----------------
@@ -355,7 +434,8 @@ def admin_logged_in() -> bool:
 def admin_login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if not admin_logged_in(): return redirect(url_for("admin_login", next=request.path))
+        if not admin_logged_in():
+            return redirect(url_for("admin_login", next=request.path))
         return view(*args, **kwargs)
     return wrapped
 
@@ -363,14 +443,16 @@ def admin_login_required(view):
 def driver_login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if not session.get("driver_db_id"): return redirect(url_for("driver_login"))
+        if not session.get("driver_db_id"):
+            return redirect(url_for("driver_login"))
         return view(*args, **kwargs)
     return wrapped
 
 
 def admin_api_required() -> None:
     token = request.headers.get("X-Admin-Token", "")
-    if not ADMIN_API_TOKEN or token != ADMIN_API_TOKEN: abort(401)
+    if not ADMIN_API_TOKEN or token != ADMIN_API_TOKEN:
+        abort(401)
 
 # ---------------- templates ----------------
 def base_page(title: str, body: str, active: str = "dashboard") -> str:
@@ -388,11 +470,14 @@ def base_page(title: str, body: str, active: str = "dashboard") -> str:
 
 # ---------------- admin routes ----------------
 @app.get("/health")
-def health(): return {"ok": True, "app": APP_NAME, "db": str(DB_FILE)}
+def health():
+    return {"ok": True, "app": APP_NAME, "db": str(DB_FILE)}
+
 
 @app.get("/")
 def index():
     return redirect(url_for("driver_login"))
+
 
 @app.route("/admin/login", methods=["GET","POST"])
 def admin_login():
@@ -407,8 +492,12 @@ def admin_login():
         error = "Admin-Login fehlgeschlagen. Bitte ADMIN_PASSWORD oder Admin-Token prüfen."
     return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin Login</title><style>{{ css }}</style></head><body><div class="login-wrap"><div class="card"><div class="title">Admin Login</div><p class="muted">Plus/Minus-Stunden-Rechner als Cloud-Web-App</p>{% if error %}<div class="flash err">{{ error }}</div>{% endif %}<form method="post"><label>Admin-Passwort</label><input name="password" type="password" autocomplete="current-password"><div class="muted" style="text-align:center;margin:12px">oder</div><label>Admin-Token</label><input name="token" type="password"><button class="primary" style="margin-top:14px">Einloggen</button></form><p class="muted">Setze auf Render am besten ADMIN_PASSWORD, ADMIN_API_TOKEN und PORTAL_SECRET_KEY.</p></div></div></body></html>""", css=BASE_CSS, error=error)
 
+
 @app.get("/admin/logout")
-def admin_logout(): session.clear(); return redirect(url_for("admin_login"))
+def admin_logout():
+    session.clear()
+    return redirect(url_for("admin_login"))
+
 
 @app.get("/admin")
 @admin_login_required
@@ -427,6 +516,7 @@ def admin_dashboard():
     """, k=k, m=m, docs=docs, latest=latest, balances=balances, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class)
     return base_page("Dashboard", body, "dashboard")
 
+
 @app.route("/admin/drivers", methods=["GET","POST"])
 @admin_login_required
 def admin_drivers():
@@ -436,7 +526,8 @@ def admin_drivers():
             ts = now_iso()
             if action == "create":
                 name = request.form.get("name", "").strip(); username = request.form.get("username", "").strip() or slugify(name); password = request.form.get("password", "").strip(); start = parse_hours(request.form.get("starting_balance", "0"))
-                if not name or not password: flash("Name und Passwort sind Pflicht.", "err")
+                if not name or not password:
+                    flash("Name und Passwort sind Pflicht.", "err")
                 else:
                     ext = next_external_id(conn); username = make_unique_username(conn, username)
                     conn.execute("INSERT INTO drivers(external_driver_id,name,username,password_hash,starting_balance,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)", (ext,name,username,generate_password_hash(password),start,ts,ts)); audit(conn,"driver_create",name); conn.commit(); flash("Fahrer angelegt.", "ok")
@@ -445,7 +536,8 @@ def admin_drivers():
                 username = make_unique_username(conn, username or name, exclude_id=did)
                 conn.execute("UPDATE drivers SET name=?,username=?,starting_balance=?,is_active=?,updated_at=? WHERE id=?", (name,username,start,active,ts,did))
                 pw = request.form.get("password", "").strip()
-                if pw: conn.execute("UPDATE drivers SET password_hash=?,updated_at=? WHERE id=?", (generate_password_hash(pw),ts,did))
+                if pw:
+                    conn.execute("UPDATE drivers SET password_hash=?,updated_at=? WHERE id=?", (generate_password_hash(pw),ts,did))
                 recalc_driver(conn,did); audit(conn,"driver_update",name); conn.commit(); flash("Fahrer gespeichert.", "ok")
             elif action == "delete":
                 did = int(request.form["driver_id"]); conn.execute("DELETE FROM drivers WHERE id=?", (did,)); audit(conn,"driver_delete",str(did)); conn.commit(); flash("Fahrer gelöscht.", "ok")
@@ -456,6 +548,7 @@ def admin_drivers():
     """, drivers=drivers, fmt_signed=fmt_signed, signed_class=signed_class)
     return base_page("Fahrer", body, "drivers")
 
+
 @app.route("/admin/months", methods=["GET","POST"])
 @admin_login_required
 def admin_months():
@@ -464,29 +557,125 @@ def admin_months():
     with db_conn() as conn:
         if request.method == "POST":
             action = request.form.get("action")
-            if action in {"save","delete"}:
+            if action in {"save", "delete", "add_adjustment", "delete_adjustment"}:
                 did = int(request.form["driver_id"])
+
                 if action == "delete":
-                    conn.execute("DELETE FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)); recalc_driver(conn,did); audit(conn,"month_delete",f"{did} {year}-{month}"); conn.commit(); flash("Monatsdatensatz gelöscht.", "ok")
-                else:
-                    worked = parse_hours(request.form.get("worked_hours","0")); payroll = parse_hours(request.form.get("payroll_hours","0")); v = abs(parse_hours(request.form.get("v_hours","0"))); bonus = parse_hours(request.form.get("bonus_hours","0")); deduction = parse_hours(request.form.get("deduction_hours","0"))
-                    if deduction > 0: deduction = -deduction
-                    diff = compute_difference(worked,payroll,v,bonus,deduction); ts = now_iso()
-                    existing = conn.execute("SELECT id FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
-                    vals = (worked,payroll,v,bonus,request.form.get("bonus_comment","").strip(),deduction,request.form.get("deduction_comment","").strip(),bonus+deduction,(request.form.get("bonus_comment","")+" "+request.form.get("deduction_comment","")).strip(),diff,ts,did,year,month)
-                    if existing:
-                        conn.execute("UPDATE monthly_data SET worked_hours=?,payroll_hours=?,v_hours=?,bonus_hours=?,bonus_comment=?,deduction_hours=?,deduction_comment=?,adjustment_hours=?,comment=?,difference_hours=?,updated_at=? WHERE driver_id=? AND year=? AND month=?", vals)
+                    conn.execute("DELETE FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did, year, month))
+                    recalc_driver(conn, did)
+                    audit(conn, "month_delete", f"{did} {year}-{month}")
+                    conn.commit()
+                    flash("Monatsdatensatz gelöscht.", "ok")
+
+                elif action == "save":
+                    worked = parse_hours(request.form.get("worked_hours", "0"))
+                    payroll = parse_hours(request.form.get("payroll_hours", "0"))
+                    v = abs(parse_hours(request.form.get("v_hours", "0")))
+                    monthly_id = get_or_create_month_row(conn, did, year, month)
+                    conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, updated_at=? WHERE id=?", (worked, payroll, v, now_iso(), monthly_id))
+                    recalc_month_adjustments(conn, monthly_id)
+                    recalc_driver(conn, did)
+                    create_driver_pdf(conn, did, year, month)
+                    audit(conn, "month_save", f"{did} {year}-{month}")
+                    conn.commit()
+                    flash("Stunden gespeichert und Fahrer-PDF automatisch aktualisiert.", "ok")
+
+                elif action == "add_adjustment":
+                    kind = request.form.get("kind", "")
+                    if kind not in {"bonus", "deduction"}:
+                        flash("Ungültige Art.", "err")
                     else:
-                        conn.execute("INSERT INTO monthly_data(worked_hours,payroll_hours,v_hours,bonus_hours,bonus_comment,deduction_hours,deduction_comment,adjustment_hours,comment,difference_hours,updated_at,driver_id,year,month) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", vals)
-                    recalc_driver(conn,did); create_driver_pdf(conn,did,year,month); audit(conn,"month_save",f"{did} {year}-{month}"); conn.commit(); flash("Gespeichert und Fahrer-PDF automatisch aktualisiert.", "ok")
+                        hours = abs(parse_hours(request.form.get("item_hours", "0")))
+                        note = request.form.get("item_note", "").strip()
+                        if hours <= 0:
+                            flash("Bitte Stunden für Zuschuss/Abzug eingeben.", "err")
+                        elif not note:
+                            flash("Bitte Kommentar/Grund eingeben.", "err")
+                        else:
+                            monthly_id = get_or_create_month_row(conn, did, year, month)
+                            conn.execute("INSERT INTO adjustment_items(monthly_data_id, kind, hours, note, created_at) VALUES(?,?,?,?,?)", (monthly_id, kind, hours, note, now_iso()))
+                            recalc_month_adjustments(conn, monthly_id)
+                            recalc_driver(conn, did)
+                            create_driver_pdf(conn, did, year, month)
+                            audit(conn, "adjustment_add", f"{did} {year}-{month} {kind} {hours} {note}")
+                            conn.commit()
+                            flash("Position hinzugefügt und automatisch verrechnet.", "ok")
+
+                elif action == "delete_adjustment":
+                    item_id = int(request.form["item_id"])
+                    item = conn.execute("""
+                        SELECT ai.*, m.driver_id
+                        FROM adjustment_items ai
+                        JOIN monthly_data m ON m.id=ai.monthly_data_id
+                        WHERE ai.id=? AND m.driver_id=? AND m.year=? AND m.month=?
+                    """, (item_id, did, year, month)).fetchone()
+                    if item:
+                        monthly_id = int(item["monthly_data_id"])
+                        conn.execute("DELETE FROM adjustment_items WHERE id=?", (item_id,))
+                        recalc_month_adjustments(conn, monthly_id)
+                        recalc_driver(conn, did)
+                        create_driver_pdf(conn, did, year, month)
+                        audit(conn, "adjustment_delete", str(item_id))
+                        conn.commit()
+                        flash("Position gelöscht und neu berechnet.", "ok")
+
         recalc_all(conn); conn.commit()
         drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 ORDER BY name COLLATE NOCASE").fetchall()
         rows = {int(r["driver_id"]): r for r in conn.execute("SELECT * FROM monthly_data WHERE year=? AND month=?", (year,month)).fetchall()}
+        adjustments: Dict[int, List[sqlite3.Row]] = {}
+        for item in conn.execute("""
+            SELECT ai.*, m.driver_id
+            FROM adjustment_items ai
+            JOIN monthly_data m ON m.id=ai.monthly_data_id
+            WHERE m.year=? AND m.month=?
+            ORDER BY ai.id
+        """, (year, month)).fetchall():
+            adjustments.setdefault(int(item["driver_id"]), []).append(item)
+
     body = render_template_string("""
-    <div class="card"><form method="get" class="actions"><div><label>Jahr</label><input name="year" value="{{ year }}"></div><div><label>Monat</label><select name="month">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div><button class="primary">Anzeigen</button><a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF</a></form></div>
-    <div class="card"><h2>{{ months[month] }} {{ year }}</h2><div class="table-wrap"><table><tr><th>Fahrer</th><th>Stunden</th><th>Abrechnung</th><th>V</th><th>Zuschuss</th><th>Kommentar</th><th>Abzug</th><th>Kommentar</th><th>Diff</th><th>Alt</th><th>Neu</th><th>Aktion</th></tr>{% for d in drivers %}{% set r=rows.get(d['id']) %}<tr><form method="post"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td class="nowrap"><b>{{ d['name'] }}</b></td><td><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></td><td><input name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td><td><input name="v_hours" value="{{ r['v_hours'] if r else '' }}"></td><td><input name="bonus_hours" value="{{ r['bonus_hours'] if r else '' }}"></td><td><textarea name="bonus_comment">{{ r['bonus_comment'] if r else '' }}</textarea></td><td><input name="deduction_hours" value="{{ r['deduction_hours'] if r else '' }}"></td><td><textarea name="deduction_comment">{{ r['deduction_comment'] if r else '' }}</textarea></td><td class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td><td class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td><td class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td><td class="actions"><button class="small primary">Speichern</button></form>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form>{% endif %}</td></tr>{% endfor %}</table></div></div>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_signed=fmt_signed, signed_class=signed_class)
+    <div class="card">
+      <form method="get" class="actions">
+        <div><label>Jahr</label><input name="year" value="{{ year }}"></div>
+        <div><label>Monat</label><select name="month">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+        <button class="primary">Anzeigen</button>
+        <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF</a>
+      </form>
+    </div>
+    <div class="card"><h2>{{ months[month] }} {{ year }}</h2><div class="table-wrap"><table>
+      <tr><th>Fahrer</th><th>Stunden</th><th>Abrechnung</th><th>V</th><th>Zuschüsse / Abzüge</th><th>Diff</th><th>Alt</th><th>Neu</th><th>Aktion</th></tr>
+      {% for d in drivers %}
+      {% set r = rows.get(d['id']) %}
+      {% set items = adjustments.get(d['id'], []) %}
+      <tr>
+        <td class="nowrap"><b>{{ d['name'] }}</b></td>
+        <td><form method="post" id="save-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
+        <td><input form="save-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
+        <td><input form="save-{{ d['id'] }}" name="v_hours" value="{{ r['v_hours'] if r else '' }}"></td>
+        <td style="min-width:420px;">
+          {% if items %}
+            {% for it in items %}
+              <div class="item-row">
+                <span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span>
+                <span>{{ it['note'] }}</span>
+                <form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="muted" style="margin-bottom:10px;">Keine Positionen</div>
+          {% endif %}
+          <form method="post" class="mini-form"><input type="hidden" name="action" value="add_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><select name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input name="item_hours" placeholder="Stunden"><input name="item_note" placeholder="Grund, z.B. Auto dreckig"><button class="small primary">Hinzufügen</button></form>
+          {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
+        </td>
+        <td class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
+        <td class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
+        <td class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
+        <td class="actions"><button form="save-{{ d['id'] }}" class="small primary">Stunden speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Monat löschen</button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table></div></div>
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, fmt_signed=fmt_signed, fmt_hours=fmt_hours, signed_class=signed_class)
     return base_page("Monatsdaten", body, "months")
+
 
 @app.route("/admin/import-pdf", methods=["GET","POST"])
 @admin_login_required
@@ -504,11 +693,9 @@ def admin_import_pdf():
                     for e in entries:
                         did, status = guess_driver_match(conn, e["name"])
                         if did and e.get("year") and e.get("month"):
-                            row = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,e["year"],e["month"])).fetchone()
-                            if row:
-                                conn.execute("UPDATE monthly_data SET v_hours=?, updated_at=? WHERE id=?", (abs(float(e["v_hours"])), now_iso(), row["id"]))
-                            else:
-                                conn.execute("INSERT INTO monthly_data(driver_id,year,month,v_hours,updated_at) VALUES(?,?,?,?,?)", (did,e["year"],e["month"],abs(float(e["v_hours"])),now_iso()))
+                            monthly_id = get_or_create_month_row(conn, did, int(e["year"]), int(e["month"]))
+                            conn.execute("UPDATE monthly_data SET v_hours=?, updated_at=? WHERE id=?", (abs(float(e["v_hours"])), now_iso(), monthly_id))
+                            recalc_month_adjustments(conn, monthly_id)
                             recalc_driver(conn,did); create_driver_pdf(conn,did,e["year"],e["month"])
                             status += " · importiert"
                         results.append({**e,"driver_id":did,"status":status})
@@ -522,6 +709,7 @@ def admin_import_pdf():
     {% if results %}<div class="card"><h2>Import-Ergebnis</h2><div class="table-wrap"><table><tr><th>Seite</th><th>Name in PDF</th><th>Monat</th><th>V-Betrag</th><th>V-Stunden</th><th>Status</th></tr>{% for r in results %}<tr><td>{{ r.page }}</td><td>{{ r.name }}</td><td>{{ months.get(r.month, r.month) }} {{ r.year }}</td><td>{{ r.v_source_amount }}</td><td>{{ r.v_hours }}</td><td>{{ r.status }}</td></tr>{% endfor %}</table></div></div>{% endif %}
     """, results=results, months=MONATE)
     return base_page("PDF-Import", body, "import")
+
 
 @app.get("/admin/exports")
 @admin_login_required
@@ -542,14 +730,19 @@ def driver_login():
         username = request.form.get("username", "").strip(); password = request.form.get("password", "")
         with db_conn() as conn:
             row = conn.execute("SELECT * FROM drivers WHERE lower(username)=lower(?) AND is_active=1", (username,)).fetchone()
-            if not row or not check_password_hash(row["password_hash"], password): error = "Login fehlgeschlagen."
+            if not row or not check_password_hash(row["password_hash"], password):
+                error = "Login fehlgeschlagen."
             else:
                 session.clear(); session["driver_db_id"] = int(row["id"]); session["driver_name"] = row["name"]
                 return redirect(url_for("driver_years"))
     return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fahrer Login</title><style>{{ css }}</style></head><body><div class="login-wrap"><div class="card"><div class="title">Fahrer-Login</div><p class="muted">Hier siehst du nur deine eigenen Monatsdaten und PDFs.</p>{% if error %}<div class="flash err">{{ error }}</div>{% endif %}<form method="post"><label>Benutzername</label><input name="username" required><label style="margin-top:12px">Passwort</label><input name="password" type="password" required><button class="primary" style="margin-top:14px">Einloggen</button></form><p><a href="{{ url_for('admin_login') }}">Admin Login</a></p></div></div></body></html>""", css=BASE_CSS, error=error)
 
+
 @app.get("/logout")
-def driver_logout(): session.clear(); return redirect(url_for("driver_login"))
+def driver_logout():
+    session.clear()
+    return redirect(url_for("driver_login"))
+
 
 @app.get("/jahre")
 @driver_login_required
@@ -562,6 +755,7 @@ def driver_years():
     bal = latest["new_balance"] if latest else driver["starting_balance"]
     return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fahrerportal</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">Fahrerportal</div><div class="subtitle">Angemeldet als <span class="badge">{{ session['driver_name'] }}</span></div></div><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div><div class="card"><h2>Aktueller Stand: <span class="{{ signed_class(bal) }}">{{ fmt_signed(bal) }}</span></h2><div class="driver-grid">{% for y in years %}<a class="month-card" href="{{ url_for('driver_months_for_year', year=y['year']) }}"><strong>{{ y['year'] }}</strong>{{ y['cnt'] }} Monat(e)</a>{% endfor %}</div></div></main></body></html>""", css=BASE_CSS, years=years, bal=bal, fmt_signed=fmt_signed, signed_class=signed_class)
 
+
 @app.get("/jahr/<int:year>")
 @driver_login_required
 def driver_months_for_year(year:int):
@@ -570,6 +764,7 @@ def driver_months_for_year(year:int):
         rows = conn.execute("SELECT m.*, doc.id AS doc_id FROM monthly_data m LEFT JOIN documents doc ON doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month WHERE m.driver_id=? AND m.year=? ORDER BY m.month", (did,year)).fetchall()
     return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ year }}</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_years') }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="driver-grid">{% for r in rows %}<a class="month-card" href="{{ url_for('driver_month_detail', year=year, month=r['month']) }}"><strong>{{ months[r['month']] }}</strong><div>Differenz: <span class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</span></div><div>Neuer Stand: <span class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</span></div></a>{% endfor %}</div></div></main></body></html>""", css=BASE_CSS, rows=rows, year=year, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class)
 
+
 @app.get("/jahr/<int:year>/<int:month>")
 @driver_login_required
 def driver_month_detail(year:int, month:int):
@@ -577,8 +772,16 @@ def driver_month_detail(year:int, month:int):
     with db_conn() as conn:
         r = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
         doc = conn.execute("SELECT * FROM documents WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
-    if not r: abort(404)
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monatsdetails</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ months[month] }} {{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_months_for_year', year=year) }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="grid grid-3"><div class="kpi">Stunden<b>{{ fmt_hours(r['worked_hours']) }}</b></div><div class="kpi">Abrechnung<b>{{ fmt_hours(r['payroll_hours']) }}</b></div><div class="kpi">V<b>{{ fmt_hours(r['v_hours']) }}</b></div><div class="kpi">Zuschüsse<b>{{ fmt_hours(r['bonus_hours']) }}</b><span class="muted">{{ r['bonus_comment'] or '-' }}</span></div><div class="kpi">Abzüge<b>{{ fmt_hours(r['deduction_hours']) }}</b><span class="muted">{{ r['deduction_comment'] or '-' }}</span></div><div class="kpi">Differenz<b class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</b></div><div class="kpi">Alter Stand<b>{{ fmt_signed(r['previous_balance']) }}</b></div><div class="kpi">Neuer Stand<b class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</b></div></div>{% if doc %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_pdf', document_id=doc['id']) }}">PDF öffnen</a></p>{% endif %}</div></main></body></html>""", css=BASE_CSS, r=r, doc=doc, year=year, month=month, months=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class)
+        items = conn.execute("""
+            SELECT ai.* FROM adjustment_items ai
+            JOIN monthly_data m ON m.id=ai.monthly_data_id
+            WHERE m.driver_id=? AND m.year=? AND m.month=?
+            ORDER BY ai.id
+        """, (did, year, month)).fetchall()
+    if not r:
+        abort(404)
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monatsdetails</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ months[month] }} {{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_months_for_year', year=year) }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="grid grid-3"><div class="kpi">Stunden<b>{{ fmt_hours(r['worked_hours']) }}</b></div><div class="kpi">Abrechnung<b>{{ fmt_hours(r['payroll_hours']) }}</b></div><div class="kpi">V<b>{{ fmt_hours(r['v_hours']) }}</b></div><div class="kpi">Zuschüsse<b>{{ fmt_hours(r['bonus_hours']) }}</b><span class="muted">{{ r['bonus_comment'] or '-' }}</span></div><div class="kpi">Abzüge<b>{{ fmt_hours(r['deduction_hours']) }}</b><span class="muted">{{ r['deduction_comment'] or '-' }}</span></div><div class="kpi">Differenz<b class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</b></div><div class="kpi">Alter Stand<b>{{ fmt_signed(r['previous_balance']) }}</b></div><div class="kpi">Neuer Stand<b class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</b></div></div><h3>Einzelne Zuschüsse / Abzüge</h3>{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<p class="muted">Keine Positionen vorhanden.</p>{% endif %}{% if doc %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_pdf', document_id=doc['id']) }}">PDF öffnen</a></p>{% endif %}</div></main></body></html>""", css=BASE_CSS, r=r, doc=doc, items=items, year=year, month=month, months=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class)
+
 
 @app.get("/pdf/<int:document_id>")
 @driver_login_required
@@ -586,9 +789,11 @@ def download_pdf(document_id:int):
     did = int(session["driver_db_id"])
     with db_conn() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE id=? AND driver_id=?", (document_id,did)).fetchone()
-        if not doc: abort(404)
+        if not doc:
+            abort(404)
         path = DATA_ROOT / doc["relative_path"]
-        if not path.exists(): abort(404)
+        if not path.exists():
+            abort(404)
         return send_file(path, mimetype="application/pdf", as_attachment=False, download_name=doc["original_filename"])
 
 # ---------------- downloads / APIs ----------------
@@ -599,13 +804,21 @@ def download_month_export(year:int, month:int):
         recalc_all(conn); path = export_month_pdf(conn, year, month); conn.commit()
     return send_file(path, mimetype="application/pdf", as_attachment=False, download_name=path.name)
 
+
 @app.get("/admin/backup.json")
 @admin_login_required
 def download_backup_json():
     with db_conn() as conn:
-        data = {"drivers":[dict(r) for r in conn.execute("SELECT id,external_driver_id,name,username,starting_balance,is_active,created_at,updated_at FROM drivers").fetchall()], "monthly_data":[dict(r) for r in conn.execute("SELECT * FROM monthly_data").fetchall()], "documents":[dict(r) for r in conn.execute("SELECT * FROM documents").fetchall()], "created_at":now_iso()}
+        data = {
+            "drivers":[dict(r) for r in conn.execute("SELECT id,external_driver_id,name,username,starting_balance,is_active,created_at,updated_at FROM drivers").fetchall()],
+            "monthly_data":[dict(r) for r in conn.execute("SELECT * FROM monthly_data").fetchall()],
+            "adjustment_items":[dict(r) for r in conn.execute("SELECT * FROM adjustment_items").fetchall()],
+            "documents":[dict(r) for r in conn.execute("SELECT * FROM documents").fetchall()],
+            "created_at":now_iso()
+        }
     buf = io.BytesIO(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
     return send_file(buf, mimetype="application/json", as_attachment=True, download_name=f"plus_minus_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+
 
 @app.get("/admin/month-data.csv")
 @admin_login_required
@@ -613,8 +826,9 @@ def download_backup_csv():
     with db_conn() as conn:
         rows = conn.execute("SELECT d.name,m.* FROM monthly_data m JOIN drivers d ON d.id=m.driver_id ORDER BY m.year,m.month,d.name COLLATE NOCASE").fetchall()
     out = io.StringIO(); w = csv.writer(out, delimiter=";")
-    w.writerow(["Fahrer","Jahr","Monat","Stunden","Abrechnung","V","Zuschuss","Zuschuss Kommentar","Abzug","Abzug Kommentar","Differenz","Alter Stand","Neuer Stand"])
-    for r in rows: w.writerow([r["name"],r["year"],r["month"],r["worked_hours"],r["payroll_hours"],r["v_hours"],r["bonus_hours"],r["bonus_comment"],r["deduction_hours"],r["deduction_comment"],r["difference_hours"],r["previous_balance"],r["new_balance"]])
+    w.writerow(["Fahrer","Jahr","Monat","Stunden","Abrechnung","V","Zuschuss Summe","Zuschuss Details","Abzug Summe","Abzug Details","Differenz","Alter Stand","Neuer Stand"])
+    for r in rows:
+        w.writerow([r["name"],r["year"],r["month"],r["worked_hours"],r["payroll_hours"],r["v_hours"],r["bonus_hours"],r["bonus_comment"],r["deduction_hours"],r["deduction_comment"],r["difference_hours"],r["previous_balance"],r["new_balance"]])
     buf = io.BytesIO(out.getvalue().encode("utf-8-sig"))
     return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="plus_minus_monatsdaten.csv")
 
@@ -623,7 +837,8 @@ def download_backup_csv():
 def api_upsert_driver():
     admin_api_required(); p = request.get_json(force=True)
     ext_id = int(p["external_driver_id"]); name = str(p["name"]).strip(); username = str(p.get("username") or slugify(name)); password = p.get("password")
-    if not password: abort(400, "password fehlt")
+    if not password:
+        abort(400, "password fehlt")
     start = float(p.get("starting_balance", 0) or 0); ts = now_iso()
     with db_conn() as conn:
         existing = conn.execute("SELECT * FROM drivers WHERE external_driver_id=?", (ext_id,)).fetchone()
@@ -634,12 +849,14 @@ def api_upsert_driver():
         recalc_driver(conn,did); conn.commit()
     return jsonify({"ok":True,"driver_db_id":did,"username":final})
 
+
 @app.get("/api/admin/drivers")
 def api_drivers():
     admin_api_required()
     with db_conn() as conn:
         rows = conn.execute("SELECT id, external_driver_id, name, username, starting_balance, is_active FROM drivers ORDER BY name COLLATE NOCASE").fetchall()
         return jsonify({"drivers":[dict(r) for r in rows]})
+
 
 @app.get("/api/admin/month-data")
 def api_month_data():
@@ -648,34 +865,43 @@ def api_month_data():
         rows = conn.execute("SELECT d.external_driver_id,d.name,m.year,m.month,m.worked_hours AS stunden,m.payroll_hours AS abrechnung,m.v_hours AS v,m.bonus_hours AS zuschuesse,m.bonus_comment AS zuschuss_kommentar,m.deduction_hours AS abzuege,m.deduction_comment AS abzug_kommentar,m.difference_hours AS differenz,m.previous_balance AS aktueller_stand,m.new_balance AS neuer_stand FROM monthly_data m JOIN drivers d ON d.id=m.driver_id ORDER BY d.external_driver_id,m.year,m.month").fetchall()
         return jsonify({"rows":[dict(r) for r in rows]})
 
+
 @app.post("/api/admin/upsert-month-data")
 def api_upsert_month_data():
     admin_api_required(); p = request.get_json(force=True)
     ext = int(p["external_driver_id"]); year=int(p["year"]); month=int(p["month"])
     with db_conn() as conn:
         d = conn.execute("SELECT * FROM drivers WHERE external_driver_id=? AND is_active=1", (ext,)).fetchone()
-        if not d: abort(400, "Fahrer nicht vorhanden")
+        if not d:
+            abort(400, "Fahrer nicht vorhanden")
         worked=float(p.get("worked_hours",p.get("stunden",0)) or 0); payroll=float(p.get("payroll_hours",p.get("abrechnung",0)) or 0); v=abs(float(p.get("v_hours",p.get("v",0)) or 0)); bonus=float(p.get("bonus_hours",p.get("zuschuesse",0)) or 0); deduction=float(p.get("deduction_hours",p.get("abzuege",0)) or 0)
         diff=compute_difference(worked,payroll,v,bonus,deduction); ts=now_iso(); did=int(d["id"])
         existing=conn.execute("SELECT id FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
         vals=(worked,payroll,v,bonus,str(p.get("bonus_comment",p.get("zuschuss_kommentar",'')) or ''),deduction,str(p.get("deduction_comment",p.get("abzug_kommentar",'')) or ''),bonus+deduction,str(p.get("comment",'' ) or ''),diff,ts,did,year,month)
-        if existing: conn.execute("UPDATE monthly_data SET worked_hours=?,payroll_hours=?,v_hours=?,bonus_hours=?,bonus_comment=?,deduction_hours=?,deduction_comment=?,adjustment_hours=?,comment=?,difference_hours=?,updated_at=? WHERE driver_id=? AND year=? AND month=?", vals)
-        else: conn.execute("INSERT INTO monthly_data(worked_hours,payroll_hours,v_hours,bonus_hours,bonus_comment,deduction_hours,deduction_comment,adjustment_hours,comment,difference_hours,updated_at,driver_id,year,month) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", vals)
+        if existing:
+            conn.execute("UPDATE monthly_data SET worked_hours=?,payroll_hours=?,v_hours=?,bonus_hours=?,bonus_comment=?,deduction_hours=?,deduction_comment=?,adjustment_hours=?,comment=?,difference_hours=?,updated_at=? WHERE driver_id=? AND year=? AND month=?", vals)
+        else:
+            conn.execute("INSERT INTO monthly_data(worked_hours,payroll_hours,v_hours,bonus_hours,bonus_comment,deduction_hours,deduction_comment,adjustment_hours,comment,difference_hours,updated_at,driver_id,year,month) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", vals)
         recalc_driver(conn,did); create_driver_pdf(conn,did,year,month); conn.commit()
     return jsonify({"ok":True})
+
 
 @app.post("/api/admin/upload-pdf")
 def api_upload_pdf():
     admin_api_required(); ext=int(request.form["external_driver_id"]); year=int(request.form["year"]); month=int(request.form["month"]); upload=request.files.get("file")
-    if not upload or not upload.filename.lower().endswith(".pdf"): abort(400,"PDF-Datei fehlt")
+    if not upload or not upload.filename.lower().endswith(".pdf"):
+        abort(400,"PDF-Datei fehlt")
     with db_conn() as conn:
         d=conn.execute("SELECT * FROM drivers WHERE external_driver_id=? AND is_active=1", (ext,)).fetchone()
-        if not d: abort(400,"Fahrer nicht vorhanden")
+        if not d:
+            abort(400,"Fahrer nicht vorhanden")
         driver_slug=slugify(d["name"])+f"-{d['id']}"; target_dir=FILES_DIR/driver_slug/str(year); target_dir.mkdir(parents=True,exist_ok=True)
         safe_name=secure_filename(f"{month:02d}_{MONATE.get(month,str(month))}_{year}.pdf"); rel=Path("pdfs")/driver_slug/str(year)/safe_name; abs_path=DATA_ROOT/rel; upload.save(abs_path); ts=now_iso()
         existing=conn.execute("SELECT id FROM documents WHERE driver_id=? AND year=? AND month=?", (d["id"],year,month)).fetchone()
-        if existing: conn.execute("UPDATE documents SET filename=?, original_filename=?, relative_path=?, uploaded_at=? WHERE id=?", (safe_name,upload.filename,str(rel),ts,existing["id"]))
-        else: conn.execute("INSERT INTO documents(driver_id,year,month,filename,original_filename,relative_path,uploaded_at) VALUES(?,?,?,?,?,?,?)", (d["id"],year,month,safe_name,upload.filename,str(rel),ts))
+        if existing:
+            conn.execute("UPDATE documents SET filename=?, original_filename=?, relative_path=?, uploaded_at=? WHERE id=?", (safe_name,upload.filename,str(rel),ts,existing["id"]))
+        else:
+            conn.execute("INSERT INTO documents(driver_id,year,month,filename,original_filename,relative_path,uploaded_at) VALUES(?,?,?,?,?,?,?)", (d["id"],year,month,safe_name,upload.filename,str(rel),ts))
         conn.commit()
     return jsonify({"ok":True,"stored_as":str(rel)})
 
@@ -685,3 +911,4 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
