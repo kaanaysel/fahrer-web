@@ -1218,26 +1218,29 @@ def admin_import_pdf():
 def admin_exports():
     with db_conn() as conn:
         month_rows = conn.execute("""
-            SELECT m.year, m.month,
-                   COUNT(*) AS total_rows,
-                   SUM(CASE WHEN ABS(COALESCE(m.worked_hours,0))>0.0001
-                              OR ABS(COALESCE(m.payroll_hours,0))>0.0001
-                              OR ABS(COALESCE(m.v_hours,0))>0.0001
-                              OR ABS(COALESCE(m.bonus_hours,0))>0.0001
-                              OR ABS(COALESCE(m.deduction_hours,0))>0.0001
-                              OR ABS(COALESCE(m.adjustment_hours,0))>0.0001
-                              OR ABS(COALESCE(m.difference_hours,0))>0.0001
-                              OR TRIM(COALESCE(m.bonus_comment,''))<>''
-                              OR TRIM(COALESCE(m.deduction_comment,''))<>''
-                              OR TRIM(COALESCE(m.comment,''))<>''
-                              OR TRIM(COALESCE(m.admin_info,''))<>''
-                              OR EXISTS(SELECT 1 FROM adjustment_items ai WHERE ai.monthly_data_id=m.id)
-                              OR EXISTS(SELECT 1 FROM documents doc WHERE doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month)
-                            THEN 1 ELSE 0 END) AS filled_rows
-            FROM monthly_data m
-            GROUP BY m.year, m.month
-            HAVING filled_rows > 0
-            ORDER BY m.year DESC, m.month DESC
+            SELECT year, month, total_rows, filled_rows
+            FROM (
+                SELECT m.year, m.month,
+                       COUNT(*) AS total_rows,
+                       SUM(CASE WHEN ABS(COALESCE(m.worked_hours,0))>0.0001
+                                  OR ABS(COALESCE(m.payroll_hours,0))>0.0001
+                                  OR ABS(COALESCE(m.v_hours,0))>0.0001
+                                  OR ABS(COALESCE(m.bonus_hours,0))>0.0001
+                                  OR ABS(COALESCE(m.deduction_hours,0))>0.0001
+                                  OR ABS(COALESCE(m.adjustment_hours,0))>0.0001
+                                  OR ABS(COALESCE(m.difference_hours,0))>0.0001
+                                  OR TRIM(COALESCE(m.bonus_comment,''))<>''
+                                  OR TRIM(COALESCE(m.deduction_comment,''))<>''
+                                  OR TRIM(COALESCE(m.comment,''))<>''
+                                  OR TRIM(COALESCE(m.admin_info,''))<>''
+                                  OR EXISTS(SELECT 1 FROM adjustment_items ai WHERE ai.monthly_data_id=m.id)
+                                  OR EXISTS(SELECT 1 FROM documents doc WHERE doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month)
+                                THEN 1 ELSE 0 END) AS filled_rows
+                FROM monthly_data m
+                GROUP BY m.year, m.month
+            ) export_months
+            WHERE filled_rows > 0
+            ORDER BY year DESC, month DESC
         """).fetchall()
     body = render_template_string("""
     <div class="card"><h2>Export & Backup</h2><div class="actions"><a class="btn primary" href="{{ url_for('download_backup_json') }}">Backup JSON herunterladen</a><a class="btn" href="{{ url_for('download_backup_csv') }}">Monatsdaten CSV herunterladen</a><a class="btn danger" href="{{ url_for('admin_cleanup') }}">Aufräumen / Löschen</a></div><p class="download-note">Hier werden nur Monate angezeigt, die echte Daten enthalten. Leere automatisch erzeugte Monate erscheinen nicht mehr.</p></div>
