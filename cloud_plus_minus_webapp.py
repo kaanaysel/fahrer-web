@@ -645,7 +645,7 @@ def admin_api_required() -> None:
 def base_page(title: str, body: str, active: str = "dashboard") -> str:
     nav = [
         ("dashboard","Dashboard",url_for("admin_dashboard")), ("drivers","Fahrer",url_for("admin_drivers")),
-        ("months","Monatsdaten",url_for("admin_months")), ("import","PDF-Import",url_for("admin_import_pdf")),
+        ("months","Monatsdaten",url_for("admin_months")),
         ("exports","Export/Backup",url_for("admin_exports")), ("cleanup","Aufräumen",url_for("admin_cleanup")), ("portal","Fahrerportal",url_for("driver_login")),
     ]
     flashes = "".join(f'<div class="flash {"ok" if c=="ok" else "err"}">{m}</div>' for c,m in get_flashed_messages(with_categories=True))
@@ -767,54 +767,56 @@ def admin_months():
                     conn.commit()
                     flash("Monatsdatensatz gelöscht.", "ok")
 
-                elif action == "save":
+                elif action in {"save", "add_adjustment"}:
+                    # Immer zuerst die Monatsdaten speichern, egal ob man auf
+                    # "Speichern" oder "Hinzufügen" klickt. So gehen Stunden,
+                    # Abrechnung, V und Admin-Infos nicht verloren.
                     worked = parse_hours(request.form.get("worked_hours", "0"))
                     payroll = parse_hours(request.form.get("payroll_hours", "0"))
-                    v = abs(parse_hours(request.form.get("v_hours", "0")))
+                    # V wird als Betrag eingegeben und für die Rechnung automatisch durch 14 geteilt.
+                    v = round(abs(parse_hours(request.form.get("v_hours", "0"))) / 14.0, 2)
                     admin_info = request.form.get("admin_info", "").strip()
                     monthly_id = get_or_create_month_row(conn, did, year, month)
                     conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v, admin_info, now_iso(), monthly_id))
+
+                    should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
+
+                    if should_add_item:
+                        kind = request.form.get("kind", "")
+                        if kind not in {"bonus", "deduction"}:
+                            flash("Ungültige Art.", "err")
+                        else:
+                            hours = abs(parse_hours(request.form.get("item_hours", "0")))
+                            note = request.form.get("item_note", "").strip()
+                            if hours <= 0:
+                                flash("Bitte Stunden für Zuschuss/Abzug eingeben.", "err")
+                            elif not note:
+                                flash("Bitte Kommentar/Grund eingeben.", "err")
+                            else:
+                                cur = conn.execute("INSERT INTO adjustment_items(monthly_data_id, kind, hours, note, created_at) VALUES(?,?,?,?,?)", (monthly_id, kind, hours, note, now_iso()))
+                                adjustment_id = int(cur.lastrowid)
+                                uploaded = request.files.get("item_file")
+                                if uploaded and uploaded.filename:
+                                    if kind != "deduction":
+                                        flash("Anhänge sind nur bei Abzügen möglich. Position wurde ohne Datei gespeichert.", "err")
+                                    elif not allowed_attachment(uploaded.filename):
+                                        flash("Datei nicht erlaubt. Bitte JPG, PNG, WEBP, GIF oder PDF hochladen. Position wurde ohne Datei gespeichert.", "err")
+                                    else:
+                                        rel = attachment_relative_path(did, year, month, adjustment_id, uploaded.filename)
+                                        abs_path = DATA_ROOT / rel
+                                        abs_path.parent.mkdir(parents=True, exist_ok=True)
+                                        uploaded.save(abs_path)
+                                        conn.execute("INSERT INTO adjustment_files(adjustment_item_id, filename, original_filename, relative_path, mime_type, uploaded_at) VALUES(?,?,?,?,?,?)", (adjustment_id, abs_path.name, uploaded.filename, str(rel), uploaded.mimetype or "", now_iso()))
+                                        flash("Bild/Datei erfolgreich hochgeladen.", "ok")
+                                audit(conn, "adjustment_add", f"{did} {year}-{month} {kind} {hours} {note}")
+                                flash("Position hinzugefügt und automatisch verrechnet.", "ok")
+
                     recalc_month_adjustments(conn, monthly_id)
                     recalc_driver(conn, did)
                     create_driver_pdf(conn, did, year, month)
                     audit(conn, "month_save", f"{did} {year}-{month}")
                     conn.commit()
-                    flash("Stunden/Allgemeine Infos gespeichert und Fahrer-PDF automatisch aktualisiert.", "ok")
-
-                elif action == "add_adjustment":
-                    kind = request.form.get("kind", "")
-                    if kind not in {"bonus", "deduction"}:
-                        flash("Ungültige Art.", "err")
-                    else:
-                        hours = abs(parse_hours(request.form.get("item_hours", "0")))
-                        note = request.form.get("item_note", "").strip()
-                        if hours <= 0:
-                            flash("Bitte Stunden für Zuschuss/Abzug eingeben.", "err")
-                        elif not note:
-                            flash("Bitte Kommentar/Grund eingeben.", "err")
-                        else:
-                            monthly_id = get_or_create_month_row(conn, did, year, month)
-                            cur = conn.execute("INSERT INTO adjustment_items(monthly_data_id, kind, hours, note, created_at) VALUES(?,?,?,?,?)", (monthly_id, kind, hours, note, now_iso()))
-                            adjustment_id = int(cur.lastrowid)
-                            uploaded = request.files.get("item_file")
-                            if uploaded and uploaded.filename:
-                                if kind != "deduction":
-                                    flash("Anhänge sind nur bei Abzügen möglich. Position wurde ohne Datei gespeichert.", "err")
-                                elif not allowed_attachment(uploaded.filename):
-                                    flash("Datei nicht erlaubt. Bitte JPG, PNG, WEBP, GIF oder PDF hochladen. Position wurde ohne Datei gespeichert.", "err")
-                                else:
-                                    rel = attachment_relative_path(did, year, month, adjustment_id, uploaded.filename)
-                                    abs_path = DATA_ROOT / rel
-                                    abs_path.parent.mkdir(parents=True, exist_ok=True)
-                                    uploaded.save(abs_path)
-                                    conn.execute("INSERT INTO adjustment_files(adjustment_item_id, filename, original_filename, relative_path, mime_type, uploaded_at) VALUES(?,?,?,?,?,?)", (adjustment_id, abs_path.name, uploaded.filename, str(rel), uploaded.mimetype or "", now_iso()))
-                                    flash("Bild/Datei erfolgreich hochgeladen.", "ok")
-                            recalc_month_adjustments(conn, monthly_id)
-                            recalc_driver(conn, did)
-                            create_driver_pdf(conn, did, year, month)
-                            audit(conn, "adjustment_add", f"{did} {year}-{month} {kind} {hours} {note}")
-                            conn.commit()
-                            flash("Position hinzugefügt und automatisch verrechnet.", "ok")
+                    flash("Monatsdaten gespeichert und Fahrer-PDF automatisch aktualisiert.", "ok")
 
                 elif action == "delete_adjustment":
                     item_id = int(request.form["item_id"])
@@ -900,11 +902,11 @@ def admin_months():
       <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
         <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea>{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b></td>
-        <td data-label="Stunden"><form method="post" id="save-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
+        <td data-label="Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
         <td data-label="Abrechnung"><input form="save-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
-        <td data-label="V"><input form="save-{{ d['id'] }}" name="v_hours" value="{{ r['v_hours'] if r else '' }}"></td>
+        <td data-label="V"><input form="save-{{ d['id'] }}" name="v_hours" value="" placeholder="Betrag"></td>
         <td data-label="Zuschüsse / Abzüge">
-          <form method="post" class="mini-form" enctype="multipart/form-data"><input type="hidden" name="action" value="add_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><select name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input name="item_hours" placeholder="Std."><input name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input type="file" name="item_file" accept="image/*,.pdf"></label><button class="small primary">Hinzufügen</button></form>
+          <div class="mini-form"><select form="save-{{ d['id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">
           {% if items %}
@@ -924,7 +926,7 @@ def admin_months():
         <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Alt" class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
         <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
-        <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['id'] }}" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
+        <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['id'] }}" name="action" value="save" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody></table></div></div>
@@ -974,35 +976,8 @@ def admin_months():
 @app.route("/admin/import-pdf", methods=["GET","POST"])
 @admin_login_required
 def admin_import_pdf():
-    results: List[Dict[str,Any]] = []
-    with db_conn() as conn:
-        if request.method == "POST":
-            f = request.files.get("file")
-            if not f or not f.filename.lower().endswith(".pdf"):
-                flash("Bitte eine PDF hochladen.", "err")
-            else:
-                tmp = DATA_ROOT / "tmp_import.pdf"; f.save(tmp)
-                try:
-                    entries = extract_payroll_entries_from_pdf(tmp)
-                    for e in entries:
-                        did, status = guess_driver_match(conn, e["name"])
-                        if did and e.get("year") and e.get("month"):
-                            monthly_id = get_or_create_month_row(conn, did, int(e["year"]), int(e["month"]))
-                            conn.execute("UPDATE monthly_data SET v_hours=?, updated_at=? WHERE id=?", (abs(float(e["v_hours"])), now_iso(), monthly_id))
-                            recalc_month_adjustments(conn, monthly_id)
-                            recalc_driver(conn,did); create_driver_pdf(conn,did,e["year"],e["month"])
-                            status += " · importiert"
-                        results.append({**e,"driver_id":did,"status":status})
-                    conn.commit(); flash(f"PDF-Import fertig: {len(results)} Einträge erkannt.", "ok")
-                except Exception as ex:
-                    flash(str(ex), "err")
-                try: tmp.unlink()
-                except Exception: pass
-    body = render_template_string("""
-    <div class="card"><h2>Lohn-PDF importieren</h2><p class="muted">Importiert Verpflegungszuschuss als V-Stunden, ordnet Fahrer automatisch zu und erzeugt Fahrer-PDFs neu.</p><form method="post" enctype="multipart/form-data"><input type="file" name="file" accept="application/pdf" required><button class="primary" style="margin-top:12px">Importieren</button></form></div>
-    {% if results %}<div class="card"><h2>Import-Ergebnis</h2><div class="table-wrap"><table><tr><th>Seite</th><th>Name in PDF</th><th>Monat</th><th>V-Betrag</th><th>V-Stunden</th><th>Status</th></tr>{% for r in results %}<tr><td>{{ r.page }}</td><td>{{ r.name }}</td><td>{{ months.get(r.month, r.month) }} {{ r.year }}</td><td>{{ r.v_source_amount }}</td><td>{{ r.v_hours }}</td><td>{{ r.status }}</td></tr>{% endfor %}</table></div></div>{% endif %}
-    """, results=results, months=MONATE)
-    return base_page("PDF-Import", body, "import")
+    flash("Der Lohn-PDF-Import wurde deaktiviert. Bitte V direkt in der Monatsübersicht eintragen.", "ok")
+    return redirect(url_for("admin_months"))
 
 
 @app.get("/admin/exports")
