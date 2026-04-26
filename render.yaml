@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT fahrer_cloud_portal:app
+    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT cloud_plus_minus_webapp:app
     healthCheckPath: /health
     envVars:
       - key: PORTAL_SECRET_KEY
