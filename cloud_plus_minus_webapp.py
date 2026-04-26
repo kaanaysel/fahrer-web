@@ -440,12 +440,35 @@ def cleanup_empty_dirs(root: Path) -> None:
 
 
 def month_has_real_data(row: sqlite3.Row, adjustment_count: int = 0, document_count: int = 0, file_count: int = 0) -> bool:
+    """Return True only when a monthly row contains real data.
+
+    This helper is intentionally tolerant because some cleanup queries load only
+    a reduced set of columns. Missing columns are treated as empty/zero instead
+    of crashing the cleanup page.
+    """
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+
+    def get_value(key: str, default: Any = 0) -> Any:
+        if key not in keys:
+            return default
+        try:
+            return row[key]
+        except (IndexError, KeyError):
+            return default
+
     numeric = ["worked_hours", "payroll_hours", "v_hours", "bonus_hours", "deduction_hours", "adjustment_hours", "difference_hours"]
-    if any(abs(float(row[k] or 0)) > 0.0001 for k in numeric):
-        return True
+    for key in numeric:
+        try:
+            if abs(float(get_value(key, 0) or 0)) > 0.0001:
+                return True
+        except (TypeError, ValueError):
+            pass
+
     text = ["bonus_comment", "deduction_comment", "comment", "admin_info"]
-    if any((row[k] or "").strip() for k in text):
-        return True
+    for key in text:
+        if str(get_value(key, "") or "").strip():
+            return True
+
     return adjustment_count > 0 or document_count > 0 or file_count > 0
 
 # ---------------- PDF ----------------
