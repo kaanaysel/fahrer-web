@@ -391,7 +391,8 @@ def base_page(title: str, body: str, active: str = "dashboard") -> str:
 def health(): return {"ok": True, "app": APP_NAME, "db": str(DB_FILE)}
 
 @app.get("/")
-def index(): return redirect(url_for("admin_dashboard") if admin_logged_in() else url_for("admin_login"))
+def index():
+    return redirect(url_for("driver_login"))
 
 @app.route("/admin/login", methods=["GET","POST"])
 def admin_login():
