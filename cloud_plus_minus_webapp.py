@@ -54,7 +54,7 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1600px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:1120px}.months-table th,.months-table td{padding:9px 8px}.col-admin{width:185px}.col-driver{width:135px}.col-hours{width:78px}.col-payroll{width:88px}.col-v{width:74px}.col-adjust{width:390px}.col-small{width:70px}.col-action{width:120px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:76px}.months-table input[name=payroll_hours]{max-width:86px}.months-table input[name=v_hours]{max-width:72px}.mini-form{grid-template-columns:92px 74px minmax(120px,1fr) 112px auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:12px;padding:8px 10px;text-align:center;font-size:12px;color:#475467;cursor:pointer}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:1120px}.months-table th,.months-table td{padding:9px 8px}.col-admin{width:185px}.col-driver{width:135px}.col-hours{width:78px}.col-payroll{width:88px}.col-v{width:74px}.col-adjust{width:390px}.col-small{width:70px}.col-action{width:120px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:76px}.months-table input[name=payroll_hours]{max-width:86px}.months-table input[name=v_hours]{max-width:72px}.mini-form{grid-template-columns:92px 74px minmax(120px,1fr) 150px auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}
 @media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}.table-wrap.mobile-cards{overflow:visible;border:0;background:transparent}.months-table{min-width:0;display:block}.months-table thead{display:none}.months-table tbody,.months-table tr,.months-table td{display:block;width:100%}.months-table tr{margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}.months-table td{border-bottom:1px solid #edf0f5;padding:10px 12px}.months-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:900;color:#667085;margin-bottom:5px}.months-table .mobile-row-title{display:block}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{max-width:100%;width:100%}.admin-info{min-width:0}.col-adjust{width:auto}.compact-save{flex-direction:row;flex-wrap:wrap}.item-row{align-items:flex-start}.side .muted{display:none}}
 """
 
@@ -440,30 +440,12 @@ def cleanup_empty_dirs(root: Path) -> None:
 
 
 def month_has_real_data(row: sqlite3.Row, adjustment_count: int = 0, document_count: int = 0, file_count: int = 0) -> bool:
-    """Return True only when a month contains real entered data.
-
-    Some overview queries select only a subset of monthly_data columns. SQLite Row
-    raises IndexError when a missing column is accessed, so this helper must read
-    values defensively.
-    """
-    keys = set(row.keys()) if hasattr(row, "keys") else set()
-
-    def get_value(key: str, default: Any = 0) -> Any:
-        return row[key] if key in keys else default
-
     numeric = ["worked_hours", "payroll_hours", "v_hours", "bonus_hours", "deduction_hours", "adjustment_hours", "difference_hours"]
-    for k in numeric:
-        try:
-            if abs(float(get_value(k, 0) or 0)) > 0.0001:
-                return True
-        except Exception:
-            pass
-
+    if any(abs(float(row[k] or 0)) > 0.0001 for k in numeric):
+        return True
     text = ["bonus_comment", "deduction_comment", "comment", "admin_info"]
-    for k in text:
-        if str(get_value(k, "") or "").strip():
-            return True
-
+    if any((row[k] or "").strip() for k in text):
+        return True
     return adjustment_count > 0 or document_count > 0 or file_count > 0
 
 # ---------------- PDF ----------------
@@ -949,9 +931,40 @@ def admin_months():
     <script>
     document.querySelectorAll('.dropzone input[type="file"]').forEach(function(input){
       var zone = input.closest('.dropzone');
-      input.addEventListener('change', function(){ zone.childNodes[0].nodeValue = input.files.length ? input.files[0].name : 'Bild/Datei'; });
-      ['dragenter','dragover'].forEach(function(ev){ zone.addEventListener(ev, function(e){ e.preventDefault(); zone.classList.add('dragover'); }); });
-      ['dragleave','drop'].forEach(function(ev){ zone.addEventListener(ev, function(){ zone.classList.remove('dragover'); }); });
+      var defaultText = 'Bild/Datei hier ablegen';
+      function setZoneText(text){
+        Array.from(zone.childNodes).forEach(function(node){
+          if(node.nodeType === Node.TEXT_NODE){ node.nodeValue = text; }
+        });
+      }
+      setZoneText(defaultText);
+      input.addEventListener('change', function(){
+        setZoneText(input.files.length ? input.files[0].name : defaultText);
+      });
+      ['dragenter','dragover'].forEach(function(ev){
+        zone.addEventListener(ev, function(e){
+          e.preventDefault();
+          e.stopPropagation();
+          zone.classList.add('dragover');
+          if(e.dataTransfer){ e.dataTransfer.dropEffect = 'copy'; }
+        });
+      });
+      ['dragleave','dragend'].forEach(function(ev){
+        zone.addEventListener(ev, function(e){
+          e.preventDefault();
+          e.stopPropagation();
+          zone.classList.remove('dragover');
+        });
+      });
+      zone.addEventListener('drop', function(e){
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.remove('dragover');
+        if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length){
+          input.files = e.dataTransfer.files;
+          setZoneText(e.dataTransfer.files[0].name);
+        }
+      });
     });
     </script>
     """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, fmt_signed=fmt_signed, fmt_hours=fmt_hours, signed_class=signed_class)
