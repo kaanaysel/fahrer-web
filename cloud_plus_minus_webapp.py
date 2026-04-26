@@ -246,6 +246,7 @@ def _init_postgres_schema(conn) -> None:
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         starting_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        display_order INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -322,6 +323,7 @@ def _init_postgres_schema(conn) -> None:
     # Safe migrations for existing PostgreSQL databases.
     migrations = [
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS starting_balance DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS bonus_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS bonus_comment TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS deduction_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
@@ -335,6 +337,7 @@ def _init_postgres_schema(conn) -> None:
     ]
     for sql in migrations:
         conn.execute(sql)
+    conn.execute("UPDATE drivers SET display_order=id WHERE COALESCE(display_order,0)=0")
     conn.commit()
 
 
@@ -363,6 +366,7 @@ def db_conn():
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         starting_balance REAL NOT NULL DEFAULT 0,
+        display_order INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -433,6 +437,9 @@ def db_conn():
     cols = {r[1] for r in conn.execute("PRAGMA table_info(drivers)").fetchall()}
     if "starting_balance" not in cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN starting_balance REAL NOT NULL DEFAULT 0")
+    if "display_order" not in cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE drivers SET display_order=id WHERE COALESCE(display_order,0)=0")
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(monthly_data)").fetchall()}
     for name, ddl in {
@@ -941,7 +948,7 @@ def admin_dashboard():
         m = conn.execute("SELECT COUNT(*) cnt FROM monthly_data").fetchone()["cnt"]
         docs = conn.execute("SELECT COUNT(*) cnt FROM documents").fetchone()["cnt"]
         latest = conn.execute("SELECT m.*, d.name FROM monthly_data m JOIN drivers d ON d.id=m.driver_id ORDER BY m.updated_at DESC LIMIT 8").fetchall()
-        balances = conn.execute("SELECT d.id,d.name,d.starting_balance,(SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC, month DESC, id DESC LIMIT 1) bal FROM drivers d WHERE d.is_active=1 ORDER BY d.name COLLATE NOCASE").fetchall()
+        balances = conn.execute("SELECT d.id,d.name,d.starting_balance,(SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC, month DESC, id DESC LIMIT 1) bal FROM drivers d WHERE d.is_active=1 ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
     body = render_template_string("""
     <div class="grid grid-4"><div class="kpi">Fahrer<b>{{ k['active'] }}</b><span class="muted">aktiv</span></div><div class="kpi">Monatsdaten<b>{{ m }}</b><span class="muted">gespeichert</span></div><div class="kpi">PDFs<b>{{ docs }}</b><span class="muted">im Portal</span></div><div class="kpi">Sync<b>0</b><span class="muted">manuelle Schritte</span></div></div>
     <div class="grid grid-2"><div class="card"><h2>Aktuelle Salden</h2><div class="table-wrap"><table style="min-width:420px"><tr><th>Fahrer</th><th class="right">Saldo</th></tr>{% for r in balances %}<tr><td>{{ r['name'] }}</td><td class="right {{ signed_class(r['bal'] if r['bal'] is not none else r['starting_balance']) }}">{{ fmt_signed(r['bal'] if r['bal'] is not none else r['starting_balance']) }}</td></tr>{% endfor %}</table></div></div>
@@ -963,7 +970,7 @@ def admin_drivers():
                     flash("Name und Passwort sind Pflicht.", "err")
                 else:
                     ext = next_external_id(conn); username = make_unique_username(conn, username)
-                    conn.execute("INSERT INTO drivers(external_driver_id,name,username,password_hash,starting_balance,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)", (ext,name,username,generate_password_hash(password),start,ts,ts)); audit(conn,"driver_create",name); conn.commit(); flash("Fahrer angelegt.", "ok")
+                    conn.execute("INSERT INTO drivers(external_driver_id,name,username,password_hash,starting_balance,display_order,is_active,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)", (ext,name,username,generate_password_hash(password),start,ext,ts,ts)); audit(conn,"driver_create",name); conn.commit(); flash("Fahrer angelegt.", "ok")
             elif action == "update":
                 did = int(request.form["driver_id"]); name = request.form.get("name", "").strip(); username = request.form.get("username", "").strip(); start = parse_hours(request.form.get("starting_balance", "0")); active = 1 if request.form.get("is_active") == "on" else 0
                 username = make_unique_username(conn, username or name, exclude_id=did)
@@ -974,12 +981,81 @@ def admin_drivers():
                 recalc_driver(conn,did); audit(conn,"driver_update",name); conn.commit(); flash("Fahrer gespeichert.", "ok")
             elif action == "delete":
                 did = int(request.form["driver_id"]); conn.execute("DELETE FROM drivers WHERE id=?", (did,)); audit(conn,"driver_delete",str(did)); conn.commit(); flash("Fahrer gelöscht.", "ok")
-        drivers = conn.execute("SELECT d.*, COALESCE((SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC,month DESC,id DESC LIMIT 1), d.starting_balance) AS balance FROM drivers d ORDER BY d.name COLLATE NOCASE").fetchall()
+        drivers = conn.execute("SELECT d.*, COALESCE((SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC,month DESC,id DESC LIMIT 1), d.starting_balance) AS balance FROM drivers d ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
     body = render_template_string("""
     <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"></div><button class="primary">Anlegen</button></form></div>
-    <div class="card"><h2>Fahrer verwalten</h2><div class="table-wrap"><table><tr><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Neues Passwort</th><th>Aktion</th></tr>{% for d in drivers %}<tr><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</table></div></div>
+    <div class="card"><h2>Fahrer verwalten</h2><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
+    <script>
+    (function(){
+      const tbody = document.getElementById('drivers-sortable');
+      if(!tbody) return;
+      let dragged = null;
+      let saving = false;
+      function rows(){ return Array.from(tbody.querySelectorAll('tr[data-driver-id]')); }
+      function saveOrder(){
+        if(saving) return;
+        saving = true;
+        fetch('{{ url_for("admin_drivers_reorder") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'same-origin',
+          body: JSON.stringify({driver_ids: rows().map(r => r.dataset.driverId)})
+        }).then(r => r.json()).then(data => {
+          saving = false;
+          if(!data.ok) alert(data.error || 'Reihenfolge konnte nicht gespeichert werden.');
+        }).catch(() => { saving = false; alert('Reihenfolge konnte nicht gespeichert werden.'); });
+      }
+      tbody.addEventListener('dragstart', function(e){
+        const tr = e.target.closest('tr[data-driver-id]');
+        if(!tr) return;
+        dragged = tr;
+        tr.style.opacity = '0.45';
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', tr.dataset.driverId);
+      });
+      tbody.addEventListener('dragend', function(){
+        if(dragged) dragged.style.opacity = '';
+        dragged = null;
+      });
+      tbody.addEventListener('dragover', function(e){
+        e.preventDefault();
+        const over = e.target.closest('tr[data-driver-id]');
+        if(!dragged || !over || dragged === over) return;
+        const rect = over.getBoundingClientRect();
+        const after = (e.clientY - rect.top) > rect.height / 2;
+        tbody.insertBefore(dragged, after ? over.nextSibling : over);
+      });
+      tbody.addEventListener('drop', function(e){
+        e.preventDefault();
+        saveOrder();
+      });
+    })();
+    </script>
     """, drivers=drivers, fmt_signed=fmt_signed, signed_class=signed_class)
     return base_page("Fahrer", body, "drivers")
+
+
+@app.post("/admin/drivers/reorder")
+@admin_login_required
+def admin_drivers_reorder():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("driver_ids", [])
+    try:
+        driver_ids = [int(x) for x in ids]
+    except Exception:
+        return jsonify({"ok": False, "error": "Ungültige Fahrer-Reihenfolge."}), 400
+
+    if not driver_ids:
+        return jsonify({"ok": False, "error": "Keine Fahrer übergeben."}), 400
+
+    with db_conn() as conn:
+        valid = {int(r["id"]) for r in conn.execute("SELECT id FROM drivers").fetchall()}
+        for pos, driver_id in enumerate(driver_ids, start=1):
+            if driver_id in valid:
+                conn.execute("UPDATE drivers SET display_order=?, updated_at=? WHERE id=?", (pos, now_iso(), driver_id))
+        audit(conn, "drivers_reorder", ",".join(str(x) for x in driver_ids))
+        conn.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/admin/months", methods=["GET","POST"])
@@ -1092,7 +1168,7 @@ def admin_months():
                         flash("Bild/Datei wurde entfernt.", "ok")
 
         recalc_all(conn); conn.commit()
-        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 ORDER BY name COLLATE NOCASE").fetchall()
+        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
         for d in drivers:
             get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
         conn.commit()
@@ -1557,7 +1633,7 @@ def api_upsert_driver():
 def api_drivers():
     admin_api_required()
     with db_conn() as conn:
-        rows = conn.execute("SELECT id, external_driver_id, name, username, starting_balance, is_active FROM drivers ORDER BY name COLLATE NOCASE").fetchall()
+        rows = conn.execute("SELECT id, external_driver_id, name, username, starting_balance, is_active FROM drivers ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
         return jsonify({"drivers":[dict(r) for r in rows]})
 
 
@@ -1614,6 +1690,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
