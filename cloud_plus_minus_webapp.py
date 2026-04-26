@@ -544,13 +544,26 @@ def admin_login():
     error = ""
     if request.method == "POST":
         password = request.form.get("password", "")
-        token = request.form.get("token", "")
-        ok = (ADMIN_PASSWORD and password == ADMIN_PASSWORD) or (ADMIN_API_TOKEN and token == ADMIN_API_TOKEN)
+        ok = bool(ADMIN_PASSWORD and password == ADMIN_PASSWORD)
         if ok:
-            session.clear(); session["admin_ok"] = True
+            session.clear()
+            session["admin_ok"] = True
             return redirect(request.args.get("next") or url_for("admin_dashboard"))
-        error = "Admin-Login fehlgeschlagen. Bitte ADMIN_PASSWORD oder Admin-Token prüfen."
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin Login</title><style>{{ css }}</style></head><body><div class="login-wrap"><div class="card"><div class="title">Admin Login</div><p class="muted">Plus/Minus-Stunden-Rechner als Cloud-Web-App</p>{% if error %}<div class="flash err">{{ error }}</div>{% endif %}<form method="post"><label>Admin-Passwort</label><input name="password" type="password" autocomplete="current-password"><div class="muted" style="text-align:center;margin:12px">oder</div><label>Admin-Token</label><input name="token" type="password"><button class="primary" style="margin-top:14px">Einloggen</button></form><p class="muted">Setze auf Render am besten ADMIN_PASSWORD, ADMIN_API_TOKEN und PORTAL_SECRET_KEY.</p></div></div></body></html>""", css=BASE_CSS, error=error)
+        error = "Admin-Login fehlgeschlagen. Bitte Passwort prüfen."
+    return render_template_string("""
+    <!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin Login</title><style>{{ css }}</style></head><body>
+    <div class="login-wrap"><div class="card">
+      <div class="title">Admin Login</div>
+      <p class="muted">Plus/Minus-Stunden-Rechner als Cloud-Web-App</p>
+      {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+      <form method="post">
+        <label>Admin-Passwort</label>
+        <input name="password" type="password" autocomplete="current-password" required autofocus>
+        <button class="primary" style="margin-top:14px">Einloggen</button>
+      </form>
+      <p style="margin-top:14px"><a class="btn" href="{{ url_for('driver_login') }}">Zurück zum Fahrer-Login</a></p>
+    </div></div></body></html>
+    """, css=BASE_CSS, error=error)
 
 
 @app.get("/admin/logout")
@@ -998,5 +1011,6 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
