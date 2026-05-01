@@ -145,6 +145,60 @@ def row_get(row: Any, key: str, default: Any = "") -> Any:
         return default
 
 
+def safe_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def group_display_name(group: Any, members: List[Any]) -> str:
+    manual = str(row_get(group, "name", "") or "").strip()
+    if manual:
+        return manual
+    names = [str(row_get(m, "name", "")).strip() for m in members if str(row_get(m, "name", "")).strip()]
+    if not names:
+        return "Fahrergruppe"
+    if len(names) == 1:
+        return names[0]
+    return " und ".join(names)
+
+
+def load_driver_groups(conn) -> List[Dict[str, Any]]:
+    groups: List[Dict[str, Any]] = []
+    for g in conn.execute("SELECT * FROM driver_groups WHERE is_active=1 ORDER BY id").fetchall():
+        members = conn.execute("""
+            SELECT d.*
+            FROM driver_group_members gm
+            JOIN drivers d ON d.id=gm.driver_id
+            WHERE gm.group_id=? AND d.is_active=1
+            ORDER BY COALESCE(NULLIF(gm.position,0), d.display_order, d.id), d.name COLLATE NOCASE
+        """, (g["id"],)).fetchall()
+        if members:
+            groups.append({"group": g, "members": members, "member_ids": [int(m["id"]) for m in members], "name": group_display_name(g, members)})
+    return groups
+
+
+def make_group_month_summary(conn, group_info: Dict[str, Any], year: int, month: int) -> Dict[str, Any]:
+    rows = []
+    for did in group_info["member_ids"]:
+        r = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did, year, month)).fetchone()
+        if r:
+            rows.append(r)
+    numeric = ["worked_hours", "payroll_hours", "v_hours", "bonus_hours", "deduction_hours", "adjustment_hours", "difference_hours", "previous_balance", "new_balance", "payroll_surcharge", "fuel_voucher"]
+    summary: Dict[str, Any] = {"driver_id": f"group_{group_info['group']['id']}", "year": year, "month": month, "admin_info_carried": 0}
+    for key in numeric:
+        summary[key] = round(sum(safe_float(row_get(r, key, 0)) for r in rows), 2)
+    for key in ["admin_info", "bonus_comment", "deduction_comment", "comment", "payroll_office_info", "vacation_days", "sick_days"]:
+        vals = []
+        for r in rows:
+            val = str(row_get(r, key, "") or "").strip()
+            if val:
+                vals.append(val)
+        summary[key] = "\n".join(vals)
+    return summary
+
+
 def signed_class(v: float) -> str:
     v = float(v or 0)
     return "pos" if v > 0 else "neg" if v < 0 else "zero"
@@ -222,7 +276,7 @@ class _PostgresCompatConnection:
     """
 
     _RETURNING_TABLES = {
-        "drivers", "monthly_data", "documents", "audit_log", "adjustment_items", "adjustment_files"
+        "drivers", "monthly_data", "documents", "audit_log", "adjustment_items", "adjustment_files", "driver_groups", "driver_group_members"
     }
 
     def __init__(self, raw_conn):
@@ -364,6 +418,25 @@ def _init_postgres_schema(conn) -> None:
         uploaded_at TEXT NOT NULL
     )
     """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS driver_groups(
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS driver_group_members(
+        id SERIAL PRIMARY KEY,
+        group_id INTEGER NOT NULL REFERENCES driver_groups(id) ON DELETE CASCADE,
+        driver_id INTEGER NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(group_id, driver_id),
+        UNIQUE(driver_id)
+    )
+    """)
 
     # Safe migrations for existing PostgreSQL databases.
     migrations = [
@@ -494,6 +567,22 @@ def db_conn():
         mime_type TEXT NOT NULL DEFAULT '',
         uploaded_at TEXT NOT NULL,
         FOREIGN KEY(adjustment_item_id) REFERENCES adjustment_items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS driver_groups(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS driver_group_members(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL,
+        driver_id INTEGER NOT NULL UNIQUE,
+        position INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY(group_id) REFERENCES driver_groups(id) ON DELETE CASCADE,
+        FOREIGN KEY(driver_id) REFERENCES drivers(id) ON DELETE CASCADE,
+        UNIQUE(group_id, driver_id)
     );
     """)
 
@@ -871,26 +960,41 @@ def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month
 
 
 def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
-    rows = conn.execute("SELECT m.*, d.name FROM monthly_data m JOIN drivers d ON d.id=m.driver_id WHERE m.year=? AND m.month=? ORDER BY d.name COLLATE NOCASE", (year, month)).fetchall()
-    pdf_rows = [[
-        f"{MONATE[month]} {year}",
-        r["admin_info"] or "-",
-        r["name"],
-        fmt_hours(r["worked_hours"]),
-        fmt_hours(r["payroll_hours"]),
-        fmt_hours(abs(r["v_hours"])),
-        format_value_comment(r["bonus_hours"], r["bonus_comment"], True),
-        format_value_comment(r["deduction_hours"], r["deduction_comment"], True),
-        fmt_signed(r["difference_hours"]),
-        fmt_signed(r["previous_balance"]),
-        fmt_signed(r["new_balance"]),
-    ] for r in rows]
+    groups = load_driver_groups(conn)
+    grouped_driver_ids = {did for g in groups for did in g["member_ids"]}
+    normal_rows = conn.execute("""
+        SELECT m.*, d.name, d.id AS d_id
+        FROM monthly_data m
+        JOIN drivers d ON d.id=m.driver_id
+        WHERE m.year=? AND m.month=?
+        ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
+    """, (year, month)).fetchall()
+
+    pdf_rows = []
+    for r in normal_rows:
+        if int(r["driver_id"]) in grouped_driver_ids:
+            continue
+        pdf_rows.append([
+            f"{MONATE[month]} {year}", r["admin_info"] or "-", r["name"],
+            fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_hours(abs(r["v_hours"])),
+            format_value_comment(r["bonus_hours"], r["bonus_comment"], True),
+            format_value_comment(r["deduction_hours"], r["deduction_comment"], True),
+            fmt_signed(r["difference_hours"]), fmt_signed(r["previous_balance"]), fmt_signed(r["new_balance"]),
+        ])
+    for g in groups:
+        r = make_group_month_summary(conn, g, year, month)
+        pdf_rows.append([
+            f"{MONATE[month]} {year}", r.get("admin_info") or "-", g["name"],
+            fmt_hours(r.get("worked_hours", 0)), fmt_hours(r.get("payroll_hours", 0)), fmt_hours(abs(r.get("v_hours", 0))),
+            format_value_comment(r.get("bonus_hours", 0), r.get("bonus_comment", ""), True),
+            format_value_comment(r.get("deduction_hours", 0), r.get("deduction_comment", ""), True),
+            fmt_signed(r.get("difference_hours", 0)), fmt_signed(r.get("previous_balance", 0)), fmt_signed(r.get("new_balance", 0)),
+        ])
     if not pdf_rows:
         pdf_rows = [[f"{MONATE[month]} {year}", "-", "Keine Einträge", "-", "-", "-", "-", "-", "-", "-", "-"]]
     path = EXPORT_DIR / str(year) / f"{month:02d}_{MONATE[month]}_{year}.pdf"
     create_pdf_report(path, f"Monatsübersicht {MONATE[month]} {year}", "Admin-Übersicht inklusive interner Allgemeiner Infos", ["Monat","Allgemeine Infos","Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller Stand","Neuer Stand"], pdf_rows)
     return path
-
 
 def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
     rows = conn.execute("""
@@ -1103,9 +1207,36 @@ def admin_drivers():
                 recalc_driver(conn,did); audit(conn,"driver_update",name); conn.commit(); flash("Fahrer gespeichert.", "ok")
             elif action == "delete":
                 did = int(request.form["driver_id"]); conn.execute("DELETE FROM drivers WHERE id=?", (did,)); audit(conn,"driver_delete",str(did)); conn.commit(); flash("Fahrer gelöscht.", "ok")
+            elif action == "create_group":
+                member_ids = [int(x) for x in request.form.getlist("group_driver_ids") if str(x).isdigit()]
+                member_ids = list(dict.fromkeys(member_ids))
+                group_name = request.form.get("group_name", "").strip()
+                if len(member_ids) < 2:
+                    flash("Bitte mindestens zwei Fahrer für eine Gruppe auswählen.", "err")
+                else:
+                    already = conn.execute("SELECT driver_id FROM driver_group_members WHERE driver_id IN (" + ",".join(["?"]*len(member_ids)) + ")", tuple(member_ids)).fetchall()
+                    if already:
+                        flash("Mindestens ein ausgewählter Fahrer ist bereits in einer Gruppe. Bitte erst die alte Gruppe löschen.", "err")
+                    else:
+                        if not group_name:
+                            selected = conn.execute("SELECT name FROM drivers WHERE id IN (" + ",".join(["?"]*len(member_ids)) + ") ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE", tuple(member_ids)).fetchall()
+                            group_name = " und ".join([r["name"] for r in selected])
+                        cur = conn.execute("INSERT INTO driver_groups(name,is_active,created_at,updated_at) VALUES(?,1,?,?)", (group_name, ts, ts))
+                        gid = int(cur.lastrowid)
+                        for pos, mid in enumerate(member_ids, start=1):
+                            conn.execute("INSERT INTO driver_group_members(group_id,driver_id,position) VALUES(?,?,?)", (gid, mid, pos))
+                        audit(conn, "driver_group_create", f"{group_name}: {member_ids}")
+                        conn.commit(); flash("Fahrergruppe erstellt. In Monatsdaten werden diese Fahrer zusammen angezeigt.", "ok")
+            elif action == "delete_group":
+                gid = int(request.form["group_id"])
+                conn.execute("DELETE FROM driver_groups WHERE id=?", (gid,))
+                audit(conn, "driver_group_delete", str(gid))
+                conn.commit(); flash("Fahrergruppe gelöscht. Die einzelnen Fahrerdaten bleiben erhalten.", "ok")
         drivers = conn.execute("SELECT d.*, COALESCE((SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC,month DESC,id DESC LIMIT 1), d.starting_balance) AS balance FROM drivers d ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
+        groups = load_driver_groups(conn)
     body = render_template_string("""
     <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"></div><button class="primary">Anlegen</button></form></div>
+    <div class="card"><h2>Fahrer nur für Monatsdaten zusammenführen</h2><p class="muted">Die ausgewählten Fahrer bleiben bei „Stunden für Lohnabrechnung“ einzeln sichtbar. Nur in „Monatsdaten“ erscheinen sie als gemeinsame Zeile mit zusammengerechneten Werten.</p><form method="post" class="grid grid-3"><input type="hidden" name="action" value="create_group"><div><label>Gruppenname</label><input name="group_name" placeholder="z.B. Alex und Jennifer"></div><div><label>Fahrer auswählen</label><select name="group_driver_ids" multiple size="6">{% for d in drivers %}<option value="{{ d['id'] }}">{{ d['name'] }}</option>{% endfor %}</select><div class="download-note">Mehrere auswählen mit Strg/Cmd oder Shift.</div></div><div style="align-self:end"><button class="primary">Gruppe erstellen</button></div></form>{% if groups %}<div class="adjustment-list"><h3>Aktive Gruppen</h3>{% for g in groups %}<div class="item-row"><b>{{ g.name }}</b><span class="muted">{{ g.members|map(attribute='name')|join(', ') }}</span><form method="post" onsubmit="return confirm('Gruppe wirklich löschen? Die Fahrer und Monatsdaten bleiben erhalten.')"><input type="hidden" name="action" value="delete_group"><input type="hidden" name="group_id" value="{{ g.group['id'] }}"><button class="small danger">Gruppe löschen</button></form></div>{% endfor %}</div>{% endif %}</div>
     <div class="card"><h2>Fahrer verwalten</h2><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
     <script>
     (function(){
@@ -1153,7 +1284,7 @@ def admin_drivers():
       });
     })();
     </script>
-    """, drivers=drivers, fmt_signed=fmt_signed, signed_class=signed_class)
+    """, drivers=drivers, groups=groups, fmt_signed=fmt_signed, signed_class=signed_class)
     return base_page("Fahrer", body, "drivers")
 
 
@@ -1316,6 +1447,27 @@ def admin_months():
         """, (year, month)).fetchall():
             adjustment_files.setdefault(int(f["adjustment_id"]), []).append(f)
 
+        group_infos = load_driver_groups(conn)
+        grouped_driver_ids = {did for g in group_infos for did in g["member_ids"]}
+        display_drivers: List[Dict[str, Any]] = []
+        for d in drivers:
+            if int(d["id"]) not in grouped_driver_ids:
+                nd = dict(d); nd["is_group"] = 0; nd["form_id"] = str(d["id"]); nd["member_names"] = ""
+                display_drivers.append(nd)
+        for g in group_infos:
+            gid = int(g["group"]["id"])
+            key = f"group_{gid}"
+            display_drivers.append({"id": key, "form_id": key, "is_group": 1, "name": g["name"], "member_names": ", ".join(m["name"] for m in g["members"])})
+            rows[key] = make_group_month_summary(conn, g, year, month)
+            group_items: List[Dict[str, Any]] = []
+            for member in g["members"]:
+                for it in adjustments.get(int(member["id"]), []):
+                    gi = dict(it)
+                    gi["note"] = f"{member['name']}: {it['note']}"
+                    group_items.append(gi)
+            adjustments[key] = group_items
+        drivers = display_drivers
+
     body = render_template_string("""
     <div class="card">
       <form method="get" class="actions" id="month-filter-form">
@@ -1332,33 +1484,35 @@ def admin_months():
       {% set r = rows.get(d['id']) %}
       {% set items = adjustments.get(d['id'], []) %}
       <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
-        <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea>{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
-        <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b></td>
-        <td data-label="Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
-        <td data-label="Abrechnung"><input form="save-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
-        <td data-label="V"><input class="v-input" data-driver="{{ d['id'] }}" form="save-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
+        {% if d['is_group'] %}
+        <td class="admin-info" data-label="Allgemeine Infos"><textarea readonly placeholder="aus Mitgliedern berechnet">{{ r['admin_info'] if r else '' }}</textarea><div class="download-note">Gruppe: {{ d['member_names'] }}</div></td>
+        <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b><div class="download-note">zusammengeführt nur in Monatsdaten</div></td>
+        <td data-label="Stunden"><input readonly value="{{ r['worked_hours'] if r else '' }}"></td>
+        <td data-label="Abrechnung"><input readonly value="{{ r['payroll_hours'] if r else '' }}"></td>
+        <td data-label="V"><input readonly value="{{ fmt_v_input(r['v_hours']) if r else '' }}"><div class="v-preview">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
         <td data-label="Zuschüsse / Abzüge">
-          <div class="mini-form"><select form="save-{{ d['id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
-          <div class="adjustment-list">
-          {% if items %}
-            {% for it in items %}
-              <div class="item-row">
-                <span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span>
-                <span>{{ it['note'] }}</span>
-                {% for f in adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}
-                <form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>
-              </div>
-            {% endfor %}
-          {% else %}
-            <div class="muted">Keine Positionen</div>
-          {% endif %}
-          </div>
+          <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
         <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Alt" class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
         <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
-        <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['id'] }}" name="action" value="save" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
+        <td data-label="Aktion"><span class="badge">berechnet</span></td>
+        {% else %}
+        <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea>{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
+        <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b></td>
+        <td data-label="Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
+        <td data-label="Abrechnung"><input form="save-{{ d['form_id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
+        <td data-label="V"><input class="v-input" data-driver="{{ d['form_id'] }}" form="save-{{ d['form_id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-{{ d['form_id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
+        <td data-label="Zuschüsse / Abzüge"><div class="mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
+          {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
+          <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% for f in adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
+        </td>
+        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
+        <td data-label="Alt" class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
+        <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
+        <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody></table></div></div>
