@@ -54,7 +54,7 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1600px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:1120px}.months-table th,.months-table td{padding:9px 8px}.col-admin{width:185px}.col-driver{width:135px}.col-hours{width:78px}.col-payroll{width:88px}.col-v{width:74px}.col-adjust{width:390px}.col-small{width:70px}.col-action{width:120px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:76px}.months-table input[name=payroll_hours]{max-width:86px}.months-table input[name=v_hours]{max-width:72px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.mini-form{grid-template-columns:92px 74px minmax(120px,1fr) 150px auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:1350px}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:190px}.col-pay-num{width:110px}.col-days{width:150px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick input{border-color:#fda29b;background:#fff1f0;color:#b42318}.payroll-table textarea{min-height:74px;font-size:14px}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:1550px}.months-table th,.months-table td{padding:9px 8px}.col-admin{width:230px}.col-driver{width:320px}.col-hours{width:110px}.col-payroll{width:105px}.col-v{width:95px}.col-adjust{width:520px}.col-small{width:80px}.col-action{width:135px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:76px}.months-table input[name=payroll_hours]{max-width:86px}.months-table input[name=v_hours]{max-width:72px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.mini-form{grid-template-columns:92px 74px minmax(120px,1fr) 150px auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:52px;display:flex;align-items:center;justify-content:center}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:1350px}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:190px}.col-pay-num{width:110px}.col-days{width:150px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick input{border-color:#fda29b;background:#fff1f0;color:#b42318}.payroll-table textarea{min-height:74px;font-size:14px}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:285px;max-width:100%;overflow:auto}.group-member-preview table{min-width:285px!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:grid;grid-template-columns:92px 74px minmax(140px,1fr) 150px auto;gap:8px;align-items:center}
 @media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}.table-wrap.mobile-cards{overflow:visible;border:0;background:transparent}.months-table{min-width:0;display:block}.months-table thead{display:none}.months-table tbody,.months-table tr,.months-table td{display:block;width:100%}.months-table tr{margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}.months-table td{border-bottom:1px solid #edf0f5;padding:10px 12px}.months-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:900;color:#667085;margin-bottom:5px}.months-table .mobile-row-title{display:block}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{max-width:100%;width:100%}.admin-info{min-width:0}.col-adjust{width:auto}.compact-save{flex-direction:row;flex-wrap:wrap}.item-row{align-items:flex-start}.side .muted{display:none}}
 """
 
@@ -215,7 +215,6 @@ def make_group_month_summary(conn, group_info: Dict[str, Any], year: int, month:
     override = get_group_month_override(conn, int(group_info["group"]["id"]), year, month)
     if override and row_get(override, "worked_hours", None) is not None:
         summary["worked_hours"] = round(safe_float(row_get(override, "worked_hours", 0)), 2)
-        summary["difference_hours"] = compute_difference(summary["worked_hours"], summary["payroll_hours"], summary["v_hours"], summary["bonus_hours"], summary["deduction_hours"])
     for key in ["admin_info", "bonus_comment", "deduction_comment", "comment", "payroll_office_info", "vacation_days", "sick_days"]:
         vals = []
         for r in rows:
@@ -223,7 +222,97 @@ def make_group_month_summary(conn, group_info: Dict[str, Any], year: int, month:
             if val:
                 vals.append(val)
         summary[key] = "\n".join(vals)
+    if override:
+        group_admin = str(row_get(override, "admin_info", "") or "").strip()
+        if group_admin:
+            summary["admin_info"] = group_admin
+        group_items = get_group_adjustment_items(conn, int(row_get(override, "id", 0) or 0))
+        if group_items:
+            group_bonus = round(sum(abs(safe_float(i["hours"])) for i in group_items if i["kind"] == "bonus"), 2)
+            group_deduction = round(-sum(abs(safe_float(i["hours"])) for i in group_items if i["kind"] == "deduction"), 2)
+            summary["bonus_hours"] = round(safe_float(summary.get("bonus_hours")) + group_bonus, 2)
+            summary["deduction_hours"] = round(safe_float(summary.get("deduction_hours")) + group_deduction, 2)
+            group_bonus_comment = "\n".join(f'{fmt_hours(abs(safe_float(i["hours"])))} - {i["note"]}' for i in group_items if i["kind"] == "bonus")
+            group_deduction_comment = "\n".join(f'{fmt_hours(-abs(safe_float(i["hours"])))} - {i["note"]}' for i in group_items if i["kind"] == "deduction")
+            if group_bonus_comment:
+                summary["bonus_comment"] = (summary.get("bonus_comment", "") + "\n" + group_bonus_comment).strip()
+            if group_deduction_comment:
+                summary["deduction_comment"] = (summary.get("deduction_comment", "") + "\n" + group_deduction_comment).strip()
+            summary["adjustment_hours"] = round(safe_float(summary.get("bonus_hours")) + safe_float(summary.get("deduction_hours")), 2)
+    summary["difference_hours"] = compute_difference(summary["worked_hours"], summary["payroll_hours"], summary["v_hours"], summary["bonus_hours"], summary["deduction_hours"])
     return summary
+
+
+def ensure_group_month_row(conn, group_id: int, year: int, month: int) -> int:
+    row = conn.execute("SELECT id FROM driver_group_month_data WHERE group_id=? AND year=? AND month=?", (group_id, year, month)).fetchone()
+    if row:
+        return int(row["id"])
+    cur = conn.execute("INSERT INTO driver_group_month_data(group_id, year, month, worked_hours, admin_info, updated_at) VALUES(?,?,?,?,?,?)", (group_id, year, month, 0, "", now_iso()))
+    return int(cur.lastrowid)
+
+
+def get_group_adjustment_items(conn, group_month_data_id: int) -> List[Any]:
+    if not group_month_data_id:
+        return []
+    try:
+        return conn.execute("SELECT * FROM driver_group_adjustment_items WHERE group_month_data_id=? ORDER BY id", (group_month_data_id,)).fetchall()
+    except Exception:
+        return []
+
+
+def get_group_for_driver(conn, driver_id: int) -> Optional[Dict[str, Any]]:
+    row = conn.execute("SELECT group_id FROM driver_group_members WHERE driver_id=?", (driver_id,)).fetchone()
+    if not row:
+        return None
+    gid = int(row["group_id"])
+    for g in load_driver_groups(conn):
+        if int(g["group"]["id"]) == gid:
+            return g
+    return None
+
+
+def group_pdf_relative_path(group_id: int, group_name: str, year: int, month: int) -> Path:
+    safe_name = secure_filename(f"{month:02d}_{MONATE.get(month, str(month))}_{year}_gruppe.pdf")
+    return Path("pdfs") / (slugify(group_name) + f"-gruppe-{group_id}") / str(year) / safe_name
+
+
+def create_group_pdf(conn, group_info: Dict[str, Any], year: int, month: int) -> Path:
+    group_id = int(group_info["group"]["id"])
+    group_name = group_info["name"]
+    r = make_group_month_summary(conn, group_info, year, month)
+    pdf_path = DATA_ROOT / group_pdf_relative_path(group_id, group_name, year, month)
+    extra_story: List[Any] = []
+    styles = getSampleStyleSheet()
+    attachment_title = ParagraphStyle("AttachmentTitle", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=14, textColor=colors.HexColor("#123e7c"), spaceBefore=10, spaceAfter=6)
+    attachment_text = ParagraphStyle("AttachmentText", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=11, textColor=colors.HexColor("#111827"))
+    group_month_id = ensure_group_month_row(conn, group_id, year, month)
+    attachments = conn.execute("""
+        SELECT gf.*, gi.kind, gi.hours, gi.note
+        FROM driver_group_adjustment_files gf
+        JOIN driver_group_adjustment_items gi ON gi.id=gf.group_adjustment_item_id
+        WHERE gi.group_month_data_id=? AND gi.kind='deduction'
+        ORDER BY gi.id, gf.id
+    """, (group_month_id,)).fetchall()
+    if attachments:
+        extra_story.extend([Spacer(1, 6*mm), Paragraph("Anhänge zu Abzügen", attachment_title)])
+        for att in attachments:
+            path = DATA_ROOT / att["relative_path"]
+            extra_story.append(Paragraph(f"Abzug {fmt_hours(-abs(safe_float(att['hours'])))} – {att['note']}", attachment_text))
+            if path.exists() and path.suffix.lower().lstrip(".") in IMAGE_ATTACHMENT_EXTENSIONS:
+                try:
+                    extra_story.append(Image(str(path), width=120*mm, height=80*mm, kind="proportional"))
+                    extra_story.append(Spacer(1, 4*mm))
+                except Exception:
+                    extra_story.append(Paragraph(f"Datei: {att['original_filename'] or att['filename']}", attachment_text))
+            else:
+                extra_story.append(Paragraph(f"Datei: {att['original_filename'] or att['filename']}", attachment_text))
+                extra_story.append(Spacer(1, 3*mm))
+    create_pdf_report(pdf_path, f"Monatsübersicht {group_name} – {MONATE[month]} {year}", "+ - Stunden", ["Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller\nStand","Neuer\nStand"], [[
+        group_name, fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_hours(abs(r["v_hours"])),
+        (r.get("bonus_comment") or "-").strip() or "-", (r.get("deduction_comment") or "-").strip() or "-",
+        fmt_signed(r["difference_hours"]), fmt_signed(r["previous_balance"]), fmt_signed(r["new_balance"])
+    ]], extra_story=extra_story)
+    return pdf_path
 
 def signed_class(v: float) -> str:
     v = float(v or 0)
@@ -302,7 +391,7 @@ class _PostgresCompatConnection:
     """
 
     _RETURNING_TABLES = {
-        "drivers", "monthly_data", "documents", "audit_log", "adjustment_items", "adjustment_files", "driver_groups", "driver_group_members", "driver_group_month_data"
+        "drivers", "monthly_data", "documents", "audit_log", "adjustment_items", "adjustment_files", "driver_groups", "driver_group_members", "driver_group_month_data", "driver_group_adjustment_items", "driver_group_adjustment_files"
     }
 
     def __init__(self, raw_conn):
@@ -471,8 +560,30 @@ def _init_postgres_schema(conn) -> None:
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         worked_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+        admin_info TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL,
         UNIQUE(group_id, year, month)
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS driver_group_adjustment_items(
+        id SERIAL PRIMARY KEY,
+        group_month_data_id INTEGER NOT NULL REFERENCES driver_group_month_data(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS driver_group_adjustment_files(
+        id SERIAL PRIMARY KEY,
+        group_adjustment_item_id INTEGER NOT NULL REFERENCES driver_group_adjustment_items(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        original_filename TEXT NOT NULL DEFAULT '',
+        relative_path TEXT NOT NULL UNIQUE,
+        mime_type TEXT NOT NULL DEFAULT '',
+        uploaded_at TEXT NOT NULL
     )
     """)
     # Safe migrations for existing PostgreSQL databases.
@@ -494,6 +605,7 @@ def _init_postgres_schema(conn) -> None:
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS sick_days TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE adjustment_files ADD COLUMN IF NOT EXISTS original_filename TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE adjustment_files ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE driver_group_month_data ADD COLUMN IF NOT EXISTS admin_info TEXT NOT NULL DEFAULT ''",
     ]
     for sql in migrations:
         conn.execute(sql)
@@ -627,9 +739,29 @@ def db_conn():
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         worked_hours REAL NOT NULL DEFAULT 0,
+        admin_info TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL,
         FOREIGN KEY(group_id) REFERENCES driver_groups(id) ON DELETE CASCADE,
         UNIQUE(group_id, year, month)
+    );
+    CREATE TABLE IF NOT EXISTS driver_group_adjustment_items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_month_data_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        hours REAL NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(group_month_data_id) REFERENCES driver_group_month_data(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS driver_group_adjustment_files(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_adjustment_item_id INTEGER NOT NULL,
+        filename TEXT NOT NULL,
+        original_filename TEXT NOT NULL DEFAULT '',
+        relative_path TEXT NOT NULL UNIQUE,
+        mime_type TEXT NOT NULL DEFAULT '',
+        uploaded_at TEXT NOT NULL,
+        FOREIGN KEY(group_adjustment_item_id) REFERENCES driver_group_adjustment_items(id) ON DELETE CASCADE
     );
     """)
 
@@ -639,6 +771,13 @@ def db_conn():
     if "display_order" not in cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0")
     conn.execute("UPDATE drivers SET display_order=id WHERE COALESCE(display_order,0)=0")
+
+    try:
+        gcols = {r[1] for r in conn.execute("PRAGMA table_info(driver_group_month_data)").fetchall()}
+        if "admin_info" not in gcols:
+            conn.execute("ALTER TABLE driver_group_month_data ADD COLUMN admin_info TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(monthly_data)").fetchall()}
     for name, ddl in {
@@ -1369,19 +1508,69 @@ def admin_months():
             if action in {"save", "delete", "add_adjustment", "delete_adjustment", "delete_adjustment_file"}:
                 driver_id_raw = request.form.get("driver_id", "")
                 if driver_id_raw.startswith("group_"):
-                    if action == "save":
-                        group_id = int(driver_id_raw.split("_", 1)[1])
+                    group_id = int(driver_id_raw.split("_", 1)[1])
+                    if action in {"save", "add_adjustment"}:
                         worked = parse_hours(request.form.get("worked_hours", "0"))
-                        existing = conn.execute("SELECT id FROM driver_group_month_data WHERE group_id=? AND year=? AND month=?", (group_id, year, month)).fetchone()
-                        if existing:
-                            conn.execute("UPDATE driver_group_month_data SET worked_hours=?, updated_at=? WHERE id=?", (worked, now_iso(), existing["id"]))
-                        else:
-                            conn.execute("INSERT INTO driver_group_month_data(group_id, year, month, worked_hours, updated_at) VALUES(?,?,?,?,?)", (group_id, year, month, worked, now_iso()))
-                        audit(conn, "group_month_worked_save", f"{group_id} {year}-{month} {worked}")
+                        admin_info = request.form.get("admin_info", "").strip()
+                        group_month_id = ensure_group_month_row(conn, group_id, year, month)
+                        conn.execute("UPDATE driver_group_month_data SET worked_hours=?, admin_info=?, updated_at=? WHERE id=?", (worked, admin_info, now_iso(), group_month_id))
+                        should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
+                        if should_add_item:
+                            kind = request.form.get("kind", "")
+                            if kind not in {"bonus", "deduction"}:
+                                flash("Ungültige Art.", "err")
+                            else:
+                                hours = abs(parse_hours(request.form.get("item_hours", "0")))
+                                note = request.form.get("item_note", "").strip()
+                                if hours <= 0:
+                                    flash("Bitte Stunden für Zuschuss/Abzug eingeben.", "err")
+                                elif not note:
+                                    flash("Bitte Kommentar/Grund eingeben.", "err")
+                                else:
+                                    cur = conn.execute("INSERT INTO driver_group_adjustment_items(group_month_data_id, kind, hours, note, created_at) VALUES(?,?,?,?,?)", (group_month_id, kind, hours, note, now_iso()))
+                                    group_adjustment_id = int(cur.lastrowid)
+                                    uploaded = request.files.get("item_file")
+                                    if uploaded and uploaded.filename:
+                                        if kind != "deduction":
+                                            flash("Anhänge sind nur bei Abzügen möglich. Position wurde ohne Datei gespeichert.", "err")
+                                        elif not allowed_attachment(uploaded.filename):
+                                            flash("Datei nicht erlaubt. Bitte JPG, PNG, WEBP, GIF oder PDF hochladen. Position wurde ohne Datei gespeichert.", "err")
+                                        else:
+                                            rel = Path("attachments") / "groups" / str(group_id) / str(year) / f"{month:02d}" / str(group_adjustment_id) / (datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + (secure_filename(uploaded.filename) or "anhang"))
+                                            abs_path = DATA_ROOT / rel
+                                            abs_path.parent.mkdir(parents=True, exist_ok=True)
+                                            uploaded.save(abs_path)
+                                            conn.execute("INSERT INTO driver_group_adjustment_files(group_adjustment_item_id, filename, original_filename, relative_path, mime_type, uploaded_at) VALUES(?,?,?,?,?,?)", (group_adjustment_id, abs_path.name, uploaded.filename, str(rel), uploaded.mimetype or "", now_iso()))
+                                            flash("Bild/Datei erfolgreich hochgeladen.", "ok")
+                                    flash("Gruppenposition hinzugefügt und automatisch verrechnet.", "ok")
+                        audit(conn, "group_month_save", f"{group_id} {year}-{month} {worked}")
                         conn.commit()
-                        flash("Geleistete Stunden für Gruppe gespeichert.", "ok")
+                        flash("Gruppe gespeichert.", "ok")
+                    elif action == "delete_adjustment":
+                        item_id = int(request.form["item_id"])
+                        row = conn.execute("SELECT gi.*, gm.group_id FROM driver_group_adjustment_items gi JOIN driver_group_month_data gm ON gm.id=gi.group_month_data_id WHERE gi.id=? AND gm.group_id=? AND gm.year=? AND gm.month=?", (item_id, group_id, year, month)).fetchone()
+                        if row:
+                            for f in conn.execute("SELECT relative_path FROM driver_group_adjustment_files WHERE group_adjustment_item_id=?", (item_id,)).fetchall():
+                                delete_relative_file(f["relative_path"])
+                            conn.execute("DELETE FROM driver_group_adjustment_items WHERE id=?", (item_id,))
+                            conn.commit()
+                            flash("Gruppenposition gelöscht.", "ok")
+                    elif action == "delete_adjustment_file":
+                        file_id = int(request.form["file_id"])
+                        frow = conn.execute("""
+                            SELECT gf.*
+                            FROM driver_group_adjustment_files gf
+                            JOIN driver_group_adjustment_items gi ON gi.id=gf.group_adjustment_item_id
+                            JOIN driver_group_month_data gm ON gm.id=gi.group_month_data_id
+                            WHERE gf.id=? AND gm.group_id=? AND gm.year=? AND gm.month=?
+                        """, (file_id, group_id, year, month)).fetchone()
+                        if frow:
+                            delete_relative_file(frow["relative_path"])
+                            conn.execute("DELETE FROM driver_group_adjustment_files WHERE id=?", (file_id,))
+                            conn.commit()
+                            flash("Bild/Datei wurde entfernt.", "ok")
                     else:
-                        flash("Diese Aktion ist bei Gruppen nicht möglich. Bitte einzelne Fahrer bearbeiten.", "err")
+                        flash("Diese Aktion ist bei Gruppen nicht möglich.", "err")
                     return redirect(url_for("admin_months", year=year, month=month))
                 did = int(driver_id_raw)
 
@@ -1517,16 +1706,26 @@ def admin_months():
             if int(d["id"]) not in grouped_driver_ids:
                 nd = dict(d); nd["is_group"] = 0; nd["form_id"] = str(d["id"]); nd["member_names"] = ""
                 display_drivers.append(nd)
+        group_adjustment_files: Dict[int, List[Any]] = {}
         for g in group_infos:
             gid = int(g["group"]["id"])
             key = f"group_{gid}"
             display_drivers.append({"id": key, "form_id": key, "is_group": 1, "name": g["name"], "member_names": ", ".join(m["name"] for m in g["members"]), "member_preview": make_group_member_preview(conn, g, year, month)})
             rows[key] = make_group_month_summary(conn, g, year, month)
             group_items: List[Dict[str, Any]] = []
+            group_month = get_group_month_override(conn, gid, year, month)
+            if group_month:
+                for it in get_group_adjustment_items(conn, int(group_month["id"])):
+                    gi = dict(it)
+                    gi["is_group_adj"] = 1
+                    group_items.append(gi)
+                    for gf in conn.execute("SELECT * FROM driver_group_adjustment_files WHERE group_adjustment_item_id=? ORDER BY id", (int(it["id"]),)).fetchall():
+                        group_adjustment_files.setdefault(int(it["id"]), []).append(gf)
             for member in g["members"]:
                 for it in adjustments.get(int(member["id"]), []):
                     gi = dict(it)
                     gi["note"] = f"{member['name']}: {it['note']}"
+                    gi["is_group_adj"] = 0
                     group_items.append(gi)
             adjustments[key] = group_items
         drivers = display_drivers
@@ -1548,14 +1747,14 @@ def admin_months():
       {% set items = adjustments.get(d['id'], []) %}
       <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
         {% if d['is_group'] %}
-        <td class="admin-info" data-label="Allgemeine Infos"><textarea readonly placeholder="aus Mitgliedern berechnet">{{ r['admin_info'] if r else '' }}</textarea><div class="download-note">Gruppe: {{ d['member_names'] }}</div></td>
+        <td class="admin-info" data-label="Allgemeine Infos"><textarea form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><div class="download-note">Gruppe: {{ d['member_names'] }}</div></td>
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b><div class="download-note">zusammengeführt nur in Plus/Minus Stunden</div>{% if d.member_preview %}<div class="group-member-preview"><b>Einzelvorschau</b><table><tr><th>Fahrer</th><th>Std.</th><th>Abr.</th><th>V</th><th>Diff</th></tr>{% for p in d.member_preview %}<tr><td>{{ p.name }}</td><td>{{ fmt_hours(p.worked_hours) }}</td><td>{{ fmt_hours(p.payroll_hours) }}</td><td>{{ fmt_decimal_input(p.v_hours) }}</td><td class="{{ signed_class(p.difference_hours) }}">{{ fmt_signed(p.difference_hours) }}</td></tr>{% endfor %}</table></div>{% endif %}</td>
-        <td data-label="geleistete Stunden"><form method="post" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><div class="group-worked-note">Nur Gruppenwert für Plus/Minus Stunden.</div></form></td>
+        <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><div class="group-worked-note">Nur Gruppenwert für Plus/Minus Stunden.</div></form></td>
         <td data-label="Abrechnung"><input readonly value="{{ r['payroll_hours'] if r else '' }}"></td>
         <td data-label="V"><input readonly value="{{ fmt_v_input(r['v_hours']) if r else '' }}"><div class="v-preview">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
-        <td data-label="Zuschüsse / Abzüge">
+        <td data-label="Zuschüsse / Abzüge"><div class="group-mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
-          <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
+          <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% if it.get('is_group_adj') %}{% for f in group_adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>{% endif %}</div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
         <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Alt" class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
@@ -1638,7 +1837,7 @@ def admin_months():
       updatePreview();
     });
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class)
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class)
     return base_page("Plus/Minus Stunden", body, "months")
 
 
@@ -1964,9 +2163,16 @@ def driver_years():
     did = int(session["driver_db_id"])
     with db_conn() as conn:
         driver = get_driver_by_db_id(conn,did)
-        years = conn.execute("SELECT year, COUNT(*) cnt FROM monthly_data WHERE driver_id=? GROUP BY year ORDER BY year DESC", (did,)).fetchall()
-        latest = conn.execute("SELECT new_balance FROM monthly_data WHERE driver_id=? ORDER BY year DESC, month DESC, id DESC LIMIT 1", (did,)).fetchone()
-    bal = latest["new_balance"] if latest else driver["starting_balance"]
+        group = get_group_for_driver(conn, did)
+        if group:
+            placeholders = ",".join(["?"] * len(group["member_ids"]))
+            years = conn.execute(f"SELECT year, COUNT(DISTINCT month) cnt FROM monthly_data WHERE driver_id IN ({placeholders}) GROUP BY year ORDER BY year DESC", tuple(group["member_ids"])).fetchall()
+            latest_year_month = conn.execute(f"SELECT year, month FROM monthly_data WHERE driver_id IN ({placeholders}) ORDER BY year DESC, month DESC LIMIT 1", tuple(group["member_ids"])).fetchone()
+            bal = make_group_month_summary(conn, group, int(latest_year_month["year"]), int(latest_year_month["month"]))["new_balance"] if latest_year_month else driver["starting_balance"]
+        else:
+            years = conn.execute("SELECT year, COUNT(*) cnt FROM monthly_data WHERE driver_id=? GROUP BY year ORDER BY year DESC", (did,)).fetchall()
+            latest = conn.execute("SELECT new_balance FROM monthly_data WHERE driver_id=? ORDER BY year DESC, month DESC, id DESC LIMIT 1", (did,)).fetchone()
+            bal = latest["new_balance"] if latest else driver["starting_balance"]
     return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fahrerportal</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">Fahrerportal</div><div class="subtitle">Angemeldet als <span class="badge">{{ session['driver_name'] }}</span></div></div><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div><div class="card"><h2>Aktueller Stand: <span class="{{ signed_class(bal) }}">{{ fmt_signed(bal) }}</span></h2><div class="driver-grid">{% for y in years %}<a class="month-card" href="{{ url_for('driver_months_for_year', year=y['year']) }}"><strong>{{ y['year'] }}</strong>{{ y['cnt'] }} Monat(e)</a>{% endfor %}</div></div></main></body></html>""", css=BASE_CSS, years=years, bal=bal, fmt_signed=fmt_signed, signed_class=signed_class)
 
 
@@ -1975,7 +2181,13 @@ def driver_years():
 def driver_months_for_year(year:int):
     did = int(session["driver_db_id"])
     with db_conn() as conn:
-        rows = conn.execute("SELECT m.*, doc.id AS doc_id FROM monthly_data m LEFT JOIN documents doc ON doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month WHERE m.driver_id=? AND m.year=? ORDER BY m.month", (did,year)).fetchall()
+        group = get_group_for_driver(conn, did)
+        if group:
+            placeholders = ",".join(["?"] * len(group["member_ids"]))
+            month_nums = [int(r["month"]) for r in conn.execute(f"SELECT DISTINCT month FROM monthly_data WHERE driver_id IN ({placeholders}) AND year=? ORDER BY month", tuple(group["member_ids"])+(year,)).fetchall()]
+            rows = [make_group_month_summary(conn, group, year, m) for m in month_nums]
+        else:
+            rows = conn.execute("SELECT m.*, doc.id AS doc_id FROM monthly_data m LEFT JOIN documents doc ON doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month WHERE m.driver_id=? AND m.year=? ORDER BY m.month", (did,year)).fetchall()
     return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ year }}</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_years') }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="driver-grid">{% for r in rows %}<a class="month-card" href="{{ url_for('driver_month_detail', year=year, month=r['month']) }}"><strong>{{ months[r['month']] }}</strong><div>Differenz: <span class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</span></div><div>Neuer Stand: <span class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</span></div></a>{% endfor %}</div></div></main></body></html>""", css=BASE_CSS, rows=rows, year=year, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class)
 
 
@@ -1984,23 +2196,62 @@ def driver_months_for_year(year:int):
 def driver_month_detail(year:int, month:int):
     did = int(session["driver_db_id"])
     with db_conn() as conn:
-        r = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
-        if not r:
-            abort(404)
-        recalc_month_adjustments(conn, int(r["id"]))
-        recalc_driver(conn, did)
-        create_driver_pdf(conn, did, year, month)
-        conn.commit()
-        r = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
-        doc = conn.execute("SELECT * FROM documents WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
-        items = conn.execute("""
-            SELECT ai.* FROM adjustment_items ai
-            JOIN monthly_data m ON m.id=ai.monthly_data_id
-            WHERE m.driver_id=? AND m.year=? AND m.month=?
-            ORDER BY ai.id
-        """, (did, year, month)).fetchall()
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monatsdetails</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ months[month] }} {{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_months_for_year', year=year) }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="grid grid-3"><div class="kpi">Stunden<b>{{ fmt_hours(r['worked_hours']) }}</b></div><div class="kpi">Abrechnung<b>{{ fmt_hours(r['payroll_hours']) }}</b></div><div class="kpi">V<b>{{ fmt_hours(r['v_hours']) }}</b></div><div class="kpi">Zuschüsse<b>{{ fmt_hours(r['bonus_hours']) }}</b><span class="muted">{{ r['bonus_comment'] or '-' }}</span></div><div class="kpi">Abzüge<b>{{ fmt_hours(r['deduction_hours']) }}</b><span class="muted">{{ r['deduction_comment'] or '-' }}</span></div><div class="kpi">Differenz<b class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</b></div><div class="kpi">Alter Stand<b>{{ fmt_signed(r['previous_balance']) }}</b></div><div class="kpi">Neuer Stand<b class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</b></div></div><h3>Einzelne Zuschüsse / Abzüge</h3>{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<p class="muted">Keine Positionen vorhanden.</p>{% endif %}{% if doc %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_pdf', document_id=doc['id']) }}">PDF herunterladen</a></p>{% endif %}</div></main></body></html>""", css=BASE_CSS, r=r, doc=doc, items=items, year=year, month=month, months=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class)
+        group = get_group_for_driver(conn, did)
+        if group:
+            r = make_group_month_summary(conn, group, year, month)
+            items = []
+            group_month = get_group_month_override(conn, int(group["group"]["id"]), year, month)
+            if group_month:
+                items.extend([dict(i) for i in get_group_adjustment_items(conn, int(group_month["id"]))])
+            for member in group["members"]:
+                for it in conn.execute("""
+                    SELECT ai.* FROM adjustment_items ai
+                    JOIN monthly_data m ON m.id=ai.monthly_data_id
+                    WHERE m.driver_id=? AND m.year=? AND m.month=?
+                    ORDER BY ai.id
+                """, (int(member["id"]), year, month)).fetchall():
+                    x = dict(it); x["note"] = f"{member['name']}: {it['note']}"; items.append(x)
+            doc = {"is_group": True}
+            group_name = group["name"]
+            group_mode = True
+        else:
+            r = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
+            if not r:
+                abort(404)
+            recalc_month_adjustments(conn, int(r["id"]))
+            recalc_driver(conn, did)
+            create_driver_pdf(conn, did, year, month)
+            conn.commit()
+            r = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
+            doc = conn.execute("SELECT * FROM documents WHERE driver_id=? AND year=? AND month=?", (did,year,month)).fetchone()
+            items = conn.execute("""
+                SELECT ai.* FROM adjustment_items ai
+                JOIN monthly_data m ON m.id=ai.monthly_data_id
+                WHERE m.driver_id=? AND m.year=? AND m.month=?
+                ORDER BY ai.id
+            """, (did, year, month)).fetchall()
+            group_name = ""
+            group_mode = False
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monatsdetails</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ months[month] }} {{ year }}</div><div class="subtitle">{{ group_name if group_mode else session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_months_for_year', year=year) }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="grid grid-3"><div class="kpi">Stunden<b>{{ fmt_hours(r['worked_hours']) }}</b></div><div class="kpi">Abrechnung<b>{{ fmt_hours(r['payroll_hours']) }}</b></div><div class="kpi">V<b>{{ fmt_hours(r['v_hours']) }}</b></div><div class="kpi">Zuschüsse<b>{{ fmt_hours(r['bonus_hours']) }}</b><span class="muted">{{ r['bonus_comment'] or '-' }}</span></div><div class="kpi">Abzüge<b>{{ fmt_hours(r['deduction_hours']) }}</b><span class="muted">{{ r['deduction_comment'] or '-' }}</span></div><div class="kpi">Differenz<b class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</b></div><div class="kpi">Alter Stand<b>{{ fmt_signed(r['previous_balance']) }}</b></div><div class="kpi">Neuer Stand<b class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</b></div></div><h3>Einzelne Zuschüsse / Abzüge</h3>{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<p class="muted">Keine Positionen vorhanden.</p>{% endif %}{% if group_mode %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_group_pdf', year=year, month=month) }}">PDF herunterladen</a></p>{% elif doc %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_pdf', document_id=doc['id']) }}">PDF herunterladen</a></p>{% endif %}</div></main></body></html>""", css=BASE_CSS, r=r, doc=doc, items=items, year=year, month=month, months=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class, group_mode=group_mode, group_name=group_name)
 
+
+@app.get("/pdf/gruppe/<int:year>/<int:month>")
+@driver_login_required
+def download_group_pdf(year:int, month:int):
+    did = int(session["driver_db_id"])
+    with db_conn() as conn:
+        group = get_group_for_driver(conn, did)
+        if not group:
+            abort(404)
+        path = create_group_pdf(conn, group, year, month)
+        conn.commit()
+        if not path.exists():
+            abort(404)
+    response = send_file(path, mimetype="application/pdf", as_attachment=True, download_name=path.name, max_age=0)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 @app.get("/pdf/<int:document_id>")
 @driver_login_required
