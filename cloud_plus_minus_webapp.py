@@ -93,12 +93,12 @@ def fmt_hours(v: float) -> str:
 
 
 def fmt_v_input(v_hours: float) -> str:
-    """Shows the original V amount in the admin input.
+    """Shows the stored V value in the admin input.
 
-    Internally v_hours is stored already divided by 14 for the calculation.
-    In the admin screen, the user enters and sees the original amount.
+    V is stored and calculated exactly as entered. The preview below the field
+    only shows the entered value multiplied by 14 for information.
     """
-    amount = round(float(v_hours or 0) * 14.0, 2)
+    amount = round(float(v_hours or 0), 2)
     if abs(amount) < 0.0001:
         return ""
     text = f"{amount:.2f}".replace(".", ",")
@@ -388,6 +388,14 @@ def _init_postgres_schema(conn) -> None:
     for sql in migrations:
         conn.execute(sql)
     conn.execute("UPDATE drivers SET display_order=id WHERE COALESCE(display_order,0)=0")
+
+    migrated = conn.execute("SELECT COUNT(*) AS c FROM audit_log WHERE action=?", ("v_storage_direct_migration_2026_05_01",)).fetchone()
+    if not migrated or int(migrated["c"] or 0) == 0:
+        conn.execute("UPDATE monthly_data SET v_hours=COALESCE(v_hours,0)*14.0 WHERE ABS(COALESCE(v_hours,0))>0.0001")
+        conn.execute(
+            "INSERT INTO audit_log(actor, action, details, created_at) VALUES(?,?,?,?)",
+            ("system", "v_storage_direct_migration_2026_05_01", "V-Werte von alter /14-Speicherung auf direkte Speicherung umgestellt.", now_iso()),
+        )
     conn.commit()
 
 
@@ -513,6 +521,14 @@ def db_conn():
         if name not in cols:
             conn.execute(ddl)
 
+
+    migrated = conn.execute("SELECT COUNT(*) AS c FROM audit_log WHERE action=?", ("v_storage_direct_migration_2026_05_01",)).fetchone()
+    if not migrated or int(migrated["c"] or 0) == 0:
+        conn.execute("UPDATE monthly_data SET v_hours=COALESCE(v_hours,0)*14.0 WHERE ABS(COALESCE(v_hours,0))>0.0001")
+        conn.execute(
+            "INSERT INTO audit_log(actor, action, details, created_at) VALUES(?,?,?,?)",
+            ("system", "v_storage_direct_migration_2026_05_01", "V-Werte von alter /14-Speicherung auf direkte Speicherung umgestellt.", now_iso()),
+        )
     conn.commit()
     return conn
 
@@ -797,6 +813,11 @@ def format_value_comment(value: float, comment: str, hours: bool = False) -> str
     return first if not comment else f"{first}\n{comment}"
 
 
+def color_text(value: str, color_hex: str) -> str:
+    text = str(value or "-").strip() or "-"
+    return f'<font color="{color_hex}">{text}</font>'
+
+
 def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month: int) -> Optional[int]:
     """Creates the current driver PDF. Admin-only internal fields are intentionally not included."""
     driver = get_driver_by_db_id(conn, driver_id)
@@ -891,11 +912,11 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
         row_get(r, "payroll_office_info", "") or "-",
         r["name"],
         fmt_hours(r["payroll_hours"]),
-        fmt_decimal_input(float(r["v_hours"] or 0) * 14.0) or "-",
+        fmt_decimal_input(float(r["v_hours"] or 0)) or "-",
         fmt_decimal_input(row_get(r, "payroll_surcharge", 0)) or "-",
         fmt_decimal_input(row_get(r, "fuel_voucher", 0)) or "-",
-        row_get(r, "vacation_days", "") or "-",
-        row_get(r, "sick_days", "") or "-",
+        color_text(row_get(r, "vacation_days", "") or "-", "#067647"),
+        color_text(row_get(r, "sick_days", "") or "-", "#b42318"),
     ] for r in rows]
     if not pdf_rows:
         pdf_rows = [["-", "Keine Einträge", "-", "-", "-", "-", "-", "-"]]
@@ -903,7 +924,7 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
     create_pdf_report(
         path,
         f"Stunden für Lohnabrechnung – {MONATE[month]} {year}",
-        "Übersicht für das Lohnbüro. Interne Admin-Infos sind nicht enthalten.",
+        "",
         ["Allgemeine Infos für Lohnbüro", "Fahrer", "Abrechnung", "V", "Zuschlag", "Tankgutschein", "Urlaub", "Krank"],
         pdf_rows,
         wide=True,
@@ -1183,8 +1204,9 @@ def admin_months():
                     # Abrechnung, V und Admin-Infos nicht verloren.
                     worked = parse_hours(request.form.get("worked_hours", "0"))
                     payroll = parse_hours(request.form.get("payroll_hours", "0"))
-                    # V wird als Betrag eingegeben und für die Rechnung automatisch durch 14 geteilt.
-                    v = round(abs(parse_hours(request.form.get("v_hours", "0"))) / 14.0, 2)
+                    # V wird genau so gespeichert und berechnet, wie es eingetragen wurde.
+                    # Die Vorschau zeigt nur den eingegebenen Wert mal 14.
+                    v = round(abs(parse_hours(request.form.get("v_hours", "0"))), 2)
                     admin_info = request.form.get("admin_info", "").strip()
                     monthly_id = get_or_create_month_row(conn, did, year, month)
                     conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v, admin_info, now_iso(), monthly_id))
@@ -1314,7 +1336,7 @@ def admin_months():
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b></td>
         <td data-label="Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
         <td data-label="Abrechnung"><input form="save-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
-        <td data-label="V"><input class="v-input" data-driver="{{ d['id'] }}" form="save-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_hours(r['v_hours']) }}{% endif %}</div></td>
+        <td data-label="V"><input class="v-input" data-driver="{{ d['id'] }}" form="save-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
         <td data-label="Zuschüsse / Abzüge">
           <div class="mini-form"><select form="save-{{ d['id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
@@ -1385,7 +1407,7 @@ def admin_months():
       return Number.isFinite(num) ? num : null;
     }
     function formatVPreview(num){
-      return '= ' + (num / 14).toFixed(2).replace('.', ',') + ' Std.';
+      return '= ' + (num * 14).toFixed(2).replace('.', ',');
     }
     document.querySelectorAll('.v-input').forEach(function(input){
       var preview = document.getElementById('v-preview-' + input.dataset.driver);
@@ -1399,7 +1421,7 @@ def admin_months():
       updatePreview();
     });
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, signed_class=signed_class)
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class)
     return base_page("Monatsdaten", body, "months")
 
 
@@ -1423,7 +1445,7 @@ def admin_payroll_hours():
                 did = int(request.form["driver_id"])
                 monthly_id = get_or_create_month_row(conn, did, year, month)
                 payroll = parse_hours(request.form.get("payroll_hours", "0"))
-                v = round(abs(parse_hours(request.form.get("v_hours", "0"))) / 14.0, 2)
+                v = round(abs(parse_hours(request.form.get("v_hours", "0"))), 2)
                 admin_info = request.form.get("admin_info", "").strip()
                 payroll_office_info = request.form.get("payroll_office_info", "").strip()
                 payroll_surcharge = parse_decimal(request.form.get("payroll_surcharge", "0"))
@@ -1472,7 +1494,7 @@ def admin_payroll_hours():
         <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="payroll-{{ d['id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea></td>
         <td class="nowrap" data-label="Fahrer"><b>{{ d['name'] }}</b></td>
         <td data-label="Abrechnung"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></form></td>
-        <td data-label="V"><input class="v-input" data-driver="payroll-{{ d['id'] }}" form="payroll-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-payroll-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_hours(r['v_hours']) }}{% endif %}</div></td>
+        <td data-label="V"><input class="v-input" data-driver="payroll-{{ d['id'] }}" form="payroll-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-payroll-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
         <td data-label="Zuschlag"><input form="payroll-{{ d['id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"></td>
         <td data-label="Tankgutschein"><input form="payroll-{{ d['id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"></td>
         <td data-label="Urlaub" class="days-vacation"><input form="payroll-{{ d['id'] }}" name="vacation_days" value="{{ row_get(r, 'vacation_days', '') if r else '' }}" placeholder="9-13, 28"></td>
@@ -1483,7 +1505,7 @@ def admin_payroll_hours():
       </tbody></table></div></div>
     <script>
     function parseVPreviewValue(raw){var text=(raw||'').toString().trim().replace(/\s+/g,'').replace(',','.'); if(!text){return null;} var num=parseFloat(text); return Number.isFinite(num)?num:null;}
-    function formatVPreview(num){return '= '+(num/14).toFixed(2).replace('.', ',')+' Std.';}
+    function formatVPreview(num){return '= '+(num*14).toFixed(2).replace('.', ',');}
     document.querySelectorAll('.v-input').forEach(function(input){var preview=document.getElementById('v-preview-'+input.dataset.driver); function updatePreview(){if(!preview){return;} var num=parseVPreviewValue(input.value); preview.textContent=num===null?'':formatVPreview(num);} input.addEventListener('input', updatePreview); input.addEventListener('change', updatePreview); updatePreview();});
     </script>
     """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get)
