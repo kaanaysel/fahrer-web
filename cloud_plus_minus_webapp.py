@@ -273,6 +273,40 @@ def get_group_for_driver(conn, driver_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 
+def sync_group_admin_info(conn, group_id: int, year: int, month: int, admin_info: str) -> None:
+    """Keep the internal admin note identical in both admin tabs for a driver group."""
+    text = (admin_info or "").strip()
+    group_month_id = ensure_group_month_row(conn, group_id, year, month)
+    conn.execute(
+        "UPDATE driver_group_month_data SET admin_info=?, updated_at=? WHERE id=?",
+        (text, now_iso(), group_month_id),
+    )
+    members = conn.execute(
+        """
+        SELECT d.id
+        FROM driver_group_members gm
+        JOIN drivers d ON d.id=gm.driver_id
+        WHERE gm.group_id=? AND d.is_active=1
+        ORDER BY COALESCE(NULLIF(gm.position,0), d.display_order, d.id), d.name COLLATE NOCASE
+        """,
+        (group_id,),
+    ).fetchall()
+    for member in members:
+        monthly_id = get_or_create_month_row(conn, int(member["id"]), year, month)
+        conn.execute(
+            "UPDATE monthly_data SET admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?",
+            (text, now_iso(), monthly_id),
+        )
+
+
+def sync_member_admin_info_to_group(conn, driver_id: int, year: int, month: int, admin_info: str) -> None:
+    """When a grouped driver is edited in payroll, mirror the note to the group and all members."""
+    group_info = get_group_for_driver(conn, driver_id)
+    if not group_info:
+        return
+    sync_group_admin_info(conn, int(group_info["group"]["id"]), year, month, admin_info)
+
+
 def group_pdf_relative_path(group_id: int, group_name: str, year: int, month: int) -> Path:
     safe_name = secure_filename(f"{month:02d}_{MONATE.get(month, str(month))}_{year}_gruppe.pdf")
     return Path("pdfs") / (slugify(group_name) + f"-gruppe-{group_id}") / str(year) / safe_name
@@ -1549,6 +1583,7 @@ def admin_months():
                             worked = parse_hours(request.form.get(f"worked_hours_{suffix}", "0"))
                             admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
                             conn.execute("UPDATE driver_group_month_data SET worked_hours=?, admin_info=?, updated_at=? WHERE id=?", (worked, admin_info, now_iso(), gm_id))
+                            sync_group_admin_info(conn, gid, year, month, admin_info)
                             saved_count += 1
                         else:
                             did2 = int(row_driver_raw)
@@ -1574,6 +1609,7 @@ def admin_months():
                         admin_info = request.form.get("admin_info", "").strip()
                         group_month_id = ensure_group_month_row(conn, group_id, year, month)
                         conn.execute("UPDATE driver_group_month_data SET worked_hours=?, admin_info=?, updated_at=? WHERE id=?", (worked, admin_info, now_iso(), group_month_id))
+                        sync_group_admin_info(conn, group_id, year, month, admin_info)
                         should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
                         if should_add_item:
                             kind = request.form.get("kind", "")
@@ -1961,6 +1997,7 @@ def admin_payroll_hours():
                             vacation_days=?, sick_days=?, updated_at=?
                         WHERE id=?
                     """, (worked, payroll, v, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                    sync_member_admin_info_to_group(conn, did, year, month, admin_info)
                     recalc_month_adjustments(conn, monthly_id)
                     recalc_driver(conn, did)
                     create_driver_pdf(conn, did, year, month)
@@ -1988,6 +2025,7 @@ def admin_payroll_hours():
                         vacation_days=?, sick_days=?, updated_at=?
                     WHERE id=?
                 """, (worked, payroll, v, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                sync_member_admin_info_to_group(conn, did, year, month, admin_info)
                 recalc_month_adjustments(conn, monthly_id)
                 recalc_driver(conn, did)
                 create_driver_pdf(conn, did, year, month)
