@@ -1147,6 +1147,15 @@ def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month
     return int(cur.lastrowid)
 
 
+def ensure_active_driver_month_rows(conn: sqlite3.Connection, year: int, month: int) -> None:
+    """Ensure every active driver has a row for the requested month before exports."""
+    active_drivers = conn.execute(
+        "SELECT id FROM drivers WHERE is_active=1 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE"
+    ).fetchall()
+    for d in active_drivers:
+        get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
+
+
 def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
     groups = load_driver_groups(conn)
     grouped_driver_ids = {did for g in groups for did in g["member_ids"]}
@@ -1189,15 +1198,7 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
         SELECT m.*, d.name
         FROM monthly_data m
         JOIN drivers d ON d.id=m.driver_id
-        WHERE m.year=? AND m.month=? AND (
-            ABS(COALESCE(m.payroll_hours,0))>0.0001
-            OR ABS(COALESCE(m.v_hours,0))>0.0001
-            OR ABS(COALESCE(m.payroll_surcharge,0))>0.0001
-            OR ABS(COALESCE(m.fuel_voucher,0))>0.0001
-            OR TRIM(COALESCE(m.payroll_office_info,''))<>''
-            OR TRIM(COALESCE(m.vacation_days,''))<>''
-            OR TRIM(COALESCE(m.sick_days,''))<>''
-        )
+        WHERE m.year=? AND m.month=? AND d.is_active=1
         ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
     """, (year, month)).fetchall()
     pdf_rows = [[
@@ -2065,6 +2066,7 @@ def admin_payroll_hours():
 @admin_login_required
 def download_payroll_hours_export(year:int, month:int):
     with db_conn() as conn:
+        ensure_active_driver_month_rows(conn, year, month)
         recalc_all(conn)
         path = export_payroll_hours_pdf(conn, year, month)
         conn.commit()
@@ -2412,6 +2414,7 @@ def download_pdf(document_id:int):
 @admin_login_required
 def download_month_export(year:int, month:int):
     with db_conn() as conn:
+        ensure_active_driver_month_rows(conn, year, month)
         recalc_all(conn); path = export_month_pdf(conn, year, month); conn.commit()
     response = send_file(path, mimetype="application/pdf", as_attachment=True, download_name=path.name, max_age=0)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -2527,6 +2530,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
