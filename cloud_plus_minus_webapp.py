@@ -427,7 +427,7 @@ class _PostgresCompatConnection:
     """
 
     _RETURNING_TABLES = {
-        "drivers", "monthly_data", "documents", "audit_log", "adjustment_items", "adjustment_files", "driver_groups", "driver_group_members", "driver_group_month_data", "driver_group_adjustment_items", "driver_group_adjustment_files"
+        "drivers", "monthly_data", "documents", "audit_log", "adjustment_items", "adjustment_files", "driver_groups", "driver_group_members", "driver_group_month_data", "driver_group_adjustment_items", "driver_group_adjustment_files", "month_releases"
     }
 
     def __init__(self, raw_conn):
@@ -622,6 +622,16 @@ def _init_postgres_schema(conn) -> None:
         uploaded_at TEXT NOT NULL
     )
     """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS month_releases(
+        id SERIAL PRIMARY KEY,
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        is_released INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        UNIQUE(year, month)
+    )
+    """)
     # Safe migrations for existing PostgreSQL databases.
     migrations = [
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS starting_balance DOUBLE PRECISION NOT NULL DEFAULT 0",
@@ -799,6 +809,14 @@ def db_conn():
         uploaded_at TEXT NOT NULL,
         FOREIGN KEY(group_adjustment_item_id) REFERENCES driver_group_adjustment_items(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS month_releases(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        is_released INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        UNIQUE(year, month)
+    );
     """)
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(drivers)").fetchall()}
@@ -911,6 +929,34 @@ def get_or_create_month_row(conn: sqlite3.Connection, driver_id: int, year: int,
     if carry_admin_info:
         maybe_carry_admin_info(conn, monthly_id, driver_id, year, month)
     return monthly_id
+
+
+def is_month_released(conn: sqlite3.Connection, year: int, month: int) -> bool:
+    """Return True only when the selected month is visible in the driver portal."""
+    row = conn.execute(
+        "SELECT is_released FROM month_releases WHERE year=? AND month=?",
+        (year, month),
+    ).fetchone()
+    return bool(row and int(row["is_released"] or 0) == 1)
+
+
+def set_month_release(conn: sqlite3.Connection, year: int, month: int, is_released: bool) -> None:
+    """Block or allow the selected month for all drivers in the driver portal."""
+    released = 1 if is_released else 0
+    existing = conn.execute(
+        "SELECT id FROM month_releases WHERE year=? AND month=?",
+        (year, month),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE month_releases SET is_released=?, updated_at=? WHERE id=?",
+            (released, now_iso(), existing["id"]),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO month_releases(year, month, is_released, updated_at) VALUES(?,?,?,?)",
+            (year, month, released, now_iso()),
+        )
 
 def recalc_month_adjustments(conn: sqlite3.Connection, monthly_data_id: int) -> None:
     items = conn.execute(
@@ -1566,6 +1612,16 @@ def admin_months():
     with db_conn() as conn:
         if request.method == "POST":
             action = request.form.get("action")
+            if action == "toggle_month_release":
+                release = request.form.get("release") == "1"
+                set_month_release(conn, year, month, release)
+                audit(conn, "month_release" if release else "month_lock", f"{year}-{month}")
+                conn.commit()
+                flash(
+                    f"{MONATE[month]} {year} ist jetzt für Fahrer sichtbar." if release else f"{MONATE[month]} {year} ist jetzt für Fahrer gesperrt.",
+                    "ok",
+                )
+                return redirect(url_for("admin_months", year=year, month=month))
             if action in {"save_all", "save", "delete", "add_adjustment", "delete_adjustment", "delete_adjustment_file"}:
                 if action == "save_all":
                     saved_count = 0
@@ -1825,17 +1881,28 @@ def admin_months():
                     group_items.append(gi)
             adjustments[key] = group_items
         drivers = display_drivers
+        month_released = is_month_released(conn, year, month)
 
     body = render_template_string("""
     <div class="card">
-      <form method="get" class="actions" id="month-filter-form">
-        <div><label>Jahr</label><input name="year" value="{{ year }}" onchange="this.form.submit()"></div>
-        <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
-        <noscript><button class="primary">Anzeigen</button></noscript>
-        <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF herunterladen</a>
-        <button class="primary" type="submit" form="all-months-form">Alle Einträge speichern</button>
-        <div class="download-note">Der PDF-Button lädt die Datei direkt herunter.</div>
-      </form>
+      <div class="actions" style="justify-content:space-between;align-items:flex-end">
+        <form method="get" class="actions" id="month-filter-form">
+          <div><label>Jahr</label><input name="year" value="{{ year }}" onchange="this.form.submit()"></div>
+          <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+          <noscript><button class="primary">Anzeigen</button></noscript>
+          <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF herunterladen</a>
+          <button class="primary" type="submit" form="all-months-form">Alle Einträge speichern</button>
+          <div class="download-note">Der PDF-Button lädt die Datei direkt herunter.</div>
+        </form>
+        <form method="post" class="actions" style="margin-left:auto;align-items:center">
+          <input type="hidden" name="action" value="toggle_month_release">
+          <input type="hidden" name="year" value="{{ year }}">
+          <input type="hidden" name="month" value="{{ month }}">
+          <input type="hidden" name="release" value="{{ 0 if month_released else 1 }}">
+          <span class="badge">{{ 'Für Fahrer freigegeben' if month_released else 'Für Fahrer gesperrt' }}</span>
+          <button class="small {{ 'danger' if month_released else 'primary' }}" onclick="return confirm('{{ 'Monat für Fahrer wieder sperren?' if month_released else 'Monat jetzt für Fahrer freigeben?' }}')">{{ 'Monat für Fahrer sperren' if month_released else 'Monat für Fahrer freigeben' }}</button>
+        </form>
+      </div>
     </div>
     <div class="card"><h2>{{ months[month] }} {{ year }}</h2><form method="post" id="all-months-form"><input type="hidden" name="action" value="save_all"></form><div class="table-wrap mobile-cards"><table class="months-table">
       <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V</th><th class="col-adjust">Zuschüsse / Abzüge</th><th class="col-small">Diff</th><th class="col-small">Alt</th><th class="col-small">Neu</th><th class="col-action">Aktion</th></tr></thead><tbody>
@@ -1953,7 +2020,7 @@ def admin_months():
       sync();
     });
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class)
+    """, year=year, month=month, months=MONATE, month_released=month_released, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class)
     return base_page("Plus/Minus Stunden", body, "months")
 
 
@@ -2337,14 +2404,42 @@ def driver_years():
         group = get_group_for_driver(conn, did)
         if group:
             placeholders = ",".join(["?"] * len(group["member_ids"]))
-            years = conn.execute(f"SELECT year, COUNT(DISTINCT month) cnt FROM monthly_data WHERE driver_id IN ({placeholders}) GROUP BY year ORDER BY year DESC", tuple(group["member_ids"])).fetchall()
-            latest_year_month = conn.execute(f"SELECT year, month FROM monthly_data WHERE driver_id IN ({placeholders}) ORDER BY year DESC, month DESC LIMIT 1", tuple(group["member_ids"])).fetchone()
+            years = conn.execute(f"""
+                SELECT m.year, COUNT(DISTINCT m.month) cnt
+                FROM monthly_data m
+                JOIN month_releases mr ON mr.year=m.year AND mr.month=m.month AND mr.is_released=1
+                WHERE m.driver_id IN ({placeholders})
+                GROUP BY m.year
+                ORDER BY m.year DESC
+            """, tuple(group["member_ids"])).fetchall()
+            latest_year_month = conn.execute(f"""
+                SELECT m.year, m.month
+                FROM monthly_data m
+                JOIN month_releases mr ON mr.year=m.year AND mr.month=m.month AND mr.is_released=1
+                WHERE m.driver_id IN ({placeholders})
+                ORDER BY m.year DESC, m.month DESC
+                LIMIT 1
+            """, tuple(group["member_ids"])).fetchone()
             bal = make_group_month_summary(conn, group, int(latest_year_month["year"]), int(latest_year_month["month"]))["new_balance"] if latest_year_month else driver["starting_balance"]
         else:
-            years = conn.execute("SELECT year, COUNT(*) cnt FROM monthly_data WHERE driver_id=? GROUP BY year ORDER BY year DESC", (did,)).fetchall()
-            latest = conn.execute("SELECT new_balance FROM monthly_data WHERE driver_id=? ORDER BY year DESC, month DESC, id DESC LIMIT 1", (did,)).fetchone()
+            years = conn.execute("""
+                SELECT m.year, COUNT(*) cnt
+                FROM monthly_data m
+                JOIN month_releases mr ON mr.year=m.year AND mr.month=m.month AND mr.is_released=1
+                WHERE m.driver_id=?
+                GROUP BY m.year
+                ORDER BY m.year DESC
+            """, (did,)).fetchall()
+            latest = conn.execute("""
+                SELECT m.new_balance
+                FROM monthly_data m
+                JOIN month_releases mr ON mr.year=m.year AND mr.month=m.month AND mr.is_released=1
+                WHERE m.driver_id=?
+                ORDER BY m.year DESC, m.month DESC, m.id DESC
+                LIMIT 1
+            """, (did,)).fetchone()
             bal = latest["new_balance"] if latest else driver["starting_balance"]
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fahrerportal</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">Fahrerportal</div><div class="subtitle">Angemeldet als <span class="badge">{{ session['driver_name'] }}</span></div></div><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div><div class="card"><h2>Aktueller Stand: <span class="{{ signed_class(bal) }}">{{ fmt_signed(bal) }}</span></h2><div class="driver-grid">{% for y in years %}<a class="month-card" href="{{ url_for('driver_months_for_year', year=y['year']) }}"><strong>{{ y['year'] }}</strong>{{ y['cnt'] }} Monat(e)</a>{% endfor %}</div></div></main></body></html>""", css=BASE_CSS, years=years, bal=bal, fmt_signed=fmt_signed, signed_class=signed_class)
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fahrerportal</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">Fahrerportal</div><div class="subtitle">Angemeldet als <span class="badge">{{ session['driver_name'] }}</span></div></div><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div><div class="card"><h2>Aktueller Stand: <span class="{{ signed_class(bal) }}">{{ fmt_signed(bal) }}</span></h2>{% if years %}<div class="driver-grid">{% for y in years %}<a class="month-card" href="{{ url_for('driver_months_for_year', year=y['year']) }}"><strong>{{ y['year'] }}</strong>{{ y['cnt'] }} Monat(e)</a>{% endfor %}</div>{% else %}<p class="muted">Es ist noch kein Monat für dich freigegeben.</p>{% endif %}</div></main></body></html>""", css=BASE_CSS, years=years, bal=bal, fmt_signed=fmt_signed, signed_class=signed_class)
 
 
 @app.get("/jahr/<int:year>")
@@ -2355,11 +2450,24 @@ def driver_months_for_year(year:int):
         group = get_group_for_driver(conn, did)
         if group:
             placeholders = ",".join(["?"] * len(group["member_ids"]))
-            month_nums = [int(r["month"]) for r in conn.execute(f"SELECT DISTINCT month FROM monthly_data WHERE driver_id IN ({placeholders}) AND year=? ORDER BY month", tuple(group["member_ids"])+(year,)).fetchall()]
+            month_nums = [int(r["month"]) for r in conn.execute(f"""
+                SELECT DISTINCT m.month
+                FROM monthly_data m
+                JOIN month_releases mr ON mr.year=m.year AND mr.month=m.month AND mr.is_released=1
+                WHERE m.driver_id IN ({placeholders}) AND m.year=?
+                ORDER BY m.month
+            """, tuple(group["member_ids"])+(year,)).fetchall()]
             rows = [make_group_month_summary(conn, group, year, m) for m in month_nums]
         else:
-            rows = conn.execute("SELECT m.*, doc.id AS doc_id FROM monthly_data m LEFT JOIN documents doc ON doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month WHERE m.driver_id=? AND m.year=? ORDER BY m.month", (did,year)).fetchall()
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ year }}</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_years') }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="driver-grid">{% for r in rows %}<a class="month-card" href="{{ url_for('driver_month_detail', year=year, month=r['month']) }}"><strong>{{ months[r['month']] }}</strong><div>Differenz: <span class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</span></div><div>Neuer Stand: <span class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</span></div></a>{% endfor %}</div></div></main></body></html>""", css=BASE_CSS, rows=rows, year=year, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class)
+            rows = conn.execute("""
+                SELECT m.*, doc.id AS doc_id
+                FROM monthly_data m
+                JOIN month_releases mr ON mr.year=m.year AND mr.month=m.month AND mr.is_released=1
+                LEFT JOIN documents doc ON doc.driver_id=m.driver_id AND doc.year=m.year AND doc.month=m.month
+                WHERE m.driver_id=? AND m.year=?
+                ORDER BY m.month
+            """, (did,year)).fetchall()
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ year }}</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ year }}</div><div class="subtitle">{{ session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_years') }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card">{% if rows %}<div class="driver-grid">{% for r in rows %}<a class="month-card" href="{{ url_for('driver_month_detail', year=year, month=r['month']) }}"><strong>{{ months[r['month']] }}</strong><div>Differenz: <span class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</span></div><div>Neuer Stand: <span class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</span></div></a>{% endfor %}</div>{% else %}<p class="muted">Für dieses Jahr ist noch kein Monat freigegeben.</p>{% endif %}</div></main></body></html>""", css=BASE_CSS, rows=rows, year=year, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class)
 
 
 @app.get("/jahr/<int:year>/<int:month>")
@@ -2367,6 +2475,8 @@ def driver_months_for_year(year:int):
 def driver_month_detail(year:int, month:int):
     did = int(session["driver_db_id"])
     with db_conn() as conn:
+        if not is_month_released(conn, year, month):
+            abort(404)
         group = get_group_for_driver(conn, did)
         if group:
             r = make_group_month_summary(conn, group, year, month)
@@ -2411,6 +2521,8 @@ def driver_month_detail(year:int, month:int):
 def download_group_pdf(year:int, month:int):
     did = int(session["driver_db_id"])
     with db_conn() as conn:
+        if not is_month_released(conn, year, month):
+            abort(404)
         group = get_group_for_driver(conn, did)
         if not group:
             abort(404)
@@ -2432,6 +2544,8 @@ def download_pdf(document_id:int):
     with db_conn() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE id=? AND driver_id=?", (document_id,did)).fetchone()
         if not doc:
+            abort(404)
+        if not is_month_released(conn, int(doc["year"]), int(doc["month"])):
             abort(404)
         create_driver_pdf(conn, did, int(doc["year"]), int(doc["month"]))
         conn.commit()
@@ -2471,6 +2585,7 @@ def download_backup_json():
             "adjustment_items":[dict(r) for r in conn.execute("SELECT * FROM adjustment_items").fetchall()],
             "adjustment_files":[dict(r) for r in conn.execute("SELECT * FROM adjustment_files").fetchall()],
             "documents":[dict(r) for r in conn.execute("SELECT * FROM documents").fetchall()],
+            "month_releases":[dict(r) for r in conn.execute("SELECT * FROM month_releases").fetchall()],
             "created_at":now_iso()
         }
     buf = io.BytesIO(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -2568,6 +2683,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
