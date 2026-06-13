@@ -173,7 +173,7 @@ def load_driver_groups(conn) -> List[Dict[str, Any]]:
             SELECT d.*
             FROM driver_group_members gm
             JOIN drivers d ON d.id=gm.driver_id
-            WHERE gm.group_id=? AND d.is_active=1
+            WHERE gm.group_id=? AND d.is_active=1 AND COALESCE(d.is_disposition,0)=0
             ORDER BY COALESCE(NULLIF(gm.position,0), d.display_order, d.id), d.name COLLATE NOCASE
         """, (g["id"],)).fetchall()
         if members:
@@ -286,7 +286,7 @@ def sync_group_admin_info(conn, group_id: int, year: int, month: int, admin_info
         SELECT d.id
         FROM driver_group_members gm
         JOIN drivers d ON d.id=gm.driver_id
-        WHERE gm.group_id=? AND d.is_active=1
+        WHERE gm.group_id=? AND d.is_active=1 AND COALESCE(d.is_disposition,0)=0
         ORDER BY COALESCE(NULLIF(gm.position,0), d.display_order, d.id), d.name COLLATE NOCASE
         """,
         (group_id,),
@@ -353,6 +353,31 @@ def create_group_pdf(conn, group_info: Dict[str, Any], year: int, month: int) ->
 def signed_class(v: float) -> str:
     v = float(v or 0)
     return "pos" if v > 0 else "neg" if v < 0 else "zero"
+
+
+def normalize_balance_sort(raw: str) -> str:
+    raw = (raw or "").strip().lower()
+    return raw if raw in {"asc", "desc"} else "order"
+
+
+def balance_value(row: Any) -> float:
+    return safe_float(row_get(row, "bal", row_get(row, "starting_balance", 0)) if row_get(row, "bal", None) is not None else row_get(row, "starting_balance", 0))
+
+
+def load_current_balances(conn: sqlite3.Connection, sort_mode: str = "order") -> List[Any]:
+    rows = list(conn.execute("""
+        SELECT d.id,d.name,d.starting_balance,
+               (SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC, month DESC, id DESC LIMIT 1) bal
+        FROM drivers d
+        WHERE d.is_active=1 AND COALESCE(d.is_disposition,0)=0
+        ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
+    """).fetchall())
+    sort_mode = normalize_balance_sort(sort_mode)
+    if sort_mode == "asc":
+        rows.sort(key=lambda r: (balance_value(r), normalize(str(row_get(r, "name", "")))))
+    elif sort_mode == "desc":
+        rows.sort(key=lambda r: (-balance_value(r), normalize(str(row_get(r, "name", "")))))
+    return rows
 
 
 def parse_hours(raw: str) -> float:
@@ -493,6 +518,7 @@ def _init_postgres_schema(conn) -> None:
         starting_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
         display_order INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
+        is_disposition INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
@@ -636,6 +662,7 @@ def _init_postgres_schema(conn) -> None:
     migrations = [
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS starting_balance DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS is_disposition INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS bonus_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS bonus_comment TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS deduction_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
@@ -694,6 +721,7 @@ def db_conn():
         starting_balance REAL NOT NULL DEFAULT 0,
         display_order INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
+        is_disposition INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -824,6 +852,8 @@ def db_conn():
         conn.execute("ALTER TABLE drivers ADD COLUMN starting_balance REAL NOT NULL DEFAULT 0")
     if "display_order" not in cols:
         conn.execute("ALTER TABLE drivers ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0")
+    if "is_disposition" not in cols:
+        conn.execute("ALTER TABLE drivers ADD COLUMN is_disposition INTEGER NOT NULL DEFAULT 0")
     conn.execute("UPDATE drivers SET display_order=id WHERE COALESCE(display_order,0)=0")
 
     try:
@@ -871,7 +901,7 @@ def get_driver_by_db_id(conn: sqlite3.Connection, driver_id: int) -> Optional[sq
 
 
 def next_external_id(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT MAX(external_driver_id) AS m FROM drivers").fetchone()
+    row = conn.execute("SELECT MAX(external_driver_id) AS m FROM drivers WHERE COALESCE(is_disposition,0)=0").fetchone()
     return int(row["m"] or 0) + 1
 
 
@@ -1010,7 +1040,7 @@ def recalc_driver(conn: sqlite3.Connection, driver_id: int) -> None:
 
 
 def recalc_all(conn: sqlite3.Connection) -> None:
-    for d in conn.execute("SELECT id FROM drivers ORDER BY id").fetchall():
+    for d in conn.execute("SELECT id FROM drivers WHERE COALESCE(is_disposition,0)=0 ORDER BY id").fetchall():
         recalc_driver(conn, int(d["id"]))
 
 ALLOWED_ATTACHMENT_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif", "pdf"}
@@ -1230,7 +1260,7 @@ def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month
 def ensure_active_driver_month_rows(conn: sqlite3.Connection, year: int, month: int) -> None:
     """Ensure every active driver has a row for the requested month before exports."""
     active_drivers = conn.execute(
-        "SELECT id FROM drivers WHERE is_active=1 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE"
+        "SELECT id FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE"
     ).fetchall()
     for d in active_drivers:
         get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
@@ -1243,7 +1273,7 @@ def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
         SELECT m.*, d.name, d.id AS d_id
         FROM monthly_data m
         JOIN drivers d ON d.id=m.driver_id
-        WHERE m.year=? AND m.month=?
+        WHERE m.year=? AND m.month=? AND COALESCE(d.is_disposition,0)=0
         ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
     """, (year, month)).fetchall()
 
@@ -1278,7 +1308,7 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
         SELECT m.*, d.name
         FROM monthly_data m
         JOIN drivers d ON d.id=m.driver_id
-        WHERE m.year=? AND m.month=? AND d.is_active=1
+        WHERE m.year=? AND m.month=? AND d.is_active=1 AND COALESCE(d.is_disposition,0)=0
         ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
     """, (year, month)).fetchall()
     pdf_rows = [[
@@ -1331,7 +1361,7 @@ def extract_payroll_entries_from_pdf(pdf_path: Path) -> List[Dict[str, Any]]:
 
 
 def guess_driver_match(conn: sqlite3.Connection, source_name: str) -> Tuple[Optional[int], str]:
-    drivers = conn.execute("SELECT id,name FROM drivers WHERE is_active=1").fetchall()
+    drivers = conn.execute("SELECT id,name FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0").fetchall()
     if not drivers:
         return None, "Kein Fahrer im System"
     source_norm = normalize(source_name)
@@ -1365,6 +1395,15 @@ def driver_login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("driver_db_id"):
+            return redirect(url_for("driver_login"))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def disposition_login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("dispo_db_id"):
             return redirect(url_for("driver_login"))
         return view(*args, **kwargs)
     return wrapped
@@ -1461,20 +1500,37 @@ def admin_logout():
 @app.get("/admin")
 @admin_login_required
 def admin_dashboard():
+    sort_mode = normalize_balance_sort(request.args.get("sort", "order"))
     with db_conn() as conn:
         recalc_all(conn); conn.commit()
-        k = conn.execute("SELECT COUNT(*) drivers, COALESCE(SUM(is_active),0) active FROM drivers").fetchone()
-        m = conn.execute("SELECT COUNT(*) cnt FROM monthly_data").fetchone()["cnt"]
-        docs = conn.execute("SELECT COUNT(*) cnt FROM documents").fetchone()["cnt"]
-        latest = conn.execute("SELECT m.*, d.name FROM monthly_data m JOIN drivers d ON d.id=m.driver_id ORDER BY m.updated_at DESC LIMIT 8").fetchall()
-        balances = conn.execute("SELECT d.id,d.name,d.starting_balance,(SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC, month DESC, id DESC LIMIT 1) bal FROM drivers d WHERE d.is_active=1 ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
+        k = conn.execute("SELECT COUNT(*) drivers, COALESCE(SUM(is_active),0) active FROM drivers WHERE COALESCE(is_disposition,0)=0").fetchone()
+        m = conn.execute("""
+            SELECT COUNT(*) cnt
+            FROM monthly_data m
+            JOIN drivers d ON d.id=m.driver_id
+            WHERE COALESCE(d.is_disposition,0)=0
+        """).fetchone()["cnt"]
+        docs = conn.execute("""
+            SELECT COUNT(*) cnt
+            FROM documents doc
+            JOIN drivers d ON d.id=doc.driver_id
+            WHERE COALESCE(d.is_disposition,0)=0
+        """).fetchone()["cnt"]
+        latest = conn.execute("""
+            SELECT m.*, d.name
+            FROM monthly_data m
+            JOIN drivers d ON d.id=m.driver_id
+            WHERE COALESCE(d.is_disposition,0)=0
+            ORDER BY m.updated_at DESC
+            LIMIT 8
+        """).fetchall()
+        balances = load_current_balances(conn, sort_mode)
     body = render_template_string("""
     <div class="grid grid-4"><div class="kpi">Fahrer<b>{{ k['active'] }}</b><span class="muted">aktiv</span></div><div class="kpi">Monatsdaten<b>{{ m }}</b><span class="muted">gespeichert</span></div><div class="kpi">PDFs<b>{{ docs }}</b><span class="muted">im Portal</span></div><div class="kpi">Sync<b>0</b><span class="muted">manuelle Schritte</span></div></div>
-    <div class="grid grid-2"><div class="card"><h2>Aktuelle Salden</h2><div class="table-wrap"><table style="min-width:420px"><tr><th>Fahrer</th><th class="right">Saldo</th></tr>{% for r in balances %}<tr><td>{{ r['name'] }}</td><td class="right {{ signed_class(r['bal'] if r['bal'] is not none else r['starting_balance']) }}">{{ fmt_signed(r['bal'] if r['bal'] is not none else r['starting_balance']) }}</td></tr>{% endfor %}</table></div></div>
+    <div class="grid grid-2"><div class="card"><div class="actions" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Aktuelle Salden</h2><div class="actions"><span class="muted">Sortieren nach:</span><a class="btn small {{ 'primary' if sort_mode=='asc' else '' }}" href="{{ url_for('admin_dashboard', sort='asc') }}">Aufsteigend</a><a class="btn small {{ 'primary' if sort_mode=='desc' else '' }}" href="{{ url_for('admin_dashboard', sort='desc') }}">Absteigend</a><a class="btn small {{ 'primary' if sort_mode=='order' else '' }}" href="{{ url_for('admin_dashboard') }}">Fahrer-Reihenfolge</a></div></div><div class="table-wrap"><table style="min-width:420px"><tr><th>Fahrer</th><th class="right">Saldo</th></tr>{% for r in balances %}<tr><td>{{ r['name'] }}</td><td class="right {{ signed_class(r['bal'] if r['bal'] is not none else r['starting_balance']) }}">{{ fmt_signed(r['bal'] if r['bal'] is not none else r['starting_balance']) }}</td></tr>{% endfor %}</table></div></div>
     <div class="card"><h2>Letzte Änderungen</h2><div class="table-wrap"><table style="min-width:560px"><tr><th>Fahrer</th><th>Monat</th><th>Differenz</th><th>Neu</th></tr>{% for r in latest %}<tr><td>{{ r['name'] }}</td><td>{{ months[r['month']] }} {{ r['year'] }}</td><td class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</td><td class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</td></tr>{% endfor %}</table></div></div></div>
-    """, k=k, m=m, docs=docs, latest=latest, balances=balances, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class)
+    """, k=k, m=m, docs=docs, latest=latest, balances=balances, months=MONATE, fmt_signed=fmt_signed, signed_class=signed_class, sort_mode=sort_mode)
     return base_page("Dashboard", body, "dashboard")
-
 
 @app.route("/admin/drivers", methods=["GET","POST"])
 @admin_login_required
@@ -1484,12 +1540,14 @@ def admin_drivers():
             action = request.form.get("action")
             ts = now_iso()
             if action == "create":
-                name = request.form.get("name", "").strip(); username = request.form.get("username", "").strip() or slugify(name); password = request.form.get("password", "").strip(); start = parse_hours(request.form.get("starting_balance", "0"))
+                name = request.form.get("name", "").strip(); username = request.form.get("username", "").strip() or slugify(name); password = request.form.get("password", "").strip(); is_disposition = 1 if request.form.get("is_disposition") == "on" else 0
+                start = 0.0 if is_disposition else parse_hours(request.form.get("starting_balance", "0"))
                 if not name or not password:
                     flash("Name und Passwort sind Pflicht.", "err")
                 else:
-                    ext = next_external_id(conn); username = make_unique_username(conn, username)
-                    conn.execute("INSERT INTO drivers(external_driver_id,name,username,password_hash,starting_balance,display_order,is_active,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)", (ext,name,username,generate_password_hash(password),start,ext,ts,ts)); audit(conn,"driver_create",name); conn.commit(); flash("Fahrer angelegt.", "ok")
+                    ext = None if is_disposition else next_external_id(conn); username = make_unique_username(conn, username)
+                    display_order = 0 if is_disposition else int(ext or 0)
+                    conn.execute("INSERT INTO drivers(external_driver_id,name,username,password_hash,starting_balance,display_order,is_active,is_disposition,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?)", (ext,name,username,generate_password_hash(password),start,display_order,is_disposition,ts,ts)); audit(conn,"disposition_create" if is_disposition else "driver_create",name); conn.commit(); flash("Disposition-Account angelegt." if is_disposition else "Fahrer angelegt.", "ok")
             elif action == "update":
                 did = int(request.form["driver_id"]); name = request.form.get("name", "").strip(); username = request.form.get("username", "").strip(); start = parse_hours(request.form.get("starting_balance", "0")); active = 1 if request.form.get("is_active") == "on" else 0
                 username = make_unique_username(conn, username or name, exclude_id=did)
@@ -1525,11 +1583,13 @@ def admin_drivers():
                 conn.execute("DELETE FROM driver_groups WHERE id=?", (gid,))
                 audit(conn, "driver_group_delete", str(gid))
                 conn.commit(); flash("Fahrergruppe gelöscht. Die einzelnen Fahrerdaten bleiben erhalten.", "ok")
-        drivers = conn.execute("SELECT d.*, COALESCE((SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC,month DESC,id DESC LIMIT 1), d.starting_balance) AS balance FROM drivers d ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
+        drivers = conn.execute("SELECT d.*, COALESCE((SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC,month DESC,id DESC LIMIT 1), d.starting_balance) AS balance FROM drivers d WHERE COALESCE(d.is_disposition,0)=0 ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
+        disposition_accounts = conn.execute("SELECT * FROM drivers WHERE COALESCE(is_disposition,0)=1 ORDER BY name COLLATE NOCASE").fetchall()
         groups = load_driver_groups(conn)
     body = render_template_string("""
-    <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"></div><button class="primary">Anlegen</button></form></div>
+    <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"><label style="margin-top:10px;width:auto;font-weight:800"><input style="width:auto" type="checkbox" name="is_disposition"> Disposition</label><div class="download-note">Wenn aktiviert, wird daraus kein Fahrer, sondern ein Dispo-Login nur für das Dashboard mit aktuellen Salden.</div></div><button class="primary">Anlegen</button></form></div>
     <div class="card"><h2>Fahrer nur für Plus/Minus Stunden zusammenführen</h2><p class="muted">Die ausgewählten Fahrer bleiben bei „Stunden für Lohnabrechnung“ einzeln sichtbar. Nur in „Plus/Minus Stunden“ erscheinen sie als gemeinsame Zeile mit zusammengerechneten Werten.</p><form method="post" class="grid grid-3"><input type="hidden" name="action" value="create_group"><div><label>Gruppenname</label><input name="group_name" placeholder="z.B. Alex und Jennifer"></div><div><label>Fahrer auswählen</label><select name="group_driver_ids" multiple size="6">{% for d in drivers %}<option value="{{ d['id'] }}">{{ d['name'] }}</option>{% endfor %}</select><div class="download-note">Mehrere auswählen mit Strg/Cmd oder Shift.</div></div><div style="align-self:end"><button class="primary">Gruppe erstellen</button></div></form>{% if groups %}<div class="adjustment-list"><h3>Aktive Gruppen</h3>{% for g in groups %}<div class="item-row"><b>{{ g.name }}</b><span class="muted">{{ g.members|map(attribute='name')|join(', ') }}</span><form method="post" onsubmit="return confirm('Gruppe wirklich löschen? Die Fahrer und Monatsdaten bleiben erhalten.')"><input type="hidden" name="action" value="delete_group"><input type="hidden" name="group_id" value="{{ g.group['id'] }}"><button class="small danger">Gruppe löschen</button></form></div>{% endfor %}</div>{% endif %}</div>
+    {% if disposition_accounts %}<div class="card"><h2>Disposition-Accounts</h2><p class="muted">Diese Accounts sehen nur das Dashboard mit den aktuellen Salden und keine Fahrerportal- oder Admin-Tabs.</p><div class="table-wrap"><table style="min-width:760px"><thead><tr><th>Name</th><th>Benutzername</th><th>Aktiv</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody>{% for d in disposition_accounts %}<tr><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="starting_balance" value="0"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Disposition-Account wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
     <div class="card"><h2>Fahrer verwalten</h2><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
     <script>
     (function(){
@@ -1577,7 +1637,7 @@ def admin_drivers():
       });
     })();
     </script>
-    """, drivers=drivers, groups=groups, fmt_signed=fmt_signed, signed_class=signed_class)
+    """, drivers=drivers, disposition_accounts=disposition_accounts, groups=groups, fmt_signed=fmt_signed, signed_class=signed_class)
     return base_page("Fahrer", body, "drivers")
 
 
@@ -1595,7 +1655,7 @@ def admin_drivers_reorder():
         return jsonify({"ok": False, "error": "Keine Fahrer übergeben."}), 400
 
     with db_conn() as conn:
-        valid = {int(r["id"]) for r in conn.execute("SELECT id FROM drivers").fetchall()}
+        valid = {int(r["id"]) for r in conn.execute("SELECT id FROM drivers WHERE COALESCE(is_disposition,0)=0").fetchall()}
         for pos, driver_id in enumerate(driver_ids, start=1):
             if driver_id in valid:
                 conn.execute("UPDATE drivers SET display_order=?, updated_at=? WHERE id=?", (pos, now_iso(), driver_id))
@@ -1826,7 +1886,7 @@ def admin_months():
                         flash("Bild/Datei wurde entfernt.", "ok")
 
         recalc_all(conn); conn.commit()
-        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
+        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
         for d in drivers:
             get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
         conn.commit()
@@ -2101,7 +2161,7 @@ def admin_payroll_hours():
                 flash("Stunden für Lohnabrechnung gespeichert und in Plus/Minus Stunden übernommen.", "ok")
 
         recalc_all(conn); conn.commit()
-        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
+        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
         for d in drivers:
             get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
         conn.commit()
@@ -2322,6 +2382,7 @@ def admin_cleanup():
                    COALESCE((SELECT new_balance FROM monthly_data mm WHERE mm.driver_id=d.id ORDER BY year DESC, month DESC, id DESC LIMIT 1), d.starting_balance) AS balance
             FROM drivers d
             LEFT JOIN monthly_data m ON m.driver_id=d.id
+            WHERE COALESCE(d.is_disposition,0)=0
             GROUP BY d.id
             ORDER BY d.name COLLATE NOCASE
         """).fetchall()
@@ -2333,6 +2394,7 @@ def admin_cleanup():
                    (SELECT COUNT(*) FROM adjustment_files af JOIN adjustment_items ai ON ai.id=af.adjustment_item_id WHERE ai.monthly_data_id=m.id) AS file_count
             FROM monthly_data m
             JOIN drivers d ON d.id=m.driver_id
+            WHERE COALESCE(d.is_disposition,0)=0
             ORDER BY m.year DESC, m.month DESC, d.name COLLATE NOCASE
         """).fetchall()
         month_view = []
@@ -2384,15 +2446,29 @@ def driver_login():
             if not row or not check_password_hash(row["password_hash"], password):
                 error = "Login fehlgeschlagen."
             else:
-                session.clear(); session["driver_db_id"] = int(row["id"]); session["driver_name"] = row["name"]
+                session.clear()
+                if int(row_get(row, "is_disposition", 0) or 0) == 1:
+                    session["dispo_db_id"] = int(row["id"]); session["dispo_name"] = row["name"]
+                    return redirect(url_for("disposition_dashboard"))
+                session["driver_db_id"] = int(row["id"]); session["driver_name"] = row["name"]
                 return redirect(url_for("driver_years"))
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fahrer Login</title><style>{{ css }}</style></head><body><div class="login-wrap"><div class="card"><div class="title">Fahrer-Login</div><p class="muted">Hier siehst du nur deine eigenen Monatsdaten und PDFs.</p>{% if error %}<div class="flash err">{{ error }}</div>{% endif %}<form method="post"><label>Benutzername</label><input name="username" required><label style="margin-top:12px">Passwort</label><input name="password" type="password" required><button class="primary" style="margin-top:14px">Einloggen</button></form><p><a href="{{ url_for('admin_login') }}">Admin Login</a></p></div></div></body></html>""", css=BASE_CSS, error=error)
-
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login</title><style>{{ css }}</style></head><body><div class="login-wrap"><div class="card"><div class="title">Fahrer-/Disposition-Login</div><p class="muted">Fahrer sehen ihre eigenen freigegebenen Monatsdaten. Disposition sieht nur das Dashboard mit aktuellen Salden.</p>{% if error %}<div class="flash err">{{ error }}</div>{% endif %}<form method="post"><label>Benutzername</label><input name="username" required><label style="margin-top:12px">Passwort</label><input name="password" type="password" required><button class="primary" style="margin-top:14px">Einloggen</button></form><p><a href="{{ url_for('admin_login') }}">Admin Login</a></p></div></div></body></html>""", css=BASE_CSS, error=error)
 
 @app.get("/logout")
 def driver_logout():
     session.clear()
     return redirect(url_for("driver_login"))
+
+
+
+@app.get("/disposition")
+@disposition_login_required
+def disposition_dashboard():
+    sort_mode = normalize_balance_sort(request.args.get("sort", "order"))
+    with db_conn() as conn:
+        recalc_all(conn); conn.commit()
+        balances = load_current_balances(conn, sort_mode)
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Disposition Dashboard</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">Dashboard</div><div class="subtitle">Angemeldet als <span class="badge">{{ session['dispo_name'] }}</span></div></div><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div><div class="card"><div class="actions" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Aktuelle Salden</h2><div class="actions"><span class="muted">Sortieren nach:</span><a class="btn small {{ 'primary' if sort_mode=='asc' else '' }}" href="{{ url_for('disposition_dashboard', sort='asc') }}">Aufsteigend</a><a class="btn small {{ 'primary' if sort_mode=='desc' else '' }}" href="{{ url_for('disposition_dashboard', sort='desc') }}">Absteigend</a><a class="btn small {{ 'primary' if sort_mode=='order' else '' }}" href="{{ url_for('disposition_dashboard') }}">Fahrer-Reihenfolge</a></div></div><div class="table-wrap"><table style="min-width:420px"><tr><th>Fahrer</th><th class="right">Saldo</th></tr>{% for r in balances %}<tr><td>{{ r['name'] }}</td><td class="right {{ signed_class(r['bal'] if r['bal'] is not none else r['starting_balance']) }}">{{ fmt_signed(r['bal'] if r['bal'] is not none else r['starting_balance']) }}</td></tr>{% endfor %}</table></div></div></main></body></html>""", css=BASE_CSS, balances=balances, fmt_signed=fmt_signed, signed_class=signed_class, sort_mode=sort_mode)
 
 
 @app.get("/jahre")
@@ -2401,6 +2477,8 @@ def driver_years():
     did = int(session["driver_db_id"])
     with db_conn() as conn:
         driver = get_driver_by_db_id(conn,did)
+        if not driver or int(row_get(driver, "is_disposition", 0) or 0) == 1:
+            session.clear(); return redirect(url_for("driver_login"))
         group = get_group_for_driver(conn, did)
         if group:
             placeholders = ",".join(["?"] * len(group["member_ids"]))
@@ -2580,7 +2658,7 @@ def download_month_export(year:int, month:int):
 def download_backup_json():
     with db_conn() as conn:
         data = {
-            "drivers":[dict(r) for r in conn.execute("SELECT id,external_driver_id,name,username,starting_balance,is_active,created_at,updated_at FROM drivers").fetchall()],
+            "drivers":[dict(r) for r in conn.execute("SELECT id,external_driver_id,name,username,starting_balance,is_active,is_disposition,created_at,updated_at FROM drivers").fetchall()],
             "monthly_data":[dict(r) for r in conn.execute("SELECT * FROM monthly_data").fetchall()],
             "adjustment_items":[dict(r) for r in conn.execute("SELECT * FROM adjustment_items").fetchall()],
             "adjustment_files":[dict(r) for r in conn.execute("SELECT * FROM adjustment_files").fetchall()],
@@ -2596,7 +2674,7 @@ def download_backup_json():
 @admin_login_required
 def download_backup_csv():
     with db_conn() as conn:
-        rows = conn.execute("SELECT d.name,m.* FROM monthly_data m JOIN drivers d ON d.id=m.driver_id ORDER BY m.year,m.month,d.name COLLATE NOCASE").fetchall()
+        rows = conn.execute("SELECT d.name,m.* FROM monthly_data m JOIN drivers d ON d.id=m.driver_id WHERE COALESCE(d.is_disposition,0)=0 ORDER BY m.year,m.month,d.name COLLATE NOCASE").fetchall()
     out = io.StringIO(); w = csv.writer(out, delimiter=";")
     w.writerow(["Fahrer","Jahr","Monat","Allgemeine Infos nur Admin","Stunden","Abrechnung","V","Zuschuss Summe","Zuschuss Details","Abzug Summe","Abzug Details","Differenz","Alter Stand","Neuer Stand"])
     for r in rows:
@@ -2615,7 +2693,7 @@ def api_upsert_driver():
     with db_conn() as conn:
         existing = conn.execute("SELECT * FROM drivers WHERE external_driver_id=?", (ext_id,)).fetchone()
         if existing:
-            final = make_unique_username(conn, username, int(existing["id"])); conn.execute("UPDATE drivers SET name=?, username=?, password_hash=?, starting_balance=?, is_active=1, updated_at=? WHERE id=?", (name,final,generate_password_hash(password),start,ts,existing["id"])); did=int(existing["id"])
+            final = make_unique_username(conn, username, int(existing["id"])); conn.execute("UPDATE drivers SET name=?, username=?, password_hash=?, starting_balance=?, is_active=1, is_disposition=0, updated_at=? WHERE id=?", (name,final,generate_password_hash(password),start,ts,existing["id"])); did=int(existing["id"])
         else:
             final = make_unique_username(conn, username); cur=conn.execute("INSERT INTO drivers(external_driver_id,name,username,password_hash,starting_balance,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)", (ext_id,name,final,generate_password_hash(password),start,ts,ts)); did=int(cur.lastrowid)
         recalc_driver(conn,did); conn.commit()
@@ -2626,7 +2704,7 @@ def api_upsert_driver():
 def api_drivers():
     admin_api_required()
     with db_conn() as conn:
-        rows = conn.execute("SELECT id, external_driver_id, name, username, starting_balance, is_active FROM drivers ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
+        rows = conn.execute("SELECT id, external_driver_id, name, username, starting_balance, is_active, is_disposition FROM drivers WHERE COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
         return jsonify({"drivers":[dict(r) for r in rows]})
 
 
@@ -2634,7 +2712,7 @@ def api_drivers():
 def api_month_data():
     admin_api_required()
     with db_conn() as conn:
-        rows = conn.execute("SELECT d.external_driver_id,d.name,m.year,m.month,m.worked_hours AS stunden,m.payroll_hours AS abrechnung,m.v_hours AS v,m.bonus_hours AS zuschuesse,m.bonus_comment AS zuschuss_kommentar,m.deduction_hours AS abzuege,m.deduction_comment AS abzug_kommentar,m.difference_hours AS differenz,m.previous_balance AS aktueller_stand,m.new_balance AS neuer_stand FROM monthly_data m JOIN drivers d ON d.id=m.driver_id ORDER BY d.external_driver_id,m.year,m.month").fetchall()
+        rows = conn.execute("SELECT d.external_driver_id,d.name,m.year,m.month,m.worked_hours AS stunden,m.payroll_hours AS abrechnung,m.v_hours AS v,m.bonus_hours AS zuschuesse,m.bonus_comment AS zuschuss_kommentar,m.deduction_hours AS abzuege,m.deduction_comment AS abzug_kommentar,m.difference_hours AS differenz,m.previous_balance AS aktueller_stand,m.new_balance AS neuer_stand FROM monthly_data m JOIN drivers d ON d.id=m.driver_id WHERE COALESCE(d.is_disposition,0)=0 ORDER BY d.external_driver_id,m.year,m.month").fetchall()
         return jsonify({"rows":[dict(r) for r in rows]})
 
 
@@ -2643,7 +2721,7 @@ def api_upsert_month_data():
     admin_api_required(); p = request.get_json(force=True)
     ext = int(p["external_driver_id"]); year=int(p["year"]); month=int(p["month"])
     with db_conn() as conn:
-        d = conn.execute("SELECT * FROM drivers WHERE external_driver_id=? AND is_active=1", (ext,)).fetchone()
+        d = conn.execute("SELECT * FROM drivers WHERE external_driver_id=? AND is_active=1 AND COALESCE(is_disposition,0)=0", (ext,)).fetchone()
         if not d:
             abort(400, "Fahrer nicht vorhanden")
         worked=float(p.get("worked_hours",p.get("stunden",0)) or 0); payroll=float(p.get("payroll_hours",p.get("abrechnung",0)) or 0); v=abs(float(p.get("v_hours",p.get("v",0)) or 0)); bonus=float(p.get("bonus_hours",p.get("zuschuesse",0)) or 0); deduction=float(p.get("deduction_hours",p.get("abzuege",0)) or 0)
@@ -2664,7 +2742,7 @@ def api_upload_pdf():
     if not upload or not upload.filename.lower().endswith(".pdf"):
         abort(400,"PDF-Datei fehlt")
     with db_conn() as conn:
-        d=conn.execute("SELECT * FROM drivers WHERE external_driver_id=? AND is_active=1", (ext,)).fetchone()
+        d=conn.execute("SELECT * FROM drivers WHERE external_driver_id=? AND is_active=1 AND COALESCE(is_disposition,0)=0", (ext,)).fetchone()
         if not d:
             abort(400,"Fahrer nicht vorhanden")
         driver_slug=slugify(d["name"])+f"-{d['id']}"; target_dir=FILES_DIR/driver_slug/str(year); target_dir.mkdir(parents=True,exist_ok=True)
