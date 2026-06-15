@@ -422,6 +422,66 @@ def make_unique_username(conn: sqlite3.Connection, username: str, exclude_id: Op
         candidate = f"{base}.{n}"
         n += 1
 
+
+def password_candidates_for_driver(row: Any) -> List[str]:
+    """Known/likely legacy password candidates used only to recover display text from existing hashes.
+
+    Existing hashes cannot be decoded. This safely tests likely old default values
+    against the hash and stores the plain text only when it is an exact match.
+    """
+    name = str(row_get(row, "name", "") or "").strip()
+    username = str(row_get(row, "username", "") or "").strip()
+    ext = row_get(row, "external_driver_id", "")
+    name_slug = slugify(name)
+    compact_name = re.sub(r"\s+", "", name.lower())
+    first_name = name.split()[0].lower() if name.split() else ""
+    raw_candidates = [
+        ADMIN_PASSWORD, ADMIN_API_TOKEN, "0341", "1234",
+        username, username.lower(), username.replace(".", ""),
+        name_slug, name_slug.replace(".", ""), compact_name, first_name,
+        str(ext or ""),
+    ]
+    extra = os.environ.get("PASSWORD_BACKFILL_CANDIDATES", "")
+    if extra:
+        raw_candidates.extend([x.strip() for x in re.split(r"[,;\n]+", extra) if x.strip()])
+    seen = set()
+    candidates: List[str] = []
+    for c in raw_candidates:
+        c = str(c or "").strip()
+        if c and c not in seen:
+            seen.add(c)
+            candidates.append(c)
+    return candidates
+
+
+def backfill_visible_passwords(conn: sqlite3.Connection) -> int:
+    """Fill password_plain for old accounts when the old password can be verified.
+
+    Important: Password hashes are one-way. This does not crack or change unknown
+    passwords. It only records the plain text when a likely known password exactly
+    matches the stored hash.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, name, username, external_driver_id, password_hash FROM drivers WHERE COALESCE(password_plain,'')=''"
+        ).fetchall()
+    except Exception:
+        return 0
+    updated = 0
+    for row in rows:
+        stored_hash = str(row_get(row, "password_hash", "") or "")
+        if not stored_hash:
+            continue
+        for candidate in password_candidates_for_driver(row):
+            try:
+                if check_password_hash(stored_hash, candidate):
+                    conn.execute("UPDATE drivers SET password_plain=?, updated_at=? WHERE id=?", (candidate, now_iso(), int(row_get(row, "id", 0))))
+                    updated += 1
+                    break
+            except Exception:
+                continue
+    return updated
+
 # ---------------- database ----------------
 class _PgResult:
     def __init__(self, cursor, lastrowid: Optional[int] = None):
@@ -685,6 +745,7 @@ def _init_postgres_schema(conn) -> None:
     for sql in migrations:
         conn.execute(sql)
     conn.execute("UPDATE drivers SET display_order=id WHERE COALESCE(display_order,0)=0")
+    backfill_visible_passwords(conn)
 
     migrated = conn.execute("SELECT COUNT(*) AS c FROM audit_log WHERE action=?", ("v_storage_direct_migration_2026_05_01",)).fetchone()
     if not migrated or int(migrated["c"] or 0) == 0:
@@ -1310,10 +1371,19 @@ def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
 
 def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
     rows = conn.execute("""
-        SELECT m.*, d.name
-        FROM monthly_data m
-        JOIN drivers d ON d.id=m.driver_id
-        WHERE m.year=? AND m.month=? AND d.is_active=1 AND COALESCE(d.is_disposition,0)=0
+        SELECT
+            d.name,
+            COALESCE(m.payroll_office_info, '') AS payroll_office_info,
+            COALESCE(m.payroll_hours, 0) AS payroll_hours,
+            COALESCE(m.v_hours, 0) AS v_hours,
+            COALESCE(m.payroll_surcharge, 0) AS payroll_surcharge,
+            COALESCE(m.fuel_voucher, 0) AS fuel_voucher,
+            COALESCE(m.vacation_days, '') AS vacation_days,
+            COALESCE(m.sick_days, '') AS sick_days
+        FROM drivers d
+        LEFT JOIN monthly_data m
+            ON m.driver_id=d.id AND m.year=? AND m.month=?
+        WHERE d.is_active=1 AND COALESCE(d.is_disposition,0)=0
         ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
     """, (year, month)).fetchall()
     pdf_rows = [[
@@ -1594,8 +1664,8 @@ def admin_drivers():
     body = render_template_string("""
     <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"><label style="margin-top:10px;width:auto;font-weight:800"><input style="width:auto" type="checkbox" name="is_disposition"> Disposition</label><div class="download-note">Wenn aktiviert, wird daraus kein Fahrer, sondern ein Dispo-Login nur für das Dashboard mit aktuellen Salden.</div></div><button class="primary">Anlegen</button></form></div>
     <div class="card"><h2>Fahrer nur für Plus/Minus Stunden zusammenführen</h2><p class="muted">Die ausgewählten Fahrer bleiben bei „Stunden für Lohnabrechnung“ einzeln sichtbar. Nur in „Plus/Minus Stunden“ erscheinen sie als gemeinsame Zeile mit zusammengerechneten Werten.</p><form method="post" class="grid grid-3"><input type="hidden" name="action" value="create_group"><div><label>Gruppenname</label><input name="group_name" placeholder="z.B. Alex und Jennifer"></div><div><label>Fahrer auswählen</label><select name="group_driver_ids" multiple size="6">{% for d in drivers %}<option value="{{ d['id'] }}">{{ d['name'] }}</option>{% endfor %}</select><div class="download-note">Mehrere auswählen mit Strg/Cmd oder Shift.</div></div><div style="align-self:end"><button class="primary">Gruppe erstellen</button></div></form>{% if groups %}<div class="adjustment-list"><h3>Aktive Gruppen</h3>{% for g in groups %}<div class="item-row"><b>{{ g.name }}</b><span class="muted">{{ g.members|map(attribute='name')|join(', ') }}</span><form method="post" onsubmit="return confirm('Gruppe wirklich löschen? Die Fahrer und Monatsdaten bleiben erhalten.')"><input type="hidden" name="action" value="delete_group"><input type="hidden" name="group_id" value="{{ g.group['id'] }}"><button class="small danger">Gruppe löschen</button></form></div>{% endfor %}</div>{% endif %}</div>
-    {% if disposition_accounts %}<div class="card"><h2>Disposition-Accounts</h2><p class="muted">Diese Accounts sehen nur das Dashboard mit den aktuellen Salden und keine Fahrerportal- oder Admin-Tabs.</p><div class="table-wrap"><table style="min-width:900px"><thead><tr><th>Name</th><th>Benutzername</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody>{% for d in disposition_accounts %}<tr><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="starting_balance" value="0"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht gespeichert' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Disposition-Account wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
-    <div class="card"><h2>Fahrer verwalten</h2><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht gespeichert' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
+    {% if disposition_accounts %}<div class="card"><h2>Disposition-Accounts</h2><p class="muted">Diese Accounts sehen nur das Dashboard mit den aktuellen Salden und keine Fahrerportal- oder Admin-Tabs.</p><div class="table-wrap"><table style="min-width:900px"><thead><tr><th>Name</th><th>Benutzername</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody>{% for d in disposition_accounts %}<tr><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="starting_balance" value="0"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Disposition-Account wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
+    <div class="card"><h2>Fahrer verwalten</h2><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert. Alte Passwörter werden automatisch angezeigt, wenn sie aus bekannten Standardwerten sicher erkannt werden konnten.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
     <script>
     (function(){
       const tbody = document.getElementById('drivers-sortable');
@@ -2766,7 +2836,6 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
-
 
 
 
