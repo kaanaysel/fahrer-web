@@ -54,7 +54,7 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1600px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:70px}.col-adjust{width:350px}.col-small{width:62px}.col-action{width:100px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_hours]{max-width:62px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick input{border-color:#fda29b;background:#fff1f0;color:#b42318}.payroll-table textarea{min-height:74px;font-size:14px}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:70px}.col-adjust{width:350px}.col-small{width:62px}.col-action{width:100px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_hours]{max-width:62px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:flex!important;align-items:center;gap:6px;margin-top:5px;color:#667085;font-size:12px;font-weight:800}.v-toggle input{width:auto!important;padding:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#98a2b3!important;opacity:.72;text-decoration:line-through}.v-disabled-note{font-size:11px;color:#98a2b3;margin-top:3px;font-weight:800}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick input{border-color:#fda29b;background:#fff1f0;color:#b42318}.payroll-table textarea{min-height:74px;font-size:14px}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}
 
 @media(min-width:901px){.table-wrap.mobile-cards{max-height:calc(100vh - 230px);overflow:auto;position:relative}.months-table th,.payroll-table th{position:sticky;top:0;z-index:20;background:#f3f6fb}}
 @media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}.table-wrap.mobile-cards{overflow:visible;border:0;background:transparent}.months-table{min-width:0;display:block}.months-table thead{display:none}.months-table tbody,.months-table tr,.months-table td{display:block;width:100%}.months-table tr{margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}.months-table td{border-bottom:1px solid #edf0f5;padding:10px 12px}.months-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:900;color:#667085;margin-bottom:5px}.months-table .mobile-row-title{display:block}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{max-width:100%;width:100%}.admin-info{min-width:0}.col-adjust{width:auto}.compact-save{flex-direction:row;flex-wrap:wrap}.item-row{align-items:flex-start}.side .muted{display:none}}
@@ -211,7 +211,7 @@ def make_group_month_summary(conn, group_info: Dict[str, Any], year: int, month:
         if r:
             rows.append(r)
     numeric = ["worked_hours", "payroll_hours", "v_hours", "bonus_hours", "deduction_hours", "adjustment_hours", "difference_hours", "previous_balance", "new_balance", "payroll_surcharge", "fuel_voucher"]
-    summary: Dict[str, Any] = {"driver_id": f"group_{group_info['group']['id']}", "year": year, "month": month, "admin_info_carried": 0}
+    summary: Dict[str, Any] = {"driver_id": f"group_{group_info['group']['id']}", "year": year, "month": month, "admin_info_carried": 0, "v_enabled": 1}
     for key in numeric:
         summary[key] = round(sum(safe_float(row_get(r, key, 0)) for r in rows), 2)
     override = get_group_month_override(conn, int(group_info["group"]["id"]), year, month)
@@ -225,6 +225,7 @@ def make_group_month_summary(conn, group_info: Dict[str, Any], year: int, month:
                 vals.append(val)
         summary[key] = "\n".join(vals)
     if override:
+        summary["v_enabled"] = 1 if row_v_enabled(override) else 0
         group_admin = str(row_get(override, "admin_info", "") or "").strip()
         if group_admin:
             summary["admin_info"] = group_admin
@@ -241,7 +242,7 @@ def make_group_month_summary(conn, group_info: Dict[str, Any], year: int, month:
             if group_deduction_comment:
                 summary["deduction_comment"] = (summary.get("deduction_comment", "") + "\n" + group_deduction_comment).strip()
             summary["adjustment_hours"] = round(safe_float(summary.get("bonus_hours")) + safe_float(summary.get("deduction_hours")), 2)
-    summary["difference_hours"] = compute_difference(summary["worked_hours"], summary["payroll_hours"], summary["v_hours"], summary["bonus_hours"], summary["deduction_hours"])
+    summary["difference_hours"] = compute_difference(summary["worked_hours"], summary["payroll_hours"], summary["v_hours"], summary["bonus_hours"], summary["deduction_hours"], summary.get("v_enabled", 1))
     return summary
 
 
@@ -344,7 +345,7 @@ def create_group_pdf(conn, group_info: Dict[str, Any], year: int, month: int) ->
                 extra_story.append(Paragraph(f"Datei: {att['original_filename'] or att['filename']}", attachment_text))
                 extra_story.append(Spacer(1, 3*mm))
     create_pdf_report(pdf_path, f"Monatsübersicht {group_name} – {MONATE[month]} {year}", "+ - Stunden", ["Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller\nStand","Neuer\nStand"], [[
-        group_name, fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_hours(abs(r["v_hours"])),
+        group_name, fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_v_display(r["v_hours"], r.get("v_enabled", 1), True),
         (r.get("bonus_comment") or "-").strip() or "-", (r.get("deduction_comment") or "-").strip() or "-",
         fmt_signed(r["difference_hours"]), fmt_signed(r["previous_balance"]), fmt_signed(r["new_balance"])
     ]], extra_story=extra_story)
@@ -404,8 +405,33 @@ def parse_german_money(raw: str) -> float:
     return float(str(raw).replace(".", "").replace(",", ".").strip())
 
 
-def compute_difference(worked: float, payroll: float, v: float, bonus: float, deduction: float) -> float:
-    return round(float(worked) - (float(payroll) + abs(float(v))) + float(bonus) + float(deduction), 2)
+def v_is_enabled(value: Any = 1) -> bool:
+    try:
+        return int(value if value is not None else 1) != 0
+    except Exception:
+        return True
+
+
+def row_v_enabled(row: Any) -> bool:
+    return v_is_enabled(row_get(row, "v_enabled", 1))
+
+
+def form_v_enabled(name: str = "v_enabled", default: int = 1) -> int:
+    values = request.form.getlist(name)
+    if not values:
+        return 1 if default else 0
+    return 1 if "1" in values else 0
+
+
+def fmt_v_display(v_hours: float, v_enabled: Any = 1, hours: bool = True) -> str:
+    amount = abs(safe_float(v_hours))
+    base = fmt_hours(amount) if hours else (fmt_decimal_input(amount) or "-")
+    return base if v_is_enabled(v_enabled) else f"{base} (ignoriert)"
+
+
+def compute_difference(worked: float, payroll: float, v: float, bonus: float, deduction: float, v_enabled: Any = 1) -> float:
+    effective_v = abs(float(v)) if v_is_enabled(v_enabled) else 0.0
+    return round(float(worked) - (float(payroll) + effective_v) + float(bonus) + float(deduction), 2)
 
 
 def make_unique_username(conn: sqlite3.Connection, username: str, exclude_id: Optional[int] = None) -> str:
@@ -593,6 +619,7 @@ def _init_postgres_schema(conn) -> None:
         worked_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
         payroll_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
         v_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+        v_enabled INTEGER NOT NULL DEFAULT 1,
         bonus_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
         bonus_comment TEXT NOT NULL DEFAULT '',
         deduction_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -683,6 +710,7 @@ def _init_postgres_schema(conn) -> None:
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         worked_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+        v_enabled INTEGER NOT NULL DEFAULT 1,
         admin_info TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL,
         UNIQUE(group_id, year, month)
@@ -725,6 +753,7 @@ def _init_postgres_schema(conn) -> None:
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS is_disposition INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS password_plain TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS v_enabled INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS bonus_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS bonus_comment TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS deduction_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
@@ -741,6 +770,7 @@ def _init_postgres_schema(conn) -> None:
         "ALTER TABLE adjustment_files ADD COLUMN IF NOT EXISTS original_filename TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE adjustment_files ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE driver_group_month_data ADD COLUMN IF NOT EXISTS admin_info TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE driver_group_month_data ADD COLUMN IF NOT EXISTS v_enabled INTEGER NOT NULL DEFAULT 1",
     ]
     for sql in migrations:
         conn.execute(sql)
@@ -800,6 +830,7 @@ def db_conn():
         worked_hours REAL NOT NULL DEFAULT 0,
         payroll_hours REAL NOT NULL DEFAULT 0,
         v_hours REAL NOT NULL DEFAULT 0,
+        v_enabled INTEGER NOT NULL DEFAULT 1,
         bonus_hours REAL NOT NULL DEFAULT 0,
         bonus_comment TEXT NOT NULL DEFAULT '',
         deduction_hours REAL NOT NULL DEFAULT 0,
@@ -880,6 +911,7 @@ def db_conn():
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         worked_hours REAL NOT NULL DEFAULT 0,
+        v_enabled INTEGER NOT NULL DEFAULT 1,
         admin_info TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL,
         FOREIGN KEY(group_id) REFERENCES driver_groups(id) ON DELETE CASCADE,
@@ -929,11 +961,14 @@ def db_conn():
         gcols = {r[1] for r in conn.execute("PRAGMA table_info(driver_group_month_data)").fetchall()}
         if "admin_info" not in gcols:
             conn.execute("ALTER TABLE driver_group_month_data ADD COLUMN admin_info TEXT NOT NULL DEFAULT ''")
+        if "v_enabled" not in gcols:
+            conn.execute("ALTER TABLE driver_group_month_data ADD COLUMN v_enabled INTEGER NOT NULL DEFAULT 1")
     except Exception:
         pass
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(monthly_data)").fetchall()}
     for name, ddl in {
+        "v_enabled":"ALTER TABLE monthly_data ADD COLUMN v_enabled INTEGER NOT NULL DEFAULT 1",
         "bonus_hours":"ALTER TABLE monthly_data ADD COLUMN bonus_hours REAL NOT NULL DEFAULT 0",
         "bonus_comment":"ALTER TABLE monthly_data ADD COLUMN bonus_comment TEXT NOT NULL DEFAULT ''",
         "deduction_hours":"ALTER TABLE monthly_data ADD COLUMN deduction_hours REAL NOT NULL DEFAULT 0",
@@ -1102,7 +1137,7 @@ def recalc_driver(conn: sqlite3.Connection, driver_id: int) -> None:
     balance = float(driver["starting_balance"] or 0)
     rows = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? ORDER BY year, month, id", (driver_id,)).fetchall()
     for r in rows:
-        diff = compute_difference(r["worked_hours"], r["payroll_hours"], r["v_hours"], r["bonus_hours"], r["deduction_hours"])
+        diff = compute_difference(r["worked_hours"], r["payroll_hours"], r["v_hours"], r["bonus_hours"], r["deduction_hours"], row_get(r, "v_enabled", 1))
         new_balance = round(balance + diff, 2)
         conn.execute("UPDATE monthly_data SET difference_hours=?, previous_balance=?, new_balance=? WHERE id=?", (diff, round(balance,2), new_balance, r["id"]))
         balance = new_balance
@@ -1313,7 +1348,7 @@ def create_driver_pdf(conn: sqlite3.Connection, driver_id: int, year: int, month
                 extra_story.append(Spacer(1, 3*mm))
 
     create_pdf_report(pdf_path, f"Monatsübersicht {driver['name']} – {MONATE[month]} {year}", "+ - Stunden", ["Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller\nStand","Neuer\nStand"], [[
-        driver["name"], fmt_hours(row["worked_hours"]), fmt_hours(row["payroll_hours"]), fmt_hours(abs(row["v_hours"])),
+        driver["name"], fmt_hours(row["worked_hours"]), fmt_hours(row["payroll_hours"]), fmt_v_display(row["v_hours"], row_get(row, "v_enabled", 1), True),
         (row["bonus_comment"] or "-").strip() or "-", (row["deduction_comment"] or "-").strip() or "-",
         fmt_signed(row["difference_hours"]), fmt_signed(row["previous_balance"]), fmt_signed(row["new_balance"])
     ]], extra_story=extra_story)
@@ -1352,7 +1387,7 @@ def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
             continue
         pdf_rows.append([
             f"{MONATE[month]} {year}", r["admin_info"] or "-", r["name"],
-            fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_hours(abs(r["v_hours"])),
+            fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_v_display(r["v_hours"], row_get(r, "v_enabled", 1), True),
             format_value_comment(r["bonus_hours"], r["bonus_comment"], True),
             format_value_comment(r["deduction_hours"], r["deduction_comment"], True),
             fmt_signed(r["difference_hours"]), fmt_signed(r["previous_balance"]), fmt_signed(r["new_balance"]),
@@ -1361,7 +1396,7 @@ def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
         r = make_group_month_summary(conn, g, year, month)
         pdf_rows.append([
             f"{MONATE[month]} {year}", r.get("admin_info") or "-", g["name"],
-            fmt_hours(r.get("worked_hours", 0)), fmt_hours(r.get("payroll_hours", 0)), fmt_hours(abs(r.get("v_hours", 0))),
+            fmt_hours(r.get("worked_hours", 0)), fmt_hours(r.get("payroll_hours", 0)), fmt_v_display(r.get("v_hours", 0), r.get("v_enabled", 1), True),
             format_value_comment(r.get("bonus_hours", 0), r.get("bonus_comment", ""), True),
             format_value_comment(r.get("deduction_hours", 0), r.get("deduction_comment", ""), True),
             fmt_signed(r.get("difference_hours", 0)), fmt_signed(r.get("previous_balance", 0)), fmt_signed(r.get("new_balance", 0)),
@@ -1379,6 +1414,7 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
             COALESCE(m.payroll_office_info, '') AS payroll_office_info,
             COALESCE(m.payroll_hours, 0) AS payroll_hours,
             COALESCE(m.v_hours, 0) AS v_hours,
+            COALESCE(m.v_enabled, 1) AS v_enabled,
             COALESCE(m.payroll_surcharge, 0) AS payroll_surcharge,
             COALESCE(m.fuel_voucher, 0) AS fuel_voucher,
             COALESCE(m.vacation_days, '') AS vacation_days,
@@ -1393,7 +1429,7 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
         row_get(r, "payroll_office_info", "") or "-",
         r["name"],
         fmt_hours(r["payroll_hours"]),
-        fmt_decimal_input(float(r["v_hours"] or 0)) or "-",
+        fmt_v_display(r["v_hours"], row_get(r, "v_enabled", 1), False),
         fmt_decimal_input(row_get(r, "payroll_surcharge", 0)) or "-",
         fmt_decimal_input(row_get(r, "fuel_voucher", 0)) or "-",
         color_text(row_get(r, "vacation_days", "") or "-", "#067647"),
@@ -1776,7 +1812,8 @@ def admin_months():
                             gm_id = ensure_group_month_row(conn, gid, year, month)
                             worked = parse_hours(request.form.get(f"worked_hours_{suffix}", "0"))
                             admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
-                            conn.execute("UPDATE driver_group_month_data SET worked_hours=?, admin_info=?, updated_at=? WHERE id=?", (worked, admin_info, now_iso(), gm_id))
+                            v_enabled = form_v_enabled(f"v_enabled_{suffix}")
+                            conn.execute("UPDATE driver_group_month_data SET worked_hours=?, v_enabled=?, admin_info=?, updated_at=? WHERE id=?", (worked, v_enabled, admin_info, now_iso(), gm_id))
                             sync_group_admin_info(conn, gid, year, month, admin_info)
                             saved_count += 1
                         else:
@@ -1785,8 +1822,9 @@ def admin_months():
                             worked = parse_hours(request.form.get(f"worked_hours_{suffix}", "0"))
                             payroll = parse_hours(request.form.get(f"payroll_hours_{suffix}", "0"))
                             v = round(abs(parse_hours(request.form.get(f"v_hours_{suffix}", "0"))), 2)
+                            v_enabled = form_v_enabled(f"v_enabled_{suffix}")
                             admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
-                            conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v, admin_info, now_iso(), mid))
+                            conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, v_enabled=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v, v_enabled, admin_info, now_iso(), mid))
                             recalc_month_adjustments(conn, mid)
                             recalc_driver(conn, did2)
                             create_driver_pdf(conn, did2, year, month)
@@ -1801,8 +1839,9 @@ def admin_months():
                     if action in {"save", "add_adjustment"}:
                         worked = parse_hours(request.form.get("worked_hours", "0"))
                         admin_info = request.form.get("admin_info", "").strip()
+                        v_enabled = form_v_enabled("v_enabled")
                         group_month_id = ensure_group_month_row(conn, group_id, year, month)
-                        conn.execute("UPDATE driver_group_month_data SET worked_hours=?, admin_info=?, updated_at=? WHERE id=?", (worked, admin_info, now_iso(), group_month_id))
+                        conn.execute("UPDATE driver_group_month_data SET worked_hours=?, v_enabled=?, admin_info=?, updated_at=? WHERE id=?", (worked, v_enabled, admin_info, now_iso(), group_month_id))
                         sync_group_admin_info(conn, group_id, year, month, admin_info)
                         should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
                         if should_add_item:
@@ -1880,9 +1919,10 @@ def admin_months():
                     # V wird genau so gespeichert und berechnet, wie es eingetragen wurde.
                     # Die Vorschau zeigt nur den eingegebenen Wert mal 14.
                     v = round(abs(parse_hours(request.form.get("v_hours", "0"))), 2)
+                    v_enabled = form_v_enabled("v_enabled")
                     admin_info = request.form.get("admin_info", "").strip()
                     monthly_id = get_or_create_month_row(conn, did, year, month)
-                    conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v, admin_info, now_iso(), monthly_id))
+                    conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=?, v_enabled=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v, v_enabled, admin_info, now_iso(), monthly_id))
 
                     should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
 
@@ -2053,7 +2093,8 @@ def admin_months():
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b><div class="download-note">zusammengeführt nur in Plus/Minus Stunden</div>{% if d.member_preview %}<div class="group-member-preview"><b>Einzelvorschau</b><table><tr><th>Fahrer</th><th>Std.</th><th>Abr.</th><th>V</th><th>Diff</th></tr>{% for p in d.member_preview %}<tr><td>{{ p.name }}</td><td>{{ fmt_hours(p.worked_hours) }}</td><td>{{ fmt_hours(p.payroll_hours) }}</td><td>{{ fmt_decimal_input(p.v_hours) }}</td><td class="{{ signed_class(p.difference_hours) }}">{{ fmt_signed(p.difference_hours) }}</td></tr>{% endfor %}</table></div>{% endif %}</td>
         <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"><div class="group-worked-note">Nur Gruppenwert für Plus/Minus Stunden.</div></form></td>
         <td data-label="Abrechnung"><input readonly value="{{ r['payroll_hours'] if r else '' }}"></td>
-        <td data-label="V"><input readonly value="{{ fmt_v_input(r['v_hours']) if r else '' }}"><div class="v-preview">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
+        {% set v_enabled = row_v_enabled(r) %}
+        <td data-label="V"><input class="v-markable {{ 'v-disabled' if not v_enabled else '' }}" readonly value="{{ fmt_v_input(r['v_hours']) if r else '' }}"><input type="hidden" form="save-{{ d['form_id'] }}" name="v_enabled" value="0"><label class="v-toggle"><input class="v-enabled-toggle" form="save-{{ d['form_id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> V berücksichtigen</label><input type="hidden" form="all-months-form" name="v_enabled_{{ d['form_id'] }}" value="{{ 1 if v_enabled else 0 }}" class="all-copy-v-enabled-{{ d['form_id'] }}"><div class="v-preview">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div>{% if not v_enabled and r and r['v_hours'] %}<div class="v-disabled-note">V wird ignoriert</div>{% endif %}</td>
         <td data-label="Zuschüsse / Abzüge"><div class="group-mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% if it.get('is_group_adj') %}{% for f in group_adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>{% endif %}</div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
@@ -2067,7 +2108,8 @@ def admin_months():
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title">{{ d['name'] }}</div><b>{{ d['name'] }}</b></td>
         <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
         <td data-label="Abrechnung"><input form="save-{{ d['form_id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="payroll_hours_{{ d['form_id'] }}" value="{{ r['payroll_hours'] if r else '' }}" class="all-copy-payroll-{{ d['form_id'] }}"></td>
-        <td data-label="V"><input class="v-input" data-driver="{{ d['form_id'] }}" form="save-{{ d['form_id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><input type="hidden" form="all-months-form" name="v_hours_{{ d['form_id'] }}" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" class="all-copy-v-{{ d['form_id'] }}"><div class="v-preview" id="v-preview-{{ d['form_id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
+        {% set v_enabled = row_v_enabled(r) %}
+        <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" data-driver="{{ d['form_id'] }}" form="save-{{ d['form_id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><input type="hidden" form="all-months-form" name="v_hours_{{ d['form_id'] }}" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" class="all-copy-v-{{ d['form_id'] }}"><input type="hidden" form="save-{{ d['form_id'] }}" name="v_enabled" value="0"><label class="v-toggle"><input class="v-enabled-toggle" form="save-{{ d['form_id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> V berücksichtigen</label><input type="hidden" form="all-months-form" name="v_enabled_{{ d['form_id'] }}" value="{{ 1 if v_enabled else 0 }}" class="all-copy-v-enabled-{{ d['form_id'] }}"><div class="v-preview" id="v-preview-{{ d['form_id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div>{% if not v_enabled and r and r['v_hours'] %}<div class="v-disabled-note">V wird ignoriert</div>{% endif %}</td>
         <td data-label="Zuschüsse / Abzüge"><div class="mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% for f in adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
@@ -2138,6 +2180,17 @@ def admin_months():
       input.addEventListener('change', updatePreview);
       updatePreview();
     });
+    function refreshVEnabledState(row){
+      var cb = row.querySelector('.v-enabled-toggle');
+      if(!cb){ return; }
+      var input = row.querySelector('.v-markable');
+      if(input){ input.classList.toggle('v-disabled', !cb.checked); }
+    }
+    document.querySelectorAll('.v-enabled-toggle').forEach(function(cb){
+      var row = cb.closest('tr');
+      cb.addEventListener('change', function(){ refreshVEnabledState(row); });
+      refreshVEnabledState(row);
+    });
 
     document.querySelectorAll('tr.driver-row').forEach(function(row){
       var fidInput = row.querySelector('form[id^="save-"] input[name="driver_id"]');
@@ -2148,17 +2201,19 @@ def admin_months():
         var worked = row.querySelector('input[name="worked_hours"]');
         var payroll = row.querySelector('input[name="payroll_hours"]');
         var v = row.querySelector('input[name="v_hours"]');
+        var vEnabled = row.querySelector('.v-enabled-toggle');
         var ha = document.querySelector('.all-copy-admin-' + CSS.escape(formId)); if(ha && admin) ha.value = admin.value;
         var hw = document.querySelector('.all-copy-worked-' + CSS.escape(formId)); if(hw && worked) hw.value = worked.value;
         var hp = document.querySelector('.all-copy-payroll-' + CSS.escape(formId)); if(hp && payroll) hp.value = payroll.value;
         var hv = document.querySelector('.all-copy-v-' + CSS.escape(formId)); if(hv && v) hv.value = v.value;
+        var hve = document.querySelector('.all-copy-v-enabled-' + CSS.escape(formId)); if(hve && vEnabled) hve.value = vEnabled.checked ? '1' : '0';
       }
       row.addEventListener('input', sync);
       row.addEventListener('change', sync);
       sync();
     });
     </script>
-    """, year=year, month=month, months=MONATE, month_released=month_released, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class)
+    """, year=year, month=month, months=MONATE, month_released=month_released, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_v_enabled=row_v_enabled)
     return base_page("Plus/Minus Stunden", body, "months")
 
 
@@ -2189,6 +2244,7 @@ def admin_payroll_hours():
                     worked = parse_hours(request.form.get(f"worked_hours_{suffix}", "0"))
                     payroll = parse_hours(request.form.get(f"payroll_hours_{suffix}", "0"))
                     v = round(abs(parse_hours(request.form.get(f"v_hours_{suffix}", "0"))), 2)
+                    v_enabled = form_v_enabled(f"v_enabled_{suffix}")
                     admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
                     payroll_office_info = request.form.get(f"payroll_office_info_{suffix}", "").strip()
                     payroll_surcharge = parse_decimal(request.form.get(f"payroll_surcharge_{suffix}", "0"))
@@ -2197,11 +2253,11 @@ def admin_payroll_hours():
                     sick_days = normalize_day_ranges(request.form.get(f"sick_days_{suffix}", ""))
                     conn.execute("""
                         UPDATE monthly_data
-                        SET worked_hours=?, payroll_hours=?, v_hours=?, admin_info=?, admin_info_carried=0,
+                        SET worked_hours=?, payroll_hours=?, v_hours=?, v_enabled=?, admin_info=?, admin_info_carried=0,
                             payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?,
                             vacation_days=?, sick_days=?, updated_at=?
                         WHERE id=?
-                    """, (worked, payroll, v, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                    """, (worked, payroll, v, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
                     sync_member_admin_info_to_group(conn, did, year, month, admin_info)
                     recalc_month_adjustments(conn, monthly_id)
                     recalc_driver(conn, did)
@@ -2217,6 +2273,7 @@ def admin_payroll_hours():
                 worked = parse_hours(request.form.get("worked_hours", "0"))
                 payroll = parse_hours(request.form.get("payroll_hours", "0"))
                 v = round(abs(parse_hours(request.form.get("v_hours", "0"))), 2)
+                v_enabled = form_v_enabled("v_enabled")
                 admin_info = request.form.get("admin_info", "").strip()
                 payroll_office_info = request.form.get("payroll_office_info", "").strip()
                 payroll_surcharge = parse_decimal(request.form.get("payroll_surcharge", "0"))
@@ -2225,11 +2282,11 @@ def admin_payroll_hours():
                 sick_days = normalize_day_ranges(request.form.get("sick_days", ""))
                 conn.execute("""
                     UPDATE monthly_data
-                    SET worked_hours=?, payroll_hours=?, v_hours=?, admin_info=?, admin_info_carried=0,
+                    SET worked_hours=?, payroll_hours=?, v_hours=?, v_enabled=?, admin_info=?, admin_info_carried=0,
                         payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?,
                         vacation_days=?, sick_days=?, updated_at=?
                     WHERE id=?
-                """, (worked, payroll, v, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                """, (worked, payroll, v, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
                 sync_member_admin_info_to_group(conn, did, year, month, admin_info)
                 recalc_month_adjustments(conn, monthly_id)
                 recalc_driver(conn, did)
@@ -2269,7 +2326,8 @@ def admin_payroll_hours():
         <td class="nowrap" data-label="Fahrer"><b>{{ d['name'] }}</b></td>
         <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
         <td data-label="Abrechnung"><input form="payroll-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
-        <td data-label="V"><input class="v-input" data-driver="payroll-{{ d['id'] }}" form="payroll-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><div class="v-preview" id="v-preview-payroll-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div></td>
+        {% set v_enabled = row_v_enabled(r) %}
+        <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" data-driver="payroll-{{ d['id'] }}" form="payroll-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><input type="hidden" form="payroll-{{ d['id'] }}" name="v_enabled" value="0"><label class="v-toggle"><input class="v-enabled-toggle" form="payroll-{{ d['id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> V berücksichtigen</label><div class="v-preview" id="v-preview-payroll-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div>{% if not v_enabled and r and r['v_hours'] %}<div class="v-disabled-note">V wird ignoriert</div>{% endif %}</td>
         <td data-label="Zuschlag"><input form="payroll-{{ d['id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"></td>
         <td data-label="Tankgutschein"><input form="payroll-{{ d['id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"></td>
         <td data-label="Urlaub" class="days-vacation"><input form="payroll-{{ d['id'] }}" name="vacation_days" value="{{ row_get(r, 'vacation_days', '') if r else '' }}" placeholder="9-13, 28"></td>
@@ -2282,6 +2340,8 @@ def admin_payroll_hours():
     function parseVPreviewValue(raw){var text=(raw||'').toString().trim().replace(/\s+/g,'').replace(',','.'); if(!text){return null;} var num=parseFloat(text); return Number.isFinite(num)?num:null;}
     function formatVPreview(num){return '= '+(num*14).toFixed(2).replace('.', ',');}
     document.querySelectorAll('.v-input').forEach(function(input){var preview=document.getElementById('v-preview-'+input.dataset.driver); function updatePreview(){if(!preview){return;} var num=parseVPreviewValue(input.value); preview.textContent=num===null?'':formatVPreview(num);} input.addEventListener('input', updatePreview); input.addEventListener('change', updatePreview); updatePreview();});
+    function refreshVEnabledState(row){var cb=row.querySelector('.v-enabled-toggle'); if(!cb){return;} var input=row.querySelector('.v-markable'); if(input){input.classList.toggle('v-disabled', !cb.checked);}}
+    document.querySelectorAll('.v-enabled-toggle').forEach(function(cb){var row=cb.closest('tr'); cb.addEventListener('change', function(){refreshVEnabledState(row);}); refreshVEnabledState(row);});
 
     var allPayrollForm = document.getElementById('all-payroll-form');
     if(allPayrollForm){
@@ -2297,11 +2357,13 @@ def admin_payroll_hours():
             var el = row.querySelector('[name="' + name + '"]');
             add(name + '_' + id, el ? el.value : '');
           });
+          var vEnabled = row.querySelector('.v-enabled-toggle');
+          add('v_enabled_' + id, vEnabled && vEnabled.checked ? '1' : '0');
         });
       });
     }
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get)
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get, row_v_enabled=row_v_enabled)
     return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
@@ -2678,7 +2740,7 @@ def driver_month_detail(year:int, month:int):
             """, (did, year, month)).fetchall()
             group_name = ""
             group_mode = False
-    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monatsdetails</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ months[month] }} {{ year }}</div><div class="subtitle">{{ group_name if group_mode else session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_months_for_year', year=year) }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="grid grid-3"><div class="kpi">Stunden<b>{{ fmt_hours(r['worked_hours']) }}</b></div><div class="kpi">Abrechnung<b>{{ fmt_hours(r['payroll_hours']) }}</b></div><div class="kpi">V<b>{{ fmt_hours(r['v_hours']) }}</b></div><div class="kpi">Zuschüsse<b>{{ fmt_hours(r['bonus_hours']) }}</b><span class="muted">{{ r['bonus_comment'] or '-' }}</span></div><div class="kpi">Abzüge<b>{{ fmt_hours(r['deduction_hours']) }}</b><span class="muted">{{ r['deduction_comment'] or '-' }}</span></div><div class="kpi">Differenz<b class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</b></div><div class="kpi">Alter Stand<b>{{ fmt_signed(r['previous_balance']) }}</b></div><div class="kpi">Neuer Stand<b class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</b></div></div><h3>Einzelne Zuschüsse / Abzüge</h3>{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<p class="muted">Keine Positionen vorhanden.</p>{% endif %}{% if group_mode %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_group_pdf', year=year, month=month) }}">PDF herunterladen</a></p>{% elif doc %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_pdf', document_id=doc['id']) }}">PDF herunterladen</a></p>{% endif %}</div></main></body></html>""", css=BASE_CSS, r=r, doc=doc, items=items, year=year, month=month, months=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class, group_mode=group_mode, group_name=group_name)
+    return render_template_string("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monatsdetails</title><style>{{ css }}</style></head><body><main class="main"><div class="top"><div><div class="title">{{ months[month] }} {{ year }}</div><div class="subtitle">{{ group_name if group_mode else session['driver_name'] }}</div></div><div class="actions"><a class="btn small" href="{{ url_for('driver_months_for_year', year=year) }}">Zurück</a><a class="btn small" href="{{ url_for('driver_logout') }}">Logout</a></div></div><div class="card"><div class="grid grid-3"><div class="kpi">Stunden<b>{{ fmt_hours(r['worked_hours']) }}</b></div><div class="kpi">Abrechnung<b>{{ fmt_hours(r['payroll_hours']) }}</b></div><div class="kpi">V<b class="{{ '' if row_v_enabled(r) else 'zero' }}">{{ fmt_v_display(r['v_hours'], row_get(r, 'v_enabled', 1), True) }}</b></div><div class="kpi">Zuschüsse<b>{{ fmt_hours(r['bonus_hours']) }}</b><span class="muted">{{ r['bonus_comment'] or '-' }}</span></div><div class="kpi">Abzüge<b>{{ fmt_hours(r['deduction_hours']) }}</b><span class="muted">{{ r['deduction_comment'] or '-' }}</span></div><div class="kpi">Differenz<b class="{{ signed_class(r['difference_hours']) }}">{{ fmt_signed(r['difference_hours']) }}</b></div><div class="kpi">Alter Stand<b>{{ fmt_signed(r['previous_balance']) }}</b></div><div class="kpi">Neuer Stand<b class="{{ signed_class(r['new_balance']) }}">{{ fmt_signed(r['new_balance']) }}</b></div></div><h3>Einzelne Zuschüsse / Abzüge</h3>{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span></div>{% endfor %}{% else %}<p class="muted">Keine Positionen vorhanden.</p>{% endif %}{% if group_mode %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_group_pdf', year=year, month=month) }}">PDF herunterladen</a></p>{% elif doc %}<p><a class="btn primary" style="width:auto;margin-top:14px" href="{{ url_for('download_pdf', document_id=doc['id']) }}">PDF herunterladen</a></p>{% endif %}</div></main></body></html>""", css=BASE_CSS, r=r, doc=doc, items=items, year=year, month=month, months=MONATE, fmt_hours=fmt_hours, fmt_signed=fmt_signed, signed_class=signed_class, group_mode=group_mode, group_name=group_name, row_v_enabled=row_v_enabled, row_get=row_get, fmt_v_display=fmt_v_display)
 
 
 @app.get("/pdf/gruppe/<int:year>/<int:month>")
@@ -2848,6 +2910,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
