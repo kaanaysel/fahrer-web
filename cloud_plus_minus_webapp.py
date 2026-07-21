@@ -361,9 +361,9 @@ def normalize_balance_sort(raw: str) -> str:
     return raw if raw in {"asc", "desc"} else "order"
 
 
-def normalize_payroll_sort(raw: str) -> str:
+def normalize_driver_sort_mode(raw: str) -> str:
     raw = (raw or "").strip().lower()
-    return raw if raw in {"order", "name_az"} else "order"
+    return raw if raw in {"custom", "name_az"} else "custom"
 
 
 def balance_value(row: Any) -> float:
@@ -384,6 +384,93 @@ def load_current_balances(conn: sqlite3.Connection, sort_mode: str = "order") ->
     elif sort_mode == "desc":
         rows.sort(key=lambda r: (-balance_value(r), normalize(str(row_get(r, "name", "")))))
     return rows
+
+
+DRIVER_SORT_MODE_KEY = "drivers_sort_mode"
+DRIVER_CUSTOM_ORDER_KEY = "drivers_custom_order"
+
+
+def get_app_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    try:
+        row = conn.execute("SELECT setting_value FROM app_settings WHERE setting_key=?", (key,)).fetchone()
+        return str(row["setting_value"] if row else default)
+    except Exception:
+        return default
+
+
+def set_app_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO app_settings(setting_key, setting_value, updated_at) VALUES(?,?,?)
+        ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value, updated_at=excluded.updated_at
+        """,
+        (key, value, now_iso()),
+    )
+
+
+def get_driver_sort_mode(conn: sqlite3.Connection) -> str:
+    return normalize_driver_sort_mode(get_app_setting(conn, DRIVER_SORT_MODE_KEY, "custom"))
+
+
+def set_driver_sort_mode(conn: sqlite3.Connection, mode: str) -> None:
+    set_app_setting(conn, DRIVER_SORT_MODE_KEY, normalize_driver_sort_mode(mode))
+
+
+def current_driver_order_ids(conn: sqlite3.Connection) -> List[int]:
+    return [
+        int(r["id"])
+        for r in conn.execute(
+            "SELECT id FROM drivers WHERE COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE"
+        ).fetchall()
+    ]
+
+
+def alpha_driver_order_ids(conn: sqlite3.Connection) -> List[int]:
+    rows = list(conn.execute("SELECT id, name, display_order FROM drivers WHERE COALESCE(is_disposition,0)=0").fetchall())
+    rows.sort(key=lambda r: (normalize(str(row_get(r, "name", ""))), safe_float(row_get(r, "display_order", 0)), int(row_get(r, "id", 0))))
+    return [int(r["id"]) for r in rows]
+
+
+def apply_driver_order(conn: sqlite3.Connection, ordered_ids: List[int]) -> List[int]:
+    valid_ids = current_driver_order_ids(conn)
+    valid_set = set(valid_ids)
+    final_order: List[int] = []
+    for driver_id in ordered_ids:
+        try:
+            did = int(driver_id)
+        except Exception:
+            continue
+        if did in valid_set and did not in final_order:
+            final_order.append(did)
+    for did in valid_ids:
+        if did not in final_order:
+            final_order.append(did)
+    for pos, driver_id in enumerate(final_order, start=1):
+        conn.execute("UPDATE drivers SET display_order=?, updated_at=? WHERE id=?", (pos, now_iso(), driver_id))
+    return final_order
+
+
+def save_custom_driver_order(conn: sqlite3.Connection, ordered_ids: Optional[List[int]] = None) -> None:
+    order = ordered_ids if ordered_ids is not None else current_driver_order_ids(conn)
+    set_app_setting(conn, DRIVER_CUSTOM_ORDER_KEY, json.dumps([int(x) for x in order]))
+
+
+def sort_drivers_name_az(conn: sqlite3.Connection) -> None:
+    if get_driver_sort_mode(conn) != "name_az":
+        save_custom_driver_order(conn)
+    apply_driver_order(conn, alpha_driver_order_ids(conn))
+    set_driver_sort_mode(conn, "name_az")
+
+
+def restore_custom_driver_order(conn: sqlite3.Connection) -> None:
+    raw = get_app_setting(conn, DRIVER_CUSTOM_ORDER_KEY, "")
+    try:
+        saved_order = json.loads(raw) if raw else []
+    except Exception:
+        saved_order = []
+    final_order = apply_driver_order(conn, [int(x) for x in saved_order if str(x).isdigit()]) if saved_order else current_driver_order_ids(conn)
+    save_custom_driver_order(conn, final_order)
+    set_driver_sort_mode(conn, "custom")
 
 
 def parse_hours(raw: str) -> float:
@@ -668,6 +755,13 @@ def _init_postgres_schema(conn) -> None:
     )
     """)
     conn.execute("""
+    CREATE TABLE IF NOT EXISTS app_settings(
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
+    )
+    """)
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS adjustment_items(
         id SERIAL PRIMARY KEY,
         monthly_data_id INTEGER NOT NULL REFERENCES monthly_data(id) ON DELETE CASCADE,
@@ -874,6 +968,11 @@ def db_conn():
         action TEXT NOT NULL,
         details TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_settings(
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS adjustment_items(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1658,7 +1757,17 @@ def admin_drivers():
         if request.method == "POST":
             action = request.form.get("action")
             ts = now_iso()
-            if action == "create":
+            if action == "sort_name_az":
+                sort_drivers_name_az(conn)
+                audit(conn, "drivers_sort_name_az", "")
+                conn.commit(); flash("Fahrer wurden alphabetisch nach Name A-Z sortiert. Diese Reihenfolge gilt auch für Stunden für Lohnabrechnung.", "ok")
+                return redirect(url_for("admin_drivers"))
+            elif action == "sort_custom":
+                restore_custom_driver_order(conn)
+                audit(conn, "drivers_sort_custom", "")
+                conn.commit(); flash("Eigene Sortierung wurde wiederhergestellt.", "ok")
+                return redirect(url_for("admin_drivers"))
+            elif action == "create":
                 name = request.form.get("name", "").strip(); username = request.form.get("username", "").strip() or slugify(name); password = request.form.get("password", "").strip(); is_disposition = 1 if request.form.get("is_disposition") == "on" else 0
                 start = 0.0 if is_disposition else parse_hours(request.form.get("starting_balance", "0"))
                 if not name or not password:
@@ -1705,11 +1814,12 @@ def admin_drivers():
         drivers = conn.execute("SELECT d.*, COALESCE((SELECT new_balance FROM monthly_data m WHERE m.driver_id=d.id ORDER BY year DESC,month DESC,id DESC LIMIT 1), d.starting_balance) AS balance FROM drivers d WHERE COALESCE(d.is_disposition,0)=0 ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE").fetchall()
         disposition_accounts = conn.execute("SELECT * FROM drivers WHERE COALESCE(is_disposition,0)=1 ORDER BY name COLLATE NOCASE").fetchall()
         groups = load_driver_groups(conn)
+        driver_sort_mode = get_driver_sort_mode(conn)
     body = render_template_string("""
     <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"><label style="margin-top:10px;width:auto;font-weight:800"><input style="width:auto" type="checkbox" name="is_disposition"> Disposition</label><div class="download-note">Wenn aktiviert, wird daraus kein Fahrer, sondern ein Dispo-Login nur für das Dashboard mit aktuellen Salden.</div></div><button class="primary">Anlegen</button></form></div>
     <div class="card"><h2>Fahrer nur für Plus/Minus Stunden zusammenführen</h2><p class="muted">Die ausgewählten Fahrer bleiben bei „Stunden für Lohnabrechnung“ einzeln sichtbar. Nur in „Plus/Minus Stunden“ erscheinen sie als gemeinsame Zeile mit zusammengerechneten Werten.</p><form method="post" class="grid grid-3"><input type="hidden" name="action" value="create_group"><div><label>Gruppenname</label><input name="group_name" placeholder="z.B. Alex und Jennifer"></div><div><label>Fahrer auswählen</label><select name="group_driver_ids" multiple size="6">{% for d in drivers %}<option value="{{ d['id'] }}">{{ d['name'] }}</option>{% endfor %}</select><div class="download-note">Mehrere auswählen mit Strg/Cmd oder Shift.</div></div><div style="align-self:end"><button class="primary">Gruppe erstellen</button></div></form>{% if groups %}<div class="adjustment-list"><h3>Aktive Gruppen</h3>{% for g in groups %}<div class="item-row"><b>{{ g.name }}</b><span class="muted">{{ g.members|map(attribute='name')|join(', ') }}</span><form method="post" onsubmit="return confirm('Gruppe wirklich löschen? Die Fahrer und Monatsdaten bleiben erhalten.')"><input type="hidden" name="action" value="delete_group"><input type="hidden" name="group_id" value="{{ g.group['id'] }}"><button class="small danger">Gruppe löschen</button></form></div>{% endfor %}</div>{% endif %}</div>
     {% if disposition_accounts %}<div class="card"><h2>Disposition-Accounts</h2><p class="muted">Diese Accounts sehen nur das Dashboard mit den aktuellen Salden und keine Fahrerportal- oder Admin-Tabs.</p><div class="table-wrap"><table style="min-width:900px"><thead><tr><th>Name</th><th>Benutzername</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody>{% for d in disposition_accounts %}<tr><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="starting_balance" value="0"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Disposition-Account wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
-    <div class="card"><h2>Fahrer verwalten</h2><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert. Bei alten Konten wird das aktuelle Passwort nach dem nächsten erfolgreichen Fahrer-Login angezeigt; alternativ kann es hier neu gesetzt werden.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
+    <div class="card"><div class="actions" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Fahrer verwalten</h2><div class="actions"><span class="muted">Sortieren nach:</span><form method="post"><input type="hidden" name="action" value="sort_custom"><button class="small driver-sort-button driver-sort-button-custom {{ 'primary' if driver_sort_mode=='custom' else '' }}" type="submit">Eigene Sortierung</button></form><form method="post"><input type="hidden" name="action" value="sort_name_az"><button class="small driver-sort-button driver-sort-button-az {{ 'primary' if driver_sort_mode=='name_az' else '' }}" type="submit">Name A-Z</button></form></div></div><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert. Bei alten Konten wird das aktuelle Passwort nach dem nächsten erfolgreichen Fahrer-Login angezeigt; alternativ kann es hier neu gesetzt werden.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
     <script>
     (function(){
       const tbody = document.getElementById('drivers-sortable');
@@ -1728,6 +1838,11 @@ def admin_drivers():
         }).then(r => r.json()).then(data => {
           saving = false;
           if(!data.ok) alert(data.error || 'Reihenfolge konnte nicht gespeichert werden.');
+          else {
+            document.querySelectorAll('.driver-sort-button').forEach(function(btn){ btn.classList.remove('primary'); });
+            var customBtn = document.querySelector('.driver-sort-button-custom');
+            if(customBtn) customBtn.classList.add('primary');
+          }
         }).catch(() => { saving = false; alert('Reihenfolge konnte nicht gespeichert werden.'); });
       }
       tbody.addEventListener('dragstart', function(e){
@@ -1756,7 +1871,7 @@ def admin_drivers():
       });
     })();
     </script>
-    """, drivers=drivers, disposition_accounts=disposition_accounts, groups=groups, fmt_signed=fmt_signed, signed_class=signed_class)
+    """, drivers=drivers, disposition_accounts=disposition_accounts, groups=groups, driver_sort_mode=driver_sort_mode, fmt_signed=fmt_signed, signed_class=signed_class)
     return base_page("Fahrer", body, "drivers")
 
 
@@ -1774,13 +1889,12 @@ def admin_drivers_reorder():
         return jsonify({"ok": False, "error": "Keine Fahrer übergeben."}), 400
 
     with db_conn() as conn:
-        valid = {int(r["id"]) for r in conn.execute("SELECT id FROM drivers WHERE COALESCE(is_disposition,0)=0").fetchall()}
-        for pos, driver_id in enumerate(driver_ids, start=1):
-            if driver_id in valid:
-                conn.execute("UPDATE drivers SET display_order=?, updated_at=? WHERE id=?", (pos, now_iso(), driver_id))
-        audit(conn, "drivers_reorder", ",".join(str(x) for x in driver_ids))
+        final_order = apply_driver_order(conn, driver_ids)
+        save_custom_driver_order(conn, final_order)
+        set_driver_sort_mode(conn, "custom")
+        audit(conn, "drivers_reorder", ",".join(str(x) for x in final_order))
         conn.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "sort_mode": "custom"})
 
 
 @app.route("/admin/months", methods=["GET","POST"])
@@ -2235,7 +2349,6 @@ def admin_import_pdf():
 def admin_payroll_hours():
     year = int(request.values.get("year") or datetime.now().year)
     month = int(request.values.get("month") or datetime.now().month)
-    sort_mode = normalize_payroll_sort(request.values.get("sort", "order"))
     with db_conn() as conn:
         if request.method == "POST":
             action = request.form.get("action", "save")
@@ -2272,7 +2385,7 @@ def admin_payroll_hours():
                 audit(conn, "payroll_hours_save_all", f"{year}-{month} {saved_count}")
                 conn.commit()
                 flash(f"Alle Einträge gespeichert ({saved_count}).", "ok")
-                return redirect(url_for("admin_payroll_hours", year=year, month=month, sort=sort_mode))
+                return redirect(url_for("admin_payroll_hours", year=year, month=month))
             if action == "save":
                 did = int(request.form["driver_id"])
                 monthly_id = get_or_create_month_row(conn, did, year, month)
@@ -2302,8 +2415,7 @@ def admin_payroll_hours():
                 flash("Stunden für Lohnabrechnung gespeichert und in Plus/Minus Stunden übernommen.", "ok")
 
         recalc_all(conn); conn.commit()
-        driver_order_sql = "name COLLATE NOCASE, COALESCE(NULLIF(display_order,0), id), id" if sort_mode == "name_az" else "COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE"
-        drivers = conn.execute(f"SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY {driver_order_sql}").fetchall()
+        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
         for d in drivers:
             get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
         conn.commit()
@@ -2314,7 +2426,6 @@ def admin_payroll_hours():
       <form method="get" class="actions" id="payroll-filter-form">
         <div><label>Jahr</label><input name="year" value="{{ year }}" onchange="this.form.submit()"></div>
         <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
-        <div><label>Sortieren</label><select name="sort" onchange="this.form.submit()"><option value="order" {% if sort_mode=='order' %}selected{% endif %}>Fahrer-Reihenfolge</option><option value="name_az" {% if sort_mode=='name_az' %}selected{% endif %}>Name A-Z</option></select></div>
         <noscript><button class="primary">Anzeigen</button></noscript>
         <a class="btn" href="{{ url_for('download_payroll_hours_export', year=year, month=month) }}">Lohnbüro-PDF herunterladen</a>
         <button class="primary" type="submit" form="all-payroll-form">Alle Einträge speichern</button>
@@ -2323,7 +2434,7 @@ def admin_payroll_hours():
     </div>
     <div class="card"><h2>Stunden für Lohnabrechnung – {{ months[month] }} {{ year }}</h2>
       <p class="muted">Urlaub/Krank kannst du schnell als Tage oder Bereiche eingeben, z.B. <b>9-13, 16-20, 28</b>.</p>
-      <form method="post" id="all-payroll-form"><input type="hidden" name="action" value="save_all"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="sort" value="{{ sort_mode }}"></form>
+      <form method="post" id="all-payroll-form"><input type="hidden" name="action" value="save_all"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"></form>
       <div class="table-wrap mobile-cards"><table class="months-table payroll-table">
       <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-pay-info">Allgemeine Infos für Lohnbüro</th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V</th><th class="col-pay-num">Zuschlag</th><th class="col-pay-num">Tankgutschein</th><th class="col-days">Urlaub</th><th class="col-days">Krank</th><th class="col-action">Aktion</th></tr></thead><tbody>
       {% for d in drivers %}
@@ -2332,7 +2443,7 @@ def admin_payroll_hours():
         <td class="admin-info" data-label="Allgemeine Infos"><textarea form="payroll-{{ d['id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea></td>
         <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="payroll-{{ d['id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea></td>
         <td class="nowrap" data-label="Fahrer"><b>{{ d['name'] }}</b></td>
-        <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="sort" value="{{ sort_mode }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
+        <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
         <td data-label="Abrechnung"><input form="payroll-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
         {% set v_enabled = row_v_enabled(r) %}
         <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" data-driver="payroll-{{ d['id'] }}" form="payroll-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><input type="hidden" form="payroll-{{ d['id'] }}" name="v_enabled" value="0"><label class="v-toggle" title="V berücksichtigen"><input class="v-enabled-toggle" form="payroll-{{ d['id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> aktiv</label><div class="v-preview" id="v-preview-payroll-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div>{% if not v_enabled and r and r['v_hours'] %}<div class="v-disabled-note">V wird ignoriert</div>{% endif %}</td>
@@ -2371,7 +2482,7 @@ def admin_payroll_hours():
       });
     }
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, sort_mode=sort_mode, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get, row_v_enabled=row_v_enabled)
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get, row_v_enabled=row_v_enabled)
     return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
