@@ -361,6 +361,11 @@ def normalize_balance_sort(raw: str) -> str:
     return raw if raw in {"asc", "desc"} else "order"
 
 
+def normalize_payroll_sort(raw: str) -> str:
+    raw = (raw or "").strip().lower()
+    return raw if raw in {"order", "name_az"} else "order"
+
+
 def balance_value(row: Any) -> float:
     return safe_float(row_get(row, "bal", row_get(row, "starting_balance", 0)) if row_get(row, "bal", None) is not None else row_get(row, "starting_balance", 0))
 
@@ -2230,6 +2235,7 @@ def admin_import_pdf():
 def admin_payroll_hours():
     year = int(request.values.get("year") or datetime.now().year)
     month = int(request.values.get("month") or datetime.now().month)
+    sort_mode = normalize_payroll_sort(request.values.get("sort", "order"))
     with db_conn() as conn:
         if request.method == "POST":
             action = request.form.get("action", "save")
@@ -2266,7 +2272,7 @@ def admin_payroll_hours():
                 audit(conn, "payroll_hours_save_all", f"{year}-{month} {saved_count}")
                 conn.commit()
                 flash(f"Alle Einträge gespeichert ({saved_count}).", "ok")
-                return redirect(url_for("admin_payroll_hours", year=year, month=month))
+                return redirect(url_for("admin_payroll_hours", year=year, month=month, sort=sort_mode))
             if action == "save":
                 did = int(request.form["driver_id"])
                 monthly_id = get_or_create_month_row(conn, did, year, month)
@@ -2296,7 +2302,8 @@ def admin_payroll_hours():
                 flash("Stunden für Lohnabrechnung gespeichert und in Plus/Minus Stunden übernommen.", "ok")
 
         recalc_all(conn); conn.commit()
-        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
+        driver_order_sql = "name COLLATE NOCASE, COALESCE(NULLIF(display_order,0), id), id" if sort_mode == "name_az" else "COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE"
+        drivers = conn.execute(f"SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY {driver_order_sql}").fetchall()
         for d in drivers:
             get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
         conn.commit()
@@ -2307,6 +2314,7 @@ def admin_payroll_hours():
       <form method="get" class="actions" id="payroll-filter-form">
         <div><label>Jahr</label><input name="year" value="{{ year }}" onchange="this.form.submit()"></div>
         <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+        <div><label>Sortieren</label><select name="sort" onchange="this.form.submit()"><option value="order" {% if sort_mode=='order' %}selected{% endif %}>Fahrer-Reihenfolge</option><option value="name_az" {% if sort_mode=='name_az' %}selected{% endif %}>Name A-Z</option></select></div>
         <noscript><button class="primary">Anzeigen</button></noscript>
         <a class="btn" href="{{ url_for('download_payroll_hours_export', year=year, month=month) }}">Lohnbüro-PDF herunterladen</a>
         <button class="primary" type="submit" form="all-payroll-form">Alle Einträge speichern</button>
@@ -2315,7 +2323,7 @@ def admin_payroll_hours():
     </div>
     <div class="card"><h2>Stunden für Lohnabrechnung – {{ months[month] }} {{ year }}</h2>
       <p class="muted">Urlaub/Krank kannst du schnell als Tage oder Bereiche eingeben, z.B. <b>9-13, 16-20, 28</b>.</p>
-      <form method="post" id="all-payroll-form"><input type="hidden" name="action" value="save_all"></form>
+      <form method="post" id="all-payroll-form"><input type="hidden" name="action" value="save_all"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="sort" value="{{ sort_mode }}"></form>
       <div class="table-wrap mobile-cards"><table class="months-table payroll-table">
       <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-pay-info">Allgemeine Infos für Lohnbüro</th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V</th><th class="col-pay-num">Zuschlag</th><th class="col-pay-num">Tankgutschein</th><th class="col-days">Urlaub</th><th class="col-days">Krank</th><th class="col-action">Aktion</th></tr></thead><tbody>
       {% for d in drivers %}
@@ -2324,14 +2332,14 @@ def admin_payroll_hours():
         <td class="admin-info" data-label="Allgemeine Infos"><textarea form="payroll-{{ d['id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea></td>
         <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="payroll-{{ d['id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea></td>
         <td class="nowrap" data-label="Fahrer"><b>{{ d['name'] }}</b></td>
-        <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
+        <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="sort" value="{{ sort_mode }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
         <td data-label="Abrechnung"><input form="payroll-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
         {% set v_enabled = row_v_enabled(r) %}
         <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" data-driver="payroll-{{ d['id'] }}" form="payroll-{{ d['id'] }}" name="v_hours" value="{{ fmt_v_input(r['v_hours']) if r else '' }}" placeholder="Betrag"><input type="hidden" form="payroll-{{ d['id'] }}" name="v_enabled" value="0"><label class="v-toggle" title="V berücksichtigen"><input class="v-enabled-toggle" form="payroll-{{ d['id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> aktiv</label><div class="v-preview" id="v-preview-payroll-{{ d['id'] }}">{% if r and r['v_hours'] %}= {{ fmt_decimal_input(r['v_hours'] * 14) }}{% endif %}</div>{% if not v_enabled and r and r['v_hours'] %}<div class="v-disabled-note">V wird ignoriert</div>{% endif %}</td>
         <td data-label="Zuschlag"><input form="payroll-{{ d['id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"></td>
         <td data-label="Tankgutschein"><input form="payroll-{{ d['id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"></td>
-        <td data-label="Urlaub" class="days-vacation"><input form="payroll-{{ d['id'] }}" name="vacation_days" value="{{ row_get(r, 'vacation_days', '') if r else '' }}" placeholder="9-13, 28"></td>
-        <td data-label="Krank" class="days-sick"><input form="payroll-{{ d['id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}" placeholder="16-20"></td>
+        <td data-label="Urlaub" class="days-vacation"><input form="payroll-{{ d['id'] }}" name="vacation_days" value="{{ row_get(r, 'vacation_days', '') if r else '' }}"></td>
+        <td data-label="Krank" class="days-sick"><input form="payroll-{{ d['id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}"></td>
         <td data-label="Aktion" class="actions compact-save"><button form="payroll-{{ d['id'] }}" class="small primary">Speichern</button></td>
       </tr>
       {% endfor %}
@@ -2363,7 +2371,7 @@ def admin_payroll_hours():
       });
     }
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get, row_v_enabled=row_v_enabled)
+    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, sort_mode=sort_mode, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get, row_v_enabled=row_v_enabled)
     return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
@@ -2910,6 +2918,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
