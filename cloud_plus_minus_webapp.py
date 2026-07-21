@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from difflib import SequenceMatcher
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+
 from flask import Flask, abort, flash, get_flashed_messages, jsonify, redirect, render_template_string, request, send_file, session, url_for, make_response
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -54,7 +59,7 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1600px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:76px}.col-adjust{width:350px}.col-small{width:62px}.col-action{width:100px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_hours]{max-width:62px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#667085;font-size:11px;font-weight:800;line-height:1;white-space:nowrap;max-width:70px;overflow:hidden;margin-bottom:0}.v-toggle input{width:auto!important;min-width:13px!important;height:13px!important;padding:0!important;margin:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#98a2b3!important;opacity:.72;text-decoration:line-through}.v-disabled-note{font-size:10px;color:#98a2b3;margin-top:3px;font-weight:800;line-height:1.05;max-width:70px}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick input{border-color:#fda29b;background:#fff1f0;color:#b42318}.payroll-table textarea{min-height:74px;font-size:14px}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:76px}.col-adjust{width:350px}.col-small{width:62px}.col-action{width:100px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_hours]{max-width:62px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#667085;font-size:11px;font-weight:800;line-height:1;white-space:nowrap;max-width:70px;overflow:hidden;margin-bottom:0}.v-toggle input{width:auto!important;min-width:13px!important;height:13px!important;padding:0!important;margin:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#98a2b3!important;opacity:.72;text-decoration:line-through}.v-disabled-note{font-size:10px;color:#98a2b3;margin-top:3px;font-weight:800;line-height:1.05;max-width:70px}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick input{border-color:#fda29b;background:#fff1f0;color:#b42318}.payroll-table textarea{min-height:74px;font-size:14px}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}.driver-balance-mini{display:block;margin-top:4px;font-size:11px;font-weight:900;opacity:.68;line-height:1.1;letter-spacing:.01em}.month-locked-note{margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#b54708;font-weight:800;font-size:13px}
 
 @media(min-width:901px){.table-wrap.mobile-cards{max-height:calc(100vh - 230px);overflow:auto;position:relative}.months-table th,.payroll-table th{position:sticky;top:0;z-index:20;background:#f3f6fb}}
 @media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}.table-wrap.mobile-cards{overflow:visible;border:0;background:transparent}.months-table{min-width:0;display:block}.months-table thead{display:none}.months-table tbody,.months-table tr,.months-table td{display:block;width:100%}.months-table tr{margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}.months-table td{border-bottom:1px solid #edf0f5;padding:10px 12px}.months-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:900;color:#667085;margin-bottom:5px}.months-table .mobile-row-title{display:block}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_hours]{max-width:100%;width:100%}.admin-info{min-width:0}.col-adjust{width:auto}.compact-save{flex-direction:row;flex-wrap:wrap}.item-row{align-items:flex-start}.side .muted{display:none}}
@@ -71,6 +76,30 @@ def ensure_paths() -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def current_edit_year_month() -> Tuple[int, int]:
+    """Latest month that may be edited in admin monthly tabs.
+
+    A month opens automatically when the server date reaches the first day
+    of that month. This prevents accidental entries in future months.
+    """
+    timezone_name = os.environ.get("PORTAL_TIMEZONE", "Europe/Berlin")
+    try:
+        today = datetime.now(ZoneInfo(timezone_name)) if ZoneInfo else datetime.now()
+    except Exception:
+        today = datetime.now()
+    return int(today.year), int(today.month)
+
+
+def month_is_editable(year: int, month: int) -> bool:
+    current_year, current_month = current_edit_year_month()
+    return (int(year), int(month)) <= (current_year, current_month)
+
+
+def month_locked_message(year: int, month: int) -> str:
+    month_name = MONATE.get(int(month), str(month))
+    return f"{month_name} {year} ist noch nicht zur Bearbeitung freigeschaltet. Eingaben sind erst ab dem 1. {month_name} {year} möglich."
 
 
 def normalize(text: str) -> str:
@@ -1902,9 +1931,14 @@ def admin_drivers_reorder():
 def admin_months():
     year = int(request.values.get("year") or datetime.now().year)
     month = int(request.values.get("month") or datetime.now().month)
+    editable = month_is_editable(year, month)
+    locked_note = month_locked_message(year, month)
     with db_conn() as conn:
         if request.method == "POST":
             action = request.form.get("action")
+            if not editable and action != "toggle_month_release":
+                flash(locked_note, "err")
+                return redirect(url_for("admin_months", year=year, month=month))
             if action == "toggle_month_release":
                 release = request.form.get("release") == "1"
                 set_month_release(conn, year, month, release)
@@ -2124,9 +2158,10 @@ def admin_months():
 
         recalc_all(conn); conn.commit()
         drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
-        for d in drivers:
-            get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
-        conn.commit()
+        if editable:
+            for d in drivers:
+                get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
+            conn.commit()
         rows = {int(r["driver_id"]): r for r in conn.execute("SELECT * FROM monthly_data WHERE year=? AND month=?", (year,month)).fetchall()}
         adjustments: Dict[int, List[sqlite3.Row]] = {}
         for item in conn.execute("""
@@ -2188,8 +2223,9 @@ def admin_months():
           <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
           <noscript><button class="primary">Anzeigen</button></noscript>
           <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF herunterladen</a>
-          <button class="primary" type="submit" form="all-months-form">Alle Einträge speichern</button>
+          <button class="primary" type="submit" form="all-months-form" {% if not editable %}disabled title="{{ locked_note }}"{% endif %}>Alle Einträge speichern</button>
           <div class="download-note">Der PDF-Button lädt die Datei direkt herunter.</div>
+          {% if not editable %}<div class="month-locked-note">{{ locked_note }}</div>{% endif %}
         </form>
         <form method="post" class="actions" style="margin-left:auto;align-items:center">
           <input type="hidden" name="action" value="toggle_month_release">
@@ -2242,6 +2278,11 @@ def admin_months():
       {% endfor %}
     </tbody></table></div></div>
     <script>
+    {% if not editable %}
+    document.querySelectorAll('.months-table input, .months-table textarea, .months-table select, .months-table button, button[form="all-months-form"]').forEach(function(el){
+      if(el.type !== 'hidden'){ el.disabled = true; el.title = '{{ locked_note }}'; }
+    });
+    {% endif %}
     document.querySelectorAll('.dropzone input[type="file"]').forEach(function(input){
       var zone = input.closest('.dropzone');
       var defaultText = 'Bild/Datei hier ablegen';
@@ -2332,7 +2373,7 @@ def admin_months():
       sync();
     });
     </script>
-    """, year=year, month=month, months=MONATE, month_released=month_released, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_v_enabled=row_v_enabled)
+    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_v_enabled=row_v_enabled)
     return base_page("Plus/Minus Stunden", body, "months")
 
 
@@ -2349,9 +2390,14 @@ def admin_import_pdf():
 def admin_payroll_hours():
     year = int(request.values.get("year") or datetime.now().year)
     month = int(request.values.get("month") or datetime.now().month)
+    editable = month_is_editable(year, month)
+    locked_note = month_locked_message(year, month)
     with db_conn() as conn:
         if request.method == "POST":
             action = request.form.get("action", "save")
+            if not editable:
+                flash(locked_note, "err")
+                return redirect(url_for("admin_payroll_hours", year=year, month=month))
             if action == "save_all":
                 saved_count = 0
                 for key in request.form:
@@ -2416,9 +2462,10 @@ def admin_payroll_hours():
 
         recalc_all(conn); conn.commit()
         drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
-        for d in drivers:
-            get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
-        conn.commit()
+        if editable:
+            for d in drivers:
+                get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
+            conn.commit()
         rows = {int(r["driver_id"]): r for r in conn.execute("SELECT * FROM monthly_data WHERE year=? AND month=?", (year, month)).fetchall()}
 
     body = render_template_string("""
@@ -2428,8 +2475,9 @@ def admin_payroll_hours():
         <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
         <noscript><button class="primary">Anzeigen</button></noscript>
         <a class="btn" href="{{ url_for('download_payroll_hours_export', year=year, month=month) }}">Lohnbüro-PDF herunterladen</a>
-        <button class="primary" type="submit" form="all-payroll-form">Alle Einträge speichern</button>
+        <button class="primary" type="submit" form="all-payroll-form" {% if not editable %}disabled title="{{ locked_note }}"{% endif %}>Alle Einträge speichern</button>
         <div class="download-note">Interne Admin-Infos werden in dieser PDF nicht angezeigt. „Allgemeine Infos für Lohnbüro“ werden ganz links angezeigt.</div>
+        {% if not editable %}<div class="month-locked-note">{{ locked_note }}</div>{% endif %}
       </form>
     </div>
     <div class="card"><h2>Stunden für Lohnabrechnung – {{ months[month] }} {{ year }}</h2>
@@ -2442,7 +2490,7 @@ def admin_payroll_hours():
       <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
         <td class="admin-info" data-label="Allgemeine Infos"><textarea form="payroll-{{ d['id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea></td>
         <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="payroll-{{ d['id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea></td>
-        <td class="nowrap" data-label="Fahrer"><b>{{ d['name'] }}</b></td>
+        <td class="nowrap" data-label="Fahrer"><b>{{ d['name'] }}</b>{% if r %}<span class="driver-balance-mini {{ signed_class(row_get(r, 'new_balance', 0)) }}">Stand: {{ fmt_signed(row_get(r, 'new_balance', 0)) }}</span>{% endif %}</td>
         <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"></form></td>
         <td data-label="Abrechnung"><input form="payroll-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
         {% set v_enabled = row_v_enabled(r) %}
@@ -2456,6 +2504,11 @@ def admin_payroll_hours():
       {% endfor %}
       </tbody></table></div></div>
     <script>
+    {% if not editable %}
+    document.querySelectorAll('.payroll-table input, .payroll-table textarea, .payroll-table select, .payroll-table button, button[form="all-payroll-form"]').forEach(function(el){
+      if(el.type !== 'hidden'){ el.disabled = true; el.title = '{{ locked_note }}'; }
+    });
+    {% endif %}
     function parseVPreviewValue(raw){var text=(raw||'').toString().trim().replace(/\s+/g,'').replace(',','.'); if(!text){return null;} var num=parseFloat(text); return Number.isFinite(num)?num:null;}
     function formatVPreview(num){return '= '+(num*14).toFixed(2).replace('.', ',');}
     document.querySelectorAll('.v-input').forEach(function(input){var preview=document.getElementById('v-preview-'+input.dataset.driver); function updatePreview(){if(!preview){return;} var num=parseVPreviewValue(input.value); preview.textContent=num===null?'':formatVPreview(num);} input.addEventListener('input', updatePreview); input.addEventListener('change', updatePreview); updatePreview();});
@@ -2482,7 +2535,7 @@ def admin_payroll_hours():
       });
     }
     </script>
-    """, year=year, month=month, months=MONATE, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, row_get=row_get, row_v_enabled=row_v_enabled)
+    """, year=year, month=month, months=MONATE, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_signed=fmt_signed, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_get=row_get, row_v_enabled=row_v_enabled)
     return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
@@ -2490,7 +2543,8 @@ def admin_payroll_hours():
 @admin_login_required
 def download_payroll_hours_export(year:int, month:int):
     with db_conn() as conn:
-        ensure_active_driver_month_rows(conn, year, month)
+        if month_is_editable(year, month):
+            ensure_active_driver_month_rows(conn, year, month)
         recalc_all(conn)
         path = export_payroll_hours_pdf(conn, year, month)
         conn.commit()
@@ -2912,7 +2966,8 @@ def download_pdf(document_id:int):
 @admin_login_required
 def download_month_export(year:int, month:int):
     with db_conn() as conn:
-        ensure_active_driver_month_rows(conn, year, month)
+        if month_is_editable(year, month):
+            ensure_active_driver_month_rows(conn, year, month)
         recalc_all(conn); path = export_month_pdf(conn, year, month); conn.commit()
     response = send_file(path, mimetype="application/pdf", as_attachment=True, download_name=path.name, max_age=0)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -3029,6 +3084,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
