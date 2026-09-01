@@ -184,6 +184,21 @@ def _expand_day_ranges(raw: str) -> List[int]:
             days.add(int(part))
     return sorted(days)
 
+def sick_days_count(raw: str) -> int:
+    """Return the number of unique selected sick days in the stored day ranges."""
+    try:
+        return len(_expand_day_ranges(raw))
+    except Exception:
+        return 0
+
+def sick_days_display(raw: str) -> str:
+    """Show stored sick-day ranges together with their total number of days."""
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    count = sick_days_count(value)
+    return f"{value} = {count} Tage"
+
 def normalize_vacation_count(raw: str) -> str:
     text = (raw or "").strip()
     if not text:
@@ -1686,7 +1701,7 @@ def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) ->
         fmt_decimal_input(row_get(r, "payroll_surcharge", 0)) or "-",
         fmt_decimal_input(row_get(r, "fuel_voucher", 0)) or "-",
         color_text((vacation_display(row_get(r, "vacation_days", "")) + " Tage") if vacation_display(row_get(r, "vacation_days", "")) else "-", "#067647"),
-        color_text(row_get(r, "sick_days", "") or "-", "#b42318"),
+        color_text(sick_days_display(row_get(r, "sick_days", "")) or "-", "#b42318"),
     ] for r in rows]
     if not pdf_rows:
         pdf_rows = [["-", "Keine Einträge", "-", "-", "-", "-", "-", "-"]]
@@ -2620,7 +2635,7 @@ def admin_payroll_hours():
         <td data-label="Zuschlag"><input form="payroll-{{ d['id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"></td>
         <td data-label="Tankgutschein"><input form="payroll-{{ d['id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"></td>
         <td data-label="Urlaub" class="days-vacation"><div class="vacation-input-wrap"><input form="payroll-{{ d['id'] }}" name="vacation_days" inputmode="numeric" pattern="[0-9]*" value="{{ vacation_display(row_get(r, 'vacation_days', '')) if r else '' }}"><span class="suffix">Tage</span></div></td>
-        <td data-label="Krank" class="days-sick"><input type="hidden" class="sick-days-input" form="payroll-{{ d['id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}"><button type="button" class="sick-calendar-open" data-form="payroll-{{ d['id'] }}" data-driver-name="{{ d['name'] }}">Kalender öffnen</button><div class="sick-days-overview">{{ row_get(r, 'sick_days', '') if r and row_get(r, 'sick_days', '') else 'Keine Kranktage' }}</div></td>
+        <td data-label="Krank" class="days-sick"><input type="hidden" class="sick-days-input" form="payroll-{{ d['id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}"><button type="button" class="sick-calendar-open" data-form="payroll-{{ d['id'] }}" data-driver-name="{{ d['name'] }}">Kalender öffnen</button><div class="sick-days-overview">{{ sick_days_display(row_get(r, 'sick_days', '')) if r and row_get(r, 'sick_days', '') else 'Keine Kranktage' }}</div></td>
         <td data-label="Aktion" class="actions compact-save"><button form="payroll-{{ d['id'] }}" class="small primary">Speichern</button></td>
       </tr>
       {% endfor %}
@@ -2672,7 +2687,7 @@ def admin_payroll_hours():
       });
     }
     </script>
-    """, year=year, month=month, months=MONATE, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_signed=fmt_signed, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_get=row_get, row_v_enabled=row_v_enabled, employment_class=employment_class, vacation_display=vacation_display, global_v_all=global_v_all)
+    """, year=year, month=month, months=MONATE, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_signed=fmt_signed, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_get=row_get, row_v_enabled=row_v_enabled, employment_class=employment_class, vacation_display=vacation_display, sick_days_display=sick_days_display, global_v_all=global_v_all)
     return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
