@@ -1656,8 +1656,14 @@ def month_has_real_data(row: sqlite3.Row, adjustment_count: int = 0, document_co
 # ---------------- PDF ----------------
 def _pdf_table(data: List[List[str]], widths: List[float]) -> Table:
     styles = getSampleStyleSheet()
-    cell = ParagraphStyle("Cell", parent=styles["BodyText"], fontName="Helvetica", fontSize=7.7, leading=9, textColor=colors.HexColor("#111827"), wordWrap="CJK")
-    header = ParagraphStyle("HeaderCell", parent=styles["BodyText"], fontName="Helvetica-Bold", fontSize=7.7, leading=9, alignment=1, textColor=colors.black, wordWrap="CJK")
+    # Gesamtübersicht has many columns. Keep it readable on landscape A4 without clipping.
+    compact = len(widths) >= 13
+    font_size = 6.1 if compact else 7.7
+    leading = 7.2 if compact else 9
+    h_pad = 2.2 if compact else 5
+    v_pad = 3.5 if compact else 7
+    cell = ParagraphStyle("Cell", parent=styles["BodyText"], fontName="Helvetica", fontSize=font_size, leading=leading, textColor=colors.HexColor("#111827"), wordWrap="CJK")
+    header = ParagraphStyle("HeaderCell", parent=styles["BodyText"], fontName="Helvetica-Bold", fontSize=font_size, leading=leading, alignment=1, textColor=colors.black, wordWrap="CJK")
     wrapped = [[Paragraph(str(c).replace("\n", "<br/>"), header if r == 0 else cell) for c in row] for r,row in enumerate(data)]
     table = Table(wrapped, colWidths=widths, repeatRows=1, splitByRow=1)
     table.setStyle(TableStyle([
@@ -1665,7 +1671,7 @@ def _pdf_table(data: List[List[str]], widths: List[float]) -> Table:
         ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, colors.HexColor("#f9fafb")]),
         ("BOX",(0,0),(-1,-1),0.8,colors.HexColor("#8f8b84")), ("INNERGRID",(0,0),(-1,-1),0.5,colors.HexColor("#b8b4ad")),
         ("VALIGN",(0,0),(-1,-1),"MIDDLE"), ("ALIGN",(1,0),(-1,-1),"CENTER"),
-        ("LEFTPADDING",(0,0),(-1,-1),5), ("RIGHTPADDING",(0,0),(-1,-1),5), ("TOPPADDING",(0,0),(-1,-1),7), ("BOTTOMPADDING",(0,0),(-1,-1),7),
+        ("LEFTPADDING",(0,0),(-1,-1),h_pad), ("RIGHTPADDING",(0,0),(-1,-1),h_pad), ("TOPPADDING",(0,0),(-1,-1),v_pad), ("BOTTOMPADDING",(0,0),(-1,-1),v_pad),
     ]))
     return table
 
@@ -1688,6 +1694,9 @@ def create_pdf_report(pdf_path: Path, title: str, subtitle: str, headers: List[s
         col_widths = [0.09,0.13,0.10,0.10,0.07,0.13,0.13,0.08,0.08,0.09]
     elif len(headers) == 11:
         col_widths = [0.08,0.10,0.12,0.09,0.09,0.06,0.12,0.12,0.07,0.07,0.08]
+    elif len(headers) == 14:
+        # Gesamtübersicht: all merged payroll + plus/minus data columns.
+        col_widths = [0.12,0.12,0.08,0.055,0.055,0.05,0.05,0.05,0.05,0.065,0.14,0.055,0.055,0.055]
     else:
         col_widths = [1/max(len(headers),1)] * len(headers)
     story = [Paragraph(title,title_style), Paragraph(subtitle,subtitle_style), Spacer(1,4*mm), _pdf_table([headers]+rows, [w*usable_width for w in col_widths])]
@@ -1786,40 +1795,108 @@ def month_all_drivers_v_enabled(conn: sqlite3.Connection, year: int, month: int)
     return bool(rows) and all(v_is_enabled(row_get(r, "v_enabled", 0)) for r in rows)
 
 def export_month_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
+    """Export the complete merged admin view as a Gesamtübersicht PDF.
+
+    It contains every meaningful data column from the combined
+    "Stunden für Lohnabrechnung" view. The Action column is intentionally
+    omitted because buttons/actions have no PDF representation.
+    """
     groups = load_driver_groups(conn)
-    grouped_driver_ids = {did for g in groups for did in g["member_ids"]}
     normal_rows = conn.execute("""
         SELECT m.*, d.name, d.id AS d_id
         FROM monthly_data m
         JOIN drivers d ON d.id=m.driver_id
-        WHERE m.year=? AND m.month=? AND COALESCE(d.is_disposition,0)=0
+        WHERE m.year=? AND m.month=? AND d.is_active=1 AND COALESCE(d.is_disposition,0)=0
         ORDER BY COALESCE(NULLIF(d.display_order,0), d.id), d.name COLLATE NOCASE
     """, (year, month)).fetchall()
 
-    pdf_rows = []
-    for r in normal_rows:
-        if int(r["driver_id"]) in grouped_driver_ids:
-            continue
-        pdf_rows.append([
-            f"{MONATE[month]} {year}", r["admin_info"] or "-", r["name"],
-            fmt_hours(r["worked_hours"]), fmt_hours(r["payroll_hours"]), fmt_v_display(row_get(r, "v_note", ""), row_get(r, "v_enabled", 0), True),
-            format_value_comment(r["bonus_hours"], r["bonus_comment"], True),
-            format_value_comment(r["deduction_hours"], r["deduction_comment"], True),
-            fmt_signed(r["difference_hours"]), fmt_signed(r["previous_balance"]), fmt_signed(r["new_balance"]),
-        ])
+    def vacation_pdf(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "-"
+        parts = [p.strip() for p in raw.splitlines() if p.strip()]
+        shown = []
+        for part in parts:
+            try:
+                v = vacation_display(part)
+                shown.append((v + " Tage") if v else "-")
+            except Exception:
+                shown.append(part)
+        return "\n".join(shown) or "-"
+
+    def sick_pdf(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "-"
+        parts = [p.strip() for p in raw.splitlines() if p.strip()]
+        shown = []
+        for part in parts:
+            try:
+                shown.append(sick_days_display(part) or part)
+            except Exception:
+                shown.append(part)
+        return "\n".join(shown) or "-"
+
+    def adjustments_pdf(row: Any) -> str:
+        bonus = format_value_comment(safe_float(row_get(row, "bonus_hours", 0)), str(row_get(row, "bonus_comment", "") or ""), True)
+        deduction = format_value_comment(safe_float(row_get(row, "deduction_hours", 0)), str(row_get(row, "deduction_comment", "") or ""), True)
+        return f"Zuschüsse: {bonus}\nAbzüge: {deduction}"
+
+    def overview_row(name: str, row: Any) -> List[str]:
+        return [
+            str(row_get(row, "admin_info", "") or "-").strip() or "-",
+            str(row_get(row, "payroll_office_info", "") or "-").strip() or "-",
+            name,
+            fmt_hours(safe_float(row_get(row, "worked_hours", 0))),
+            fmt_hours(safe_float(row_get(row, "payroll_hours", 0))),
+            fmt_v_display(row_get(row, "v_note", ""), row_get(row, "v_enabled", 0), True),
+            fmt_decimal_input(safe_float(row_get(row, "payroll_surcharge", 0))) or "-",
+            fmt_decimal_input(safe_float(row_get(row, "fuel_voucher", 0))) or "-",
+            vacation_pdf(row_get(row, "vacation_days", "")),
+            sick_pdf(row_get(row, "sick_days", "")),
+            adjustments_pdf(row),
+            fmt_signed(safe_float(row_get(row, "previous_balance", 0))),
+            fmt_signed(safe_float(row_get(row, "difference_hours", 0))),
+            fmt_signed(safe_float(row_get(row, "new_balance", 0))),
+        ]
+
+    # Match the merged screen: every individual driver remains visible.
+    pdf_rows = [overview_row(str(r["name"]), r) for r in normal_rows]
+
+    # Driver groups are shown additionally as a Plus/Minus summary on the merged screen.
     for g in groups:
-        r = make_group_month_summary(conn, g, year, month)
-        pdf_rows.append([
-            f"{MONATE[month]} {year}", r.get("admin_info") or "-", g["name"],
-            fmt_hours(r.get("worked_hours", 0)), fmt_hours(r.get("payroll_hours", 0)), fmt_v_display(r.get("v_note", ""), r.get("v_enabled", 0), True),
-            format_value_comment(r.get("bonus_hours", 0), r.get("bonus_comment", ""), True),
-            format_value_comment(r.get("deduction_hours", 0), r.get("deduction_comment", ""), True),
-            fmt_signed(r.get("difference_hours", 0)), fmt_signed(r.get("previous_balance", 0)), fmt_signed(r.get("new_balance", 0)),
-        ])
+        summary = make_group_month_summary(conn, g, year, month)
+        pdf_rows.append(overview_row(f"{g['name']} (Gruppe)", summary))
+
     if not pdf_rows:
-        pdf_rows = [[f"{MONATE[month]} {year}", "-", "Keine Einträge", "-", "-", "-", "-", "-", "-", "-", "-"]]
-    path = EXPORT_DIR / str(year) / f"{month:02d}_{MONATE[month]}_{year}.pdf"
-    create_pdf_report(path, f"Monatsübersicht {MONATE[month]} {year}", "Admin-Übersicht inklusive interner Allgemeiner Infos", ["Monat","Allgemeine Infos","Fahrer","Stunden","Abrechnung","V","Zuschüsse","Abzüge","Differenz","Aktueller Stand","Neuer Stand"], pdf_rows)
+        pdf_rows = [["-", "-", "Keine Einträge", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
+
+    safe_name = secure_filename(f"{month:02d}_{MONATE[month]}_{year}_Gesamtuebersicht.pdf")
+    path = EXPORT_DIR / str(year) / safe_name
+    headers = [
+        "Allgemeine Infos\nnur Admin",
+        "Allgemeine Infos\nfür Lohnbüro",
+        "Fahrer",
+        "geleistete\nStunden",
+        "Abrechnung",
+        "V",
+        "Zuschlag",
+        "Tankgutschein",
+        "Urlaub",
+        "Krank",
+        "Zuschüsse / Abzüge",
+        "Alt",
+        "Diff",
+        "Neu",
+    ]
+    create_pdf_report(
+        path,
+        f"Gesamtübersicht - {MONATE[month]} {year}",
+        "Vollständige Admin-Gesamtübersicht mit Lohnabrechnung und Plus/Minus",
+        headers,
+        pdf_rows,
+        wide=True,
+    )
     return path
 
 def export_payroll_hours_pdf(conn: sqlite3.Connection, year: int, month: int) -> Path:
@@ -2549,7 +2626,7 @@ def admin_months():
           <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
           <noscript><button class="primary">Anzeigen</button></noscript>
           <a class="btn" href="{{ url_for('download_payroll_hours_export', year=year, month=month) }}">Lohnbüro-PDF herunterladen</a>
-          <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF herunterladen</a>
+          <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Gesamtübersicht-PDF herunterladen</a>
           <button class="primary" type="submit" form="all-months-form" {% if not editable %}disabled title="{{ locked_note }}"{% endif %}>Alle Einträge speichern</button>
           <div class="download-note">Alle bisherigen Felder aus „Stunden für Lohnabrechnung“ und „Plus/Minus Stunden“ sind hier in einer Ansicht zusammengeführt.</div>
           {% if not editable %}<div class="month-locked-note">{{ locked_note }}</div>{% endif %}
@@ -2581,8 +2658,8 @@ def admin_months():
         <th class="col-days">Urlaub</th>
         <th class="col-sick">Krank</th>
         <th class="col-adjust">Zuschüsse / Abzüge</th>
-        <th class="col-small">Diff</th>
         <th class="col-balance">Alt</th>
+        <th class="col-small">Diff</th>
         <th class="col-balance">Neu</th>
         <th class="col-action">Aktion</th>
       </tr></thead><tbody>
@@ -2606,8 +2683,8 @@ def admin_months():
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% if it.get('is_group_adj') %}{% for f in group_adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>{% endif %}</div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
-        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }}">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Alt" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
+        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }}">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }}" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button><span class="badge">Gruppe</span></td>
         {% else %}
@@ -2626,8 +2703,8 @@ def admin_months():
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% for f in adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
-        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }}">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Alt"><input class="balance-input balance-previous" form="save-{{ d['form_id'] }}" name="previous_balance_manual" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" title="Ändern = manueller Wert. Feld leeren und speichern = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="previous_balance_touched" value="0" class="balance-previous-touched"><input type="hidden" form="all-months-form" name="previous_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" class="all-copy-previous-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="previous_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-previous-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'previous_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'previous_balance_override', None) is not none else 'auto' }}</div></td>
+        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }}">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
         <td data-label="Neu"><input class="balance-input balance-new {{ signed_class(r['new_balance']) if r else '' }}" form="save-{{ d['form_id'] }}" name="new_balance_manual" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" title="Ändern = manueller Wert. Dieser Wert wird in den nächsten Monat übernommen. Feld leeren = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="new_balance_touched" value="0" class="balance-new-touched"><input type="hidden" form="all-months-form" name="new_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" class="all-copy-new-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="new_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-new-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'new_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'new_balance_override', None) is not none else 'auto' }}</div></td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
         {% endif %}
@@ -2764,7 +2841,7 @@ def admin_exports():
         """).fetchall()
     body = render_template_string("""
     <div class="card"><h2>Export & Backup</h2><div class="actions"><a class="btn primary" href="{{ url_for('download_backup_json') }}">Backup JSON herunterladen</a><a class="btn" href="{{ url_for('download_backup_csv') }}">Monatsdaten CSV herunterladen</a><a class="btn danger" href="{{ url_for('admin_cleanup') }}">Aufräumen / Löschen</a></div><p class="download-note">Hier werden nur Monate angezeigt, die echte Daten enthalten. Leere automatisch erzeugte Monate erscheinen nicht mehr.</p></div>
-    <div class="card"><h2>Monats-PDFs</h2>{% if month_rows %}<div class="driver-grid">{% for r in month_rows %}<a class="month-card" href="{{ url_for('download_month_export', year=r['year'], month=r['month']) }}"><strong>{{ months[r['month']] }} {{ r['year'] }}</strong>PDF herunterladen<br><span class="muted">{{ r['filled_rows'] }} Eintrag/Einträge</span></a>{% endfor %}</div>{% else %}<p class="muted">Noch keine echten Monatsdaten vorhanden.</p>{% endif %}</div>
+    <div class="card"><h2>Gesamtübersicht-PDFs</h2>{% if month_rows %}<div class="driver-grid">{% for r in month_rows %}<a class="month-card" href="{{ url_for('download_month_export', year=r['year'], month=r['month']) }}"><strong>{{ months[r['month']] }} {{ r['year'] }}</strong>Gesamtübersicht-PDF herunterladen<br><span class="muted">{{ r['filled_rows'] }} Eintrag/Einträge</span></a>{% endfor %}</div>{% else %}<p class="muted">Noch keine echten Monatsdaten vorhanden.</p>{% endif %}</div>
     """, month_rows=month_rows, months=MONATE)
     return base_page("Export/Backup", body, "exports")
 
