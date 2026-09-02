@@ -59,10 +59,86 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1600px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:125px}.col-adjust{width:350px}.col-small{width:62px}.col-balance{width:92px}.col-action{width:100px}.balance-input{min-width:72px;padding:8px 7px;font-size:13px;font-weight:800}.balance-mode{margin-top:3px;font-size:10px;color:#98a2b3;font-weight:800;line-height:1.05}.balance-mode.manual{color:#b54708}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_note]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_note]{max-width:115px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#667085;font-size:11px;font-weight:800;line-height:1;white-space:nowrap;max-width:70px;overflow:hidden;margin-bottom:0}.v-toggle input{width:auto!important;min-width:13px!important;height:13px!important;padding:0!important;margin:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#667085!important;opacity:.72}.v-disabled-note{font-size:10px;color:#98a2b3;margin-top:3px;font-weight:800;line-height:1.05;max-width:70px}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:1460px}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick .sick-calendar-open{border-color:#fda29b;background:#fff1f0;color:#b42318;text-align:left}.payroll-table textarea{min-height:74px;font-size:14px}.driver-name{font-weight:900}.employment-vollzeit{color:#7c3aed}.employment-teilzeit{color:#d4a000}.employment-aushilfe{color:#38bdf8}.vacation-input-wrap{position:relative}.vacation-input-wrap input{padding-right:48px}.vacation-input-wrap .suffix{position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;color:#667085;opacity:.55;font-weight:800;font-size:12px}.sick-days-overview{margin-top:6px;font-size:12px;font-weight:600;color:#b42318;line-height:1.3}.sick-days-total{font-weight:900;text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:2px}.sick-calendar-modal{position:fixed;inset:0;background:rgba(15,36,70,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:1000}.sick-calendar-modal.open{display:flex}.sick-calendar-panel{width:min(520px,100%);background:#fff;border-radius:22px;border:1px solid var(--line);box-shadow:0 24px 70px rgba(16,24,40,.25);padding:18px}.sick-calendar-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.sick-calendar-week,.sick-calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.sick-calendar-week div{text-align:center;color:#667085;font-size:12px;font-weight:900;padding:5px}.sick-day{min-height:46px;padding:8px 4px;border-radius:12px;text-align:center;font-weight:900;touch-action:none;user-select:none}.sick-day.selected{background:#fee4e2;border-color:#f04438;color:#b42318}.sick-day.blank{visibility:hidden}.sick-calendar-hint{font-size:12px;color:#667085;margin:10px 0}.global-v-toggle{display:inline-flex!important;align-items:center;gap:5px;font-size:11px;font-weight:900;color:#667085;margin-top:5px;white-space:nowrap}.global-v-toggle input{width:auto!important;margin:0!important;padding:0!important}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}.driver-balance-mini{display:block;margin-top:4px;font-size:11px;font-weight:900;opacity:.68;line-height:1.1;letter-spacing:.01em}.month-locked-note{margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#b54708;font-weight:800;font-size:13px}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:125px}.col-adjust{width:350px}.col-small{width:62px}.col-balance{width:92px}.col-action{width:100px}.balance-input{min-width:72px;padding:8px 7px;font-size:13px;font-weight:800}.balance-mode{margin-top:3px;font-size:10px;color:#98a2b3;font-weight:800;line-height:1.05}.balance-mode.manual{color:#b54708}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_note]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_note]{max-width:115px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#667085;font-size:11px;font-weight:800;line-height:1;white-space:nowrap;max-width:70px;overflow:hidden;margin-bottom:0}.v-toggle input{width:auto!important;min-width:13px!important;height:13px!important;padding:0!important;margin:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#667085!important;opacity:.72}.v-disabled-note{font-size:10px;color:#98a2b3;margin-top:3px;font-weight:800;line-height:1.05;max-width:70px}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick .sick-calendar-open{border-color:#fda29b;background:#fff1f0;color:#b42318;text-align:left}.payroll-table textarea{min-height:74px;font-size:14px}.driver-name{font-weight:900}.employment-vollzeit{color:#7c3aed}.employment-teilzeit{color:#d4a000}.employment-aushilfe{color:#38bdf8}.vacation-input-wrap{position:relative}.vacation-input-wrap input{padding-right:48px}.vacation-input-wrap .suffix{position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;color:#667085;opacity:.55;font-weight:800;font-size:12px}.sick-days-overview{margin-top:6px;font-size:12px;font-weight:600;color:#b42318;line-height:1.3}.sick-days-total{font-weight:900;text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:2px}.sick-calendar-modal{position:fixed;inset:0;background:rgba(15,36,70,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:1000}.sick-calendar-modal.open{display:flex}.sick-calendar-panel{width:min(520px,100%);background:#fff;border-radius:22px;border:1px solid var(--line);box-shadow:0 24px 70px rgba(16,24,40,.25);padding:18px}.sick-calendar-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.sick-calendar-week,.sick-calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.sick-calendar-week div{text-align:center;color:#667085;font-size:12px;font-weight:900;padding:5px}.sick-day{min-height:46px;padding:8px 4px;border-radius:12px;text-align:center;font-weight:900;touch-action:none;user-select:none}.sick-day.selected{background:#fee4e2;border-color:#f04438;color:#b42318}.sick-day.blank{visibility:hidden}.sick-calendar-hint{font-size:12px;color:#667085;margin:10px 0}.global-v-toggle{display:inline-flex!important;align-items:center;gap:5px;font-size:11px;font-weight:900;color:#667085;margin-top:5px;white-space:nowrap}.global-v-toggle input{width:auto!important;margin:0!important;padding:0!important}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}.driver-balance-mini{display:block;margin-top:4px;font-size:11px;font-weight:900;opacity:.68;line-height:1.1;letter-spacing:.01em}.month-locked-note{margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#b54708;font-weight:800;font-size:13px}
 
 @media(min-width:901px){.table-wrap.mobile-cards{max-height:calc(100vh - 230px);overflow:auto;position:relative}.months-table th,.payroll-table th{position:sticky;top:0;z-index:20;background:#f3f6fb}}
 @media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}.table-wrap.mobile-cards{overflow:visible;border:0;background:transparent}.months-table{min-width:0;display:block}.months-table thead{display:none}.months-table tbody,.months-table tr,.months-table td{display:block;width:100%}.months-table tr{margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}.months-table td{border-bottom:1px solid #edf0f5;padding:10px 12px}.months-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:900;color:#667085;margin-bottom:5px}.months-table .mobile-row-title{display:block}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_note]{max-width:100%;width:100%}.admin-info{min-width:0}.col-adjust{width:auto}.compact-save{flex-direction:row;flex-wrap:wrap}.item-row{align-items:flex-start}.side .muted{display:none}}
+
+/* --- Zusammengefuehrte Stunden/Lohnabrechnung + Plus/Minus Ansicht --- */
+@media(min-width:1181px){
+.shell-payroll_hours{grid-template-columns:205px minmax(0,1fr)}
+.shell-payroll_hours .side{padding:18px 12px}
+.shell-payroll_hours .main{padding:12px 8px;max-width:none;min-width:0}
+.page-payroll_hours .top{margin-bottom:12px}
+.page-payroll_hours .combined-toolbar{padding:12px;margin-bottom:12px}
+.page-payroll_hours .combined-card{padding:12px 6px}
+.page-payroll_hours .combined-wrap{overflow-x:hidden!important;overflow-y:auto;max-height:calc(100vh - 238px);border-radius:14px}
+.page-payroll_hours .merged-payroll-table{table-layout:fixed;min-width:0!important;width:100%;font-size:11px}
+.page-payroll_hours .merged-payroll-table th,.page-payroll_hours .merged-payroll-table td{padding:6px 4px;min-width:0;overflow-wrap:anywhere}
+.page-payroll_hours .merged-payroll-table th{font-size:10px;line-height:1.12}
+.page-payroll_hours .merged-payroll-table .col-admin{width:8.5%}
+.page-payroll_hours .merged-payroll-table .col-pay-info{width:8.5%}
+.page-payroll_hours .merged-payroll-table .col-driver{width:8.5%}
+.page-payroll_hours .merged-payroll-table .col-hours{width:4.5%}
+.page-payroll_hours .merged-payroll-table .col-payroll{width:4.5%}
+.page-payroll_hours .merged-payroll-table .col-v{width:6%}
+.page-payroll_hours .merged-payroll-table .col-pay-num{width:4.3%}
+.page-payroll_hours .merged-payroll-table .col-days{width:4.5%}
+.page-payroll_hours .merged-payroll-table .col-sick{width:6.2%}
+.page-payroll_hours .merged-payroll-table .col-adjust{width:18.5%}
+.page-payroll_hours .merged-payroll-table .col-small{width:4%}
+.page-payroll_hours .merged-payroll-table .col-balance{width:5.5%}
+.page-payroll_hours .merged-payroll-table .col-action{width:6.2%}
+.page-payroll_hours .merged-payroll-table input,.page-payroll_hours .merged-payroll-table select,.page-payroll_hours .merged-payroll-table textarea,.page-payroll_hours .merged-payroll-table button{min-width:0;width:100%;font-size:11px;padding:7px 5px;border-radius:9px}
+.page-payroll_hours .merged-payroll-table textarea{min-height:60px;line-height:1.15}
+.page-payroll_hours .merged-payroll-table .admin-info{min-width:0}
+.page-payroll_hours .merged-payroll-table .admin-info textarea{min-height:60px;font-size:11px}
+.page-payroll_hours .merged-payroll-table .nowrap{white-space:normal}
+.page-payroll_hours .merged-payroll-table .driver-name{display:block;overflow-wrap:anywhere;line-height:1.15}
+.page-payroll_hours .merged-payroll-table .driver-balance-mini{display:none}
+.page-payroll_hours .merged-payroll-table .balance-input{min-width:0;width:100%;padding:7px 4px;font-size:11px}
+.page-payroll_hours .merged-payroll-table .balance-mode{font-size:8px}
+.page-payroll_hours .merged-payroll-table .v-toggle{font-size:9px;max-width:100%;white-space:normal;gap:2px}
+.page-payroll_hours .merged-payroll-table .v-disabled-note{font-size:8px;max-width:100%}
+.page-payroll_hours .merged-payroll-table .global-v-toggle{font-size:8px;white-space:normal}
+.page-payroll_hours .merged-payroll-table .vacation-input-wrap .suffix{display:none}
+.page-payroll_hours .merged-payroll-table .sick-calendar-open{font-size:9px;padding:7px 3px;white-space:normal}
+.page-payroll_hours .merged-payroll-table .sick-days-overview{font-size:8px;overflow-wrap:anywhere}
+.page-payroll_hours .merged-payroll-table .mini-form,.page-payroll_hours .merged-payroll-table .group-mini-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.72fr);gap:4px;align-items:center}
+.page-payroll_hours .merged-payroll-table .mini-form select,.page-payroll_hours .merged-payroll-table .group-mini-form select,.page-payroll_hours .merged-payroll-table .mini-form input[name=item_hours],.page-payroll_hours .merged-payroll-table .group-mini-form input[name=item_hours]{width:100%!important}
+.page-payroll_hours .merged-payroll-table .mini-form input[name=item_note],.page-payroll_hours .merged-payroll-table .group-mini-form input[name=item_note],.page-payroll_hours .merged-payroll-table .dropzone,.page-payroll_hours .merged-payroll-table .mini-form button,.page-payroll_hours .merged-payroll-table .group-mini-form button{grid-column:1/-1;width:100%!important}
+.page-payroll_hours .merged-payroll-table .dropzone{min-height:34px;padding:6px 4px;font-size:9px;border-radius:9px}
+.page-payroll_hours .merged-payroll-table .sum-box{font-size:9px;line-height:1.2;margin-top:5px}
+.page-payroll_hours .merged-payroll-table .adjustment-list{margin-top:6px;padding-top:6px}
+.page-payroll_hours .merged-payroll-table .item-row{display:flex;flex-wrap:wrap;gap:4px;min-width:0;padding:4px;font-size:9px;align-items:flex-start}
+.page-payroll_hours .merged-payroll-table .item-row form{margin-left:0}
+.page-payroll_hours .merged-payroll-table .item-row span,.page-payroll_hours .merged-payroll-table .file-pill{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.page-payroll_hours .merged-payroll-table .file-pill{font-size:8px;padding:3px 4px}
+.page-payroll_hours .merged-payroll-table .compact-save{display:flex;flex-direction:column;gap:5px;align-items:stretch}
+.page-payroll_hours .merged-payroll-table .compact-save .btn,.page-payroll_hours .merged-payroll-table .compact-save button{width:100%!important;font-size:9px;padding:7px 3px}
+.page-payroll_hours .merged-payroll-table .download-note{font-size:8px}
+.page-payroll_hours .readonly-summary{font-size:9px;line-height:1.2;color:#667085;white-space:pre-line;overflow-wrap:anywhere}
+}
+@media(max-width:1180px){
+.page-payroll_hours .combined-wrap{overflow:visible!important;max-height:none!important;border:0;background:transparent}
+.page-payroll_hours .merged-payroll-table{display:block;min-width:0!important;width:100%}
+.page-payroll_hours .merged-payroll-table thead{display:none}
+.page-payroll_hours .merged-payroll-table tbody{display:block;width:100%}
+.page-payroll_hours .merged-payroll-table tr{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));width:100%;margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}
+.page-payroll_hours .merged-payroll-table td{display:block!important;width:100%!important;border-bottom:1px solid #edf0f5;padding:10px 12px;min-width:0}
+.page-payroll_hours .merged-payroll-table td::before{content:attr(data-label);display:block;font-size:11px;font-weight:900;color:#667085;margin-bottom:5px}
+.page-payroll_hours .merged-payroll-table td[data-label="Zuschüsse / Abzüge"],.page-payroll_hours .merged-payroll-table td[data-label="Aktion"]{grid-column:1/-1}
+.page-payroll_hours .merged-payroll-table input,.page-payroll_hours .merged-payroll-table select,.page-payroll_hours .merged-payroll-table textarea,.page-payroll_hours .merged-payroll-table button,.page-payroll_hours .merged-payroll-table .balance-input{max-width:none!important;width:100%!important}
+.page-payroll_hours .merged-payroll-table .mini-form,.page-payroll_hours .merged-payroll-table .group-mini-form{display:grid;grid-template-columns:120px 90px minmax(150px,1fr) 140px auto;gap:6px}
+.page-payroll_hours .merged-payroll-table .dropzone{width:140px}
+}
+@media(max-width:650px){
+.page-payroll_hours .merged-payroll-table tr{grid-template-columns:1fr}
+.page-payroll_hours .merged-payroll-table td[data-label="Zuschüsse / Abzüge"],.page-payroll_hours .merged-payroll-table td[data-label="Aktion"]{grid-column:auto}
+.page-payroll_hours .merged-payroll-table .mini-form,.page-payroll_hours .merged-payroll-table .group-mini-form{grid-template-columns:1fr}
+.page-payroll_hours .merged-payroll-table .dropzone{width:100%}
+}
+
 """
 
 # ---------------- basic helpers ----------------
@@ -1871,14 +1947,14 @@ def admin_api_required() -> None:
 def base_page(title: str, body: str, active: str = "dashboard") -> str:
     nav = [
         ("dashboard","Dashboard",url_for("admin_dashboard")), ("drivers","Fahrer",url_for("admin_drivers")),
-        ("payroll_hours","Stunden für Lohnabrechnung",url_for("admin_payroll_hours")),
+        ("payroll_hours","Stunden für Lohnabrechnung",url_for("admin_months")),
         ("exports","Export/Backup",url_for("admin_exports")), ("cleanup","Aufräumen",url_for("admin_cleanup")), ("portal","Fahrerportal",url_for("driver_login")),
     ]
     flashes = "".join(f'<div class="flash {"ok" if c=="ok" else "err"}">{m}</div>' for c,m in get_flashed_messages(with_categories=True))
     return render_template_string("""
     <!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title }}</title><style>{{ css }}</style></head><body>
-    <div class="shell"><aside class="side"><div class="brand">± Plus/Minus Cloud</div><div class="nav">{% for key,label,href in nav %}<a class="{{ 'active' if key==active else '' }}" href="{{ href }}">{{ label }}</a>{% endfor %}<a href="{{ url_for('admin_logout') }}">Logout Admin</a></div><p class="muted" style="color:#bdd2f4;margin-top:24px">Zentrale Cloud-Datenbank. Keine manuelle Synchronisation.</p></aside>
-    <main class="main"><div class="top"><div><div class="title">{{ title }}</div><div class="subtitle">Änderungen werden direkt auf dem Server gespeichert und sind sofort auf allen PCs sichtbar.</div></div><span class="badge">Live Cloud</span></div>{{ flashes|safe }}{{ body|safe }}</main></div>
+    <div class="shell shell-{{ active }}"><aside class="side"><div class="brand">± Plus/Minus Cloud</div><div class="nav">{% for key,label,href in nav %}<a class="{{ 'active' if key==active else '' }}" href="{{ href }}">{{ label }}</a>{% endfor %}<a href="{{ url_for('admin_logout') }}">Logout Admin</a></div><p class="muted" style="color:#bdd2f4;margin-top:24px">Zentrale Cloud-Datenbank. Keine manuelle Synchronisation.</p></aside>
+    <main class="main page-{{ active }}"><div class="top"><div><div class="title">{{ title }}</div><div class="subtitle">Änderungen werden direkt auf dem Server gespeichert und sind sofort auf allen PCs sichtbar.</div></div><span class="badge">Live Cloud</span></div>{{ flashes|safe }}{{ body|safe }}</main></div>
     <script>
     (function(){
       const key = 'plusminus_scroll_restore_v1';
@@ -2040,7 +2116,7 @@ def admin_drivers():
                         for pos, mid in enumerate(member_ids, start=1):
                             conn.execute("INSERT INTO driver_group_members(group_id,driver_id,position) VALUES(?,?,?)", (gid, mid, pos))
                         audit(conn, "driver_group_create", f"{group_name}: {member_ids}")
-                        conn.commit(); flash("Fahrergruppe erstellt. In Plus/Minus Stunden werden diese Fahrer zusammen angezeigt.", "ok")
+                        conn.commit(); flash("Fahrergruppe erstellt. In „Stunden für Lohnabrechnung“ erscheint zusätzlich eine gemeinsame Plus/Minus-Gruppenzeile.", "ok")
             elif action == "delete_group":
                 gid = int(request.form["group_id"])
                 conn.execute("DELETE FROM driver_groups WHERE id=?", (gid,))
@@ -2052,7 +2128,7 @@ def admin_drivers():
         driver_sort_mode = get_driver_sort_mode(conn)
     body = render_template_string("""
     <div class="card"><h2>Neuen Fahrer anlegen</h2><form method="post" class="grid grid-4"><input type="hidden" name="action" value="create"><div><label>Name</label><input name="name" required></div><div><label>Vollzeit/Teilzeit/Aushilfe</label><select name="employment_type"><option value="">— auswählen —</option><option value="vollzeit">Vollzeit</option><option value="teilzeit">Teilzeit</option><option value="aushilfe">Aushilfe</option></select></div><div><label>Benutzername</label><input name="username" placeholder="automatisch"></div><div><label>Passwort</label><input name="password" required></div><div><label>Anfangssaldo</label><input name="starting_balance" value="0"><label style="margin-top:10px;width:auto;font-weight:800"><input style="width:auto" type="checkbox" name="is_disposition"> Disposition</label><div class="download-note">Wenn aktiviert, wird daraus kein Fahrer, sondern ein Dispo-Login nur für das Dashboard mit aktuellen Salden.</div></div><button class="primary">Anlegen</button></form></div>
-    <div class="card"><h2>Fahrer nur für Plus/Minus Stunden zusammenführen</h2><p class="muted">Die ausgewählten Fahrer bleiben bei „Stunden für Lohnabrechnung“ einzeln sichtbar. Nur in „Plus/Minus Stunden“ erscheinen sie als gemeinsame Zeile mit zusammengerechneten Werten.</p><form method="post" class="grid grid-3"><input type="hidden" name="action" value="create_group"><div><label>Gruppenname</label><input name="group_name" placeholder="z.B. Alex und Jennifer"></div><div><label>Fahrer auswählen</label><select name="group_driver_ids" multiple size="6">{% for d in drivers %}<option value="{{ d['id'] }}">{{ d['name'] }}</option>{% endfor %}</select><div class="download-note">Mehrere auswählen mit Strg/Cmd oder Shift.</div></div><div style="align-self:end"><button class="primary">Gruppe erstellen</button></div></form>{% if groups %}<div class="adjustment-list"><h3>Aktive Gruppen</h3>{% for g in groups %}<div class="item-row"><b>{{ g.name }}</b><span class="muted">{{ g.members|map(attribute='name')|join(', ') }}</span><form method="post" onsubmit="return confirm('Gruppe wirklich löschen? Die Fahrer und Monatsdaten bleiben erhalten.')"><input type="hidden" name="action" value="delete_group"><input type="hidden" name="group_id" value="{{ g.group['id'] }}"><button class="small danger">Gruppe löschen</button></form></div>{% endfor %}</div>{% endif %}</div>
+    <div class="card"><h2>Fahrer für Plus/Minus zusätzlich zusammenführen</h2><p class="muted">Die ausgewählten Fahrer bleiben in „Stunden für Lohnabrechnung“ einzeln sichtbar. Zusätzlich erscheint dort eine gemeinsame Gruppenzeile mit den zusammengerechneten Plus/Minus-Werten.</p><form method="post" class="grid grid-3"><input type="hidden" name="action" value="create_group"><div><label>Gruppenname</label><input name="group_name" placeholder="z.B. Alex und Jennifer"></div><div><label>Fahrer auswählen</label><select name="group_driver_ids" multiple size="6">{% for d in drivers %}<option value="{{ d['id'] }}">{{ d['name'] }}</option>{% endfor %}</select><div class="download-note">Mehrere auswählen mit Strg/Cmd oder Shift.</div></div><div style="align-self:end"><button class="primary">Gruppe erstellen</button></div></form>{% if groups %}<div class="adjustment-list"><h3>Aktive Gruppen</h3>{% for g in groups %}<div class="item-row"><b>{{ g.name }}</b><span class="muted">{{ g.members|map(attribute='name')|join(', ') }}</span><form method="post" onsubmit="return confirm('Gruppe wirklich löschen? Die Fahrer und Monatsdaten bleiben erhalten.')"><input type="hidden" name="action" value="delete_group"><input type="hidden" name="group_id" value="{{ g.group['id'] }}"><button class="small danger">Gruppe löschen</button></form></div>{% endfor %}</div>{% endif %}</div>
     {% if disposition_accounts %}<div class="card"><h2>Disposition-Accounts</h2><p class="muted">Diese Accounts sehen nur das Dashboard mit den aktuellen Salden und keine Fahrerportal- oder Admin-Tabs.</p><div class="table-wrap"><table style="min-width:900px"><thead><tr><th>Name</th><th>Benutzername</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody>{% for d in disposition_accounts %}<tr><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="starting_balance" value="0"><td><input name="name" value="{{ d['name'] }}"></td><td><input name="username" value="{{ d['username'] }}"></td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Disposition-Account wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
     <div class="card"><div class="actions" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Fahrer verwalten</h2><div class="actions"><span class="muted">Sortieren nach:</span><form method="post"><input type="hidden" name="action" value="sort_custom"><button class="small driver-sort-button driver-sort-button-custom {{ 'primary' if driver_sort_mode=='custom' else '' }}" type="submit">Eigene Sortierung</button></form><form method="post"><input type="hidden" name="action" value="sort_name_az"><button class="small driver-sort-button driver-sort-button-az {{ 'primary' if driver_sort_mode=='name_az' else '' }}" type="submit">Name A-Z</button></form></div></div><p class="muted">Ziehe die Fahrer mit dem Griff links nach oben oder unten. Die Reihenfolge wird automatisch gespeichert. Bei alten Konten wird das aktuelle Passwort nach dem nächsten erfolgreichen Fahrer-Login angezeigt; alternativ kann es hier neu gesetzt werden.</p><div class="table-wrap"><table><thead><tr><th style="width:48px">Sort.</th><th>Name</th><th>Vollzeit/Teilzeit/Aushilfe</th><th>Benutzername</th><th>Anfang</th><th>Aktueller Saldo</th><th>Aktiv</th><th>Aktuelles Passwort</th><th>Neues Passwort</th><th>Aktion</th></tr></thead><tbody id="drivers-sortable">{% for d in drivers %}<tr draggable="true" data-driver-id="{{ d['id'] }}"><td class="drag-handle" title="Ziehen zum Sortieren" style="cursor:grab;font-size:20px;text-align:center;color:#667085">☰</td><form method="post"><input type="hidden" name="action" value="update"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><td><input name="name" value="{{ d['name'] }}"></td><td><select name="employment_type"><option value="" {% if not d['employment_type'] %}selected{% endif %}>— auswählen —</option><option value="vollzeit" {% if d['employment_type']=='vollzeit' %}selected{% endif %}>Vollzeit</option><option value="teilzeit" {% if d['employment_type']=='teilzeit' %}selected{% endif %}>Teilzeit</option><option value="aushilfe" {% if d['employment_type']=='aushilfe' %}selected{% endif %}>Aushilfe</option></select></td><td><input name="username" value="{{ d['username'] }}"></td><td><input name="starting_balance" value="{{ fmt_signed(d['starting_balance']) }}"></td><td class="{{ signed_class(d['balance']) }} nowrap">{{ fmt_signed(d['balance']) }}</td><td><input style="width:auto" type="checkbox" name="is_active" {% if d['is_active'] %}checked{% endif %}></td><td><input readonly tabindex="-1" value="{{ d['password_plain'] or 'nicht auslesbar – neu setzen' }}" style="background:#f3f4f6;color:#667085;font-family:monospace"></td><td><input name="password" placeholder="leer lassen"></td><td class="actions"><button class="small primary">Speichern</button></form><form method="post" onsubmit="return confirm('Fahrer wirklich löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger">Löschen</button></form></td></tr>{% endfor %}</tbody></table></div></div>
     <script>
@@ -2191,7 +2267,19 @@ def admin_months():
                             v_note = request.form.get(f"v_note_{suffix}", "").strip()
                             v_enabled = form_v_enabled(f"v_enabled_{suffix}")
                             admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
-                            conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v_note, v_enabled, admin_info, now_iso(), mid))
+                            payroll_office_info = request.form.get(f"payroll_office_info_{suffix}", "").strip()
+                            payroll_surcharge = parse_decimal(request.form.get(f"payroll_surcharge_{suffix}", "0"))
+                            fuel_voucher = parse_decimal(request.form.get(f"fuel_voucher_{suffix}", "0"))
+                            vacation_days = normalize_vacation_count(request.form.get(f"vacation_days_{suffix}", ""))
+                            sick_days = normalize_day_ranges(request.form.get(f"sick_days_{suffix}", ""))
+                            conn.execute("""
+                                UPDATE monthly_data
+                                SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0,
+                                    payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
+                                    vacation_days=?, sick_days=?, updated_at=?
+                                WHERE id=?
+                            """, (worked, payroll, v_note, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), mid))
+                            sync_member_admin_info_to_group(conn, did2, year, month, admin_info)
                             update_balance_overrides_from_form(
                                 conn, mid,
                                 previous_value_key=f"previous_balance_manual_{suffix}",
@@ -2294,8 +2382,20 @@ def admin_months():
                     v_note = request.form.get("v_note", "").strip()
                     v_enabled = form_v_enabled("v_enabled")
                     admin_info = request.form.get("admin_info", "").strip()
+                    payroll_office_info = request.form.get("payroll_office_info", "").strip()
+                    payroll_surcharge = parse_decimal(request.form.get("payroll_surcharge", "0"))
+                    fuel_voucher = parse_decimal(request.form.get("fuel_voucher", "0"))
+                    vacation_days = normalize_vacation_count(request.form.get("vacation_days", ""))
+                    sick_days = normalize_day_ranges(request.form.get("sick_days", ""))
                     monthly_id = get_or_create_month_row(conn, did, year, month)
-                    conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v_note, v_enabled, admin_info, now_iso(), monthly_id))
+                    conn.execute("""
+                        UPDATE monthly_data
+                        SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0,
+                            payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
+                            vacation_days=?, sick_days=?, updated_at=?
+                        WHERE id=?
+                    """, (worked, payroll, v_note, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                    sync_member_admin_info_to_group(conn, did, year, month, admin_info)
                     update_balance_overrides_from_form(conn, monthly_id)
 
                     should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
@@ -2335,7 +2435,7 @@ def admin_months():
                     create_driver_pdf(conn, did, year, month)
                     audit(conn, "month_save", f"{did} {year}-{month}")
                     conn.commit()
-                    flash("Plus/Minus Stunden gespeichert und Fahrer-PDF automatisch aktualisiert.", "ok")
+                    flash("Stunden und Plus/Minus-Werte gespeichert; Fahrer-PDF automatisch aktualisiert.", "ok")
 
                 elif action == "delete_adjustment":
                     item_id = int(request.form["item_id"])
@@ -2405,12 +2505,13 @@ def admin_months():
             adjustment_files.setdefault(int(f["adjustment_id"]), []).append(f)
 
         group_infos = load_driver_groups(conn)
-        grouped_driver_ids = {did for g in group_infos for did in g["member_ids"]}
+        # In der zusammengefuehrten Ansicht bleiben ALLE einzelnen Fahrer sichtbar,
+        # damit keine Lohnabrechnungsfelder durch eine Plus/Minus-Gruppe verloren gehen.
+        # Gruppen werden zusaetzlich als reine Plus/Minus-Zusammenfassung angehaengt.
         display_drivers: List[Dict[str, Any]] = []
         for d in drivers:
-            if int(d["id"]) not in grouped_driver_ids:
-                nd = dict(d); nd["is_group"] = 0; nd["form_id"] = str(d["id"]); nd["member_names"] = ""
-                display_drivers.append(nd)
+            nd = dict(d); nd["is_group"] = 0; nd["form_id"] = str(d["id"]); nd["member_names"] = ""
+            display_drivers.append(nd)
         group_adjustment_files: Dict[int, List[Any]] = {}
         for g in group_infos:
             gid = int(g["group"]["id"])
@@ -2441,15 +2542,16 @@ def admin_months():
         global_v_all = month_all_drivers_v_enabled(conn, year, month)
 
     body = render_template_string("""
-    <div class="card">
+    <div class="card combined-toolbar">
       <div class="actions" style="justify-content:space-between;align-items:flex-end">
         <form method="get" class="actions" id="month-filter-form">
           <div><label>Jahr</label><input name="year" value="{{ year }}" onchange="this.form.submit()"></div>
           <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
           <noscript><button class="primary">Anzeigen</button></noscript>
+          <a class="btn" href="{{ url_for('download_payroll_hours_export', year=year, month=month) }}">Lohnbüro-PDF herunterladen</a>
           <a class="btn" href="{{ url_for('download_month_export', year=year, month=month) }}">Monats-PDF herunterladen</a>
           <button class="primary" type="submit" form="all-months-form" {% if not editable %}disabled title="{{ locked_note }}"{% endif %}>Alle Einträge speichern</button>
-          <div class="download-note">Der PDF-Button lädt die Datei direkt herunter.</div>
+          <div class="download-note">Alle bisherigen Felder aus „Stunden für Lohnabrechnung“ und „Plus/Minus Stunden“ sind hier in einer Ansicht zusammengeführt.</div>
           {% if not editable %}<div class="month-locked-note">{{ locked_note }}</div>{% endif %}
         </form>
         <form method="post" class="actions" style="margin-left:auto;align-items:center">
@@ -2462,138 +2564,144 @@ def admin_months():
         </form>
       </div>
     </div>
-    <div class="card"><h2>{{ months[month] }} {{ year }}</h2><form method="post" id="all-months-form"><input type="hidden" name="action" value="save_all"></form><form method="post" id="global-v-form-months"><input type="hidden" name="action" value="set_global_v"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" id="global-v-value-months" name="global_v_enabled" value="{{ 1 if global_v_all else 0 }}"></form><div class="table-wrap mobile-cards"><table class="months-table">
-      <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V<br><label class="global-v-toggle" title="Aktiv-Markierung für alle Fahrer"><input type="checkbox" {% if global_v_all %}checked{% endif %} {% if not editable %}disabled{% endif %} onchange="document.getElementById('global-v-value-months').value=this.checked?'1':'0';document.getElementById('global-v-form-months').submit()"> alle aktiv</label></th><th class="col-adjust">Zuschüsse / Abzüge</th><th class="col-small">Diff</th><th class="col-balance">Alt</th><th class="col-balance">Neu</th><th class="col-action">Aktion</th></tr></thead><tbody>
+    <div class="card combined-card"><h2>Stunden für Lohnabrechnung – {{ months[month] }} {{ year }}</h2>
+      <p class="muted">Lohnabrechnung und Plus/Minus sind jetzt vollständig in einer Tabelle. Diff wird automatisch berechnet; Alt und Neu können bei Einzel-Fahrern weiterhin manuell korrigiert werden.</p>
+      <form method="post" id="all-months-form"><input type="hidden" name="action" value="save_all"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"></form>
+      <form method="post" id="global-v-form-months"><input type="hidden" name="action" value="set_global_v"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" id="global-v-value-months" name="global_v_enabled" value="{{ 1 if global_v_all else 0 }}"></form>
+      <div class="table-wrap mobile-cards combined-wrap"><table class="months-table payroll-table merged-payroll-table">
+      <thead><tr>
+        <th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th>
+        <th class="col-pay-info">Allgemeine Infos für Lohnbüro</th>
+        <th class="col-driver">Fahrer</th>
+        <th class="col-hours">geleistete Stunden</th>
+        <th class="col-payroll">Abrechnung</th>
+        <th class="col-v">V<br><label class="global-v-toggle" title="Aktiv-Markierung für alle Fahrer"><input type="checkbox" {% if global_v_all %}checked{% endif %} {% if not editable %}disabled{% endif %} onchange="document.getElementById('global-v-value-months').value=this.checked?'1':'0';document.getElementById('global-v-form-months').submit()"> alle aktiv</label></th>
+        <th class="col-pay-num">Zuschlag</th>
+        <th class="col-pay-num">Tankgutschein</th>
+        <th class="col-days">Urlaub</th>
+        <th class="col-sick">Krank</th>
+        <th class="col-adjust">Zuschüsse / Abzüge</th>
+        <th class="col-small">Diff</th>
+        <th class="col-balance">Alt</th>
+        <th class="col-balance">Neu</th>
+        <th class="col-action">Aktion</th>
+      </tr></thead><tbody>
       {% for d in drivers %}
       {% set r = rows.get(d['id']) %}
       {% set items = adjustments.get(d['id'], []) %}
       <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
         {% if d['is_group'] %}
         <td class="admin-info" data-label="Allgemeine Infos"><textarea form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"><div class="download-note">Gruppe: {{ d['member_names'] }}</div></td>
-        <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</div><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b><div class="download-note">zusammengeführt nur in Plus/Minus Stunden</div>{% if d.member_preview %}<div class="group-member-preview"><b>Einzelvorschau</b><table><tr><th>Fahrer</th><th>Std.</th><th>Abr.</th><th>V</th><th>Diff</th></tr>{% for p in d.member_preview %}<tr><td class="driver-name {{ employment_class(p.employment_type) }}">{{ p.name }}</td><td>{{ fmt_hours(p.worked_hours) }}</td><td>{{ fmt_hours(p.payroll_hours) }}</td><td>{{ p.v_note or '-' }}</td><td class="{{ signed_class(p.difference_hours) }}">{{ fmt_signed(p.difference_hours) }}</td></tr>{% endfor %}</table></div>{% endif %}</td>
-        <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><div class="group-worked-note">Nur Gruppenwert für Plus/Minus Stunden.</div></form></td>
+        <td data-label="Allgemeine Infos für Lohnbüro"><textarea readonly title="Gruppenübersicht; die einzelnen Fahrerwerte bleiben oben separat editierbar">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea></td>
+        <td data-label="Fahrer"><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b><div class="download-note">Zusätzliche Plus/Minus-Gruppenübersicht</div>{% if d.member_preview %}<div class="group-member-preview"><b>Einzelvorschau</b><table><tr><th>Fahrer</th><th>Std.</th><th>Abr.</th><th>V</th><th>Diff</th></tr>{% for p in d.member_preview %}<tr><td class="driver-name {{ employment_class(p.employment_type) }}">{{ p.name }}</td><td>{{ fmt_hours(p.worked_hours) }}</td><td>{{ fmt_hours(p.payroll_hours) }}</td><td>{{ p.v_note or '-' }}</td><td class="{{ signed_class(p.difference_hours) }}">{{ fmt_signed(p.difference_hours) }}</td></tr>{% endfor %}</table></div>{% endif %}</td>
+        <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><div class="group-worked-note">Gruppenwert für Plus/Minus.</div></form></td>
         <td data-label="Abrechnung"><input readonly value="{{ r['payroll_hours'] if r else '' }}"></td>
         {% set v_enabled = row_v_enabled(r) %}
         <td data-label="V"><input class="v-markable {{ 'v-disabled' if not v_enabled else '' }}" readonly value="{{ fmt_v_input(row_get(r, 'v_note', '')) if r else '' }}" placeholder="Notiz"><input type="hidden" form="save-{{ d['form_id'] }}" name="v_enabled" value="0"><label class="v-toggle" title="Nur Aktiv-Markierung; V wird nie berechnet"><input class="v-enabled-toggle" form="save-{{ d['form_id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> aktiv</label><input type="hidden" form="all-months-form" name="v_enabled_{{ d['form_id'] }}" value="{{ 1 if v_enabled else 0 }}" class="all-copy-v-enabled-{{ d['form_id'] }}"><div class="v-disabled-note">nur Notiz · ohne Berechnung</div></td>
+        <td data-label="Zuschlag"><input readonly value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"></td>
+        <td data-label="Tankgutschein"><input readonly value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"></td>
+        <td data-label="Urlaub"><div class="readonly-summary">{{ row_get(r, 'vacation_days', '') if r else '-' }}</div></td>
+        <td data-label="Krank"><div class="readonly-summary">{{ row_get(r, 'sick_days', '') if r else '-' }}</div></td>
         <td data-label="Zuschüsse / Abzüge"><div class="group-mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% if it.get('is_group_adj') %}{% for f in group_adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>{% endif %}</div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
-        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
-        <td data-label="Alt" class="nowrap" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
-        <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
+        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }}">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
+        <td data-label="Alt" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
+        <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }}" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button><span class="badge">Gruppe</span></td>
         {% else %}
         <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}">{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
-        <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</div><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b></td>
-        <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
+        <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="save-{{ d['form_id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea><input type="hidden" form="all-months-form" name="payroll_office_info_{{ d['form_id'] }}" value="{{ row_get(r, 'payroll_office_info', '') if r else '' }}" class="all-copy-payroll-office-{{ d['form_id'] }}"></td>
+        <td data-label="Fahrer"><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b></td>
+        <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
         <td data-label="Abrechnung"><input form="save-{{ d['form_id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="payroll_hours_{{ d['form_id'] }}" value="{{ r['payroll_hours'] if r else '' }}" class="all-copy-payroll-{{ d['form_id'] }}"></td>
         {% set v_enabled = row_v_enabled(r) %}
         <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" form="save-{{ d['form_id'] }}" name="v_note" value="{{ fmt_v_input(row_get(r, 'v_note', '')) if r else '' }}" placeholder="Notiz"><input type="hidden" form="all-months-form" name="v_note_{{ d['form_id'] }}" value="{{ fmt_v_input(row_get(r, 'v_note', '')) if r else '' }}" class="all-copy-v-{{ d['form_id'] }}"><input type="hidden" form="save-{{ d['form_id'] }}" name="v_enabled" value="0"><label class="v-toggle" title="Nur Aktiv-Markierung; V wird nie berechnet"><input class="v-enabled-toggle" form="save-{{ d['form_id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> aktiv</label><input type="hidden" form="all-months-form" name="v_enabled_{{ d['form_id'] }}" value="{{ 1 if v_enabled else 0 }}" class="all-copy-v-enabled-{{ d['form_id'] }}"><div class="v-disabled-note">nur Notiz · ohne Berechnung</div></td>
+        <td data-label="Zuschlag"><input form="save-{{ d['form_id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"><input type="hidden" form="all-months-form" name="payroll_surcharge_{{ d['form_id'] }}" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}" class="all-copy-surcharge-{{ d['form_id'] }}"></td>
+        <td data-label="Tankgutschein"><input form="save-{{ d['form_id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"><input type="hidden" form="all-months-form" name="fuel_voucher_{{ d['form_id'] }}" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}" class="all-copy-fuel-{{ d['form_id'] }}"></td>
+        <td data-label="Urlaub" class="days-vacation"><div class="vacation-input-wrap"><input form="save-{{ d['form_id'] }}" name="vacation_days" inputmode="numeric" pattern="[0-9]*" value="{{ vacation_display(row_get(r, 'vacation_days', '')) if r else '' }}"><span class="suffix">Tage</span></div><input type="hidden" form="all-months-form" name="vacation_days_{{ d['form_id'] }}" value="{{ vacation_display(row_get(r, 'vacation_days', '')) if r else '' }}" class="all-copy-vacation-{{ d['form_id'] }}"></td>
+        <td data-label="Krank" class="days-sick"><input type="hidden" class="sick-days-input" form="save-{{ d['form_id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}"><input type="hidden" form="all-months-form" name="sick_days_{{ d['form_id'] }}" value="{{ row_get(r, 'sick_days', '') if r else '' }}" class="all-copy-sick-{{ d['form_id'] }}"><button type="button" class="sick-calendar-open" data-form="save-{{ d['form_id'] }}" data-driver-name="{{ d['name'] }}">Kalender öffnen</button><div class="sick-days-overview">{% if r and row_get(r, 'sick_days', '') %}{{ row_get(r, 'sick_days', '') }} = <span class="sick-days-total">{{ sick_days_count(row_get(r, 'sick_days', '')) }} Tage</span>{% else %}Keine Kranktage{% endif %}</div></td>
         <td data-label="Zuschüsse / Abzüge"><div class="mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
           {% if r %}<div class="sum-box">Summe Zuschüsse: <span class="pos">{{ fmt_hours(r['bonus_hours']) }}</span><br>Summe Abzüge: <span class="neg">{{ fmt_hours(r['deduction_hours']) }}</span></div>{% endif %}
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% for f in adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
-        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
-        <td data-label="Alt" class="nowrap"><input class="balance-input balance-previous" form="save-{{ d['form_id'] }}" name="previous_balance_manual" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" title="Ändern = manueller Wert. Feld leeren und speichern = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="previous_balance_touched" value="0" class="balance-previous-touched"><input type="hidden" form="all-months-form" name="previous_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" class="all-copy-previous-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="previous_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-previous-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'previous_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'previous_balance_override', None) is not none else 'auto' }}</div></td>
-        <td data-label="Neu" class="nowrap"><input class="balance-input balance-new {{ signed_class(r['new_balance']) if r else '' }}" form="save-{{ d['form_id'] }}" name="new_balance_manual" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" title="Ändern = manueller Wert. Dieser Wert wird in den nächsten Monat übernommen. Feld leeren = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="new_balance_touched" value="0" class="balance-new-touched"><input type="hidden" form="all-months-form" name="new_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" class="all-copy-new-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="new_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-new-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'new_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'new_balance_override', None) is not none else 'auto' }}</div></td>
+        <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }}">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
+        <td data-label="Alt"><input class="balance-input balance-previous" form="save-{{ d['form_id'] }}" name="previous_balance_manual" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" title="Ändern = manueller Wert. Feld leeren und speichern = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="previous_balance_touched" value="0" class="balance-previous-touched"><input type="hidden" form="all-months-form" name="previous_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" class="all-copy-previous-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="previous_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-previous-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'previous_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'previous_balance_override', None) is not none else 'auto' }}</div></td>
+        <td data-label="Neu"><input class="balance-input balance-new {{ signed_class(r['new_balance']) if r else '' }}" form="save-{{ d['form_id'] }}" name="new_balance_manual" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" title="Ändern = manueller Wert. Dieser Wert wird in den nächsten Monat übernommen. Feld leeren = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="new_balance_touched" value="0" class="balance-new-touched"><input type="hidden" form="all-months-form" name="new_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" class="all-copy-new-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="new_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-new-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'new_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'new_balance_override', None) is not none else 'auto' }}</div></td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
         {% endif %}
       </tr>
       {% endfor %}
-    </tbody></table></div></div>
+      </tbody></table></div></div>
+    <div id="sick-calendar-modal" class="sick-calendar-modal" aria-hidden="true"><div class="sick-calendar-panel"><div class="sick-calendar-head"><div><h3 style="margin:0">Kranktage auswählen</h3><div class="muted" id="sick-calendar-title"></div></div><button type="button" class="small" id="sick-calendar-close" style="width:auto">Schließen</button></div><div class="sick-calendar-week"><div>Mo</div><div>Di</div><div>Mi</div><div>Do</div><div>Fr</div><div>Sa</div><div>So</div></div><div id="sick-calendar-grid" class="sick-calendar-grid"></div><div class="sick-calendar-hint">Einzelne Tage anklicken oder mit gedrückter Maustaste / Finger über mehrere Tage ziehen. Erneutes Markieren entfernt Tage.</div><div class="actions" style="justify-content:flex-end"><button type="button" class="small" id="sick-calendar-cancel">Abbrechen</button><button type="button" class="small primary" id="sick-calendar-save">Speichern</button></div></div></div>
     <script>
     {% if not editable %}
-    document.querySelectorAll('.months-table input, .months-table textarea, .months-table select, .months-table button, button[form="all-months-form"]').forEach(function(el){
+    document.querySelectorAll('.merged-payroll-table input, .merged-payroll-table textarea, .merged-payroll-table select, .merged-payroll-table button, button[form="all-months-form"]').forEach(function(el){
       if(el.type !== 'hidden'){ el.disabled = true; el.title = '{{ locked_note }}'; }
     });
     {% endif %}
+
     document.querySelectorAll('.dropzone input[type="file"]').forEach(function(input){
       var zone = input.closest('.dropzone');
       var defaultText = 'Bild/Datei hier ablegen';
-      function setZoneText(text){
-        Array.from(zone.childNodes).forEach(function(node){
-          if(node.nodeType === Node.TEXT_NODE){ node.nodeValue = text; }
-        });
-      }
+      function setZoneText(text){ Array.from(zone.childNodes).forEach(function(node){ if(node.nodeType === Node.TEXT_NODE){ node.nodeValue = text; } }); }
       setZoneText(defaultText);
-      input.addEventListener('change', function(){
-        setZoneText(input.files.length ? input.files[0].name : defaultText);
-      });
-      ['dragenter','dragover'].forEach(function(ev){
-        zone.addEventListener(ev, function(e){
-          e.preventDefault();
-          e.stopPropagation();
-          zone.classList.add('dragover');
-          if(e.dataTransfer){ e.dataTransfer.dropEffect = 'copy'; }
-        });
-      });
-      ['dragleave','dragend'].forEach(function(ev){
-        zone.addEventListener(ev, function(e){
-          e.preventDefault();
-          e.stopPropagation();
-          zone.classList.remove('dragover');
-        });
-      });
-      zone.addEventListener('drop', function(e){
-        e.preventDefault();
-        e.stopPropagation();
-        zone.classList.remove('dragover');
-        if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length){
-          input.files = e.dataTransfer.files;
-          setZoneText(e.dataTransfer.files[0].name);
-        }
-      });
-    });
-    function refreshVEnabledState(row){
-      var cb = row.querySelector('.v-enabled-toggle');
-      if(!cb){ return; }
-      var input = row.querySelector('.v-markable');
-      if(input){ input.classList.toggle('v-disabled', !cb.checked); }
-    }
-    document.querySelectorAll('.v-enabled-toggle').forEach(function(cb){
-      var row = cb.closest('tr');
-      cb.addEventListener('change', function(){ refreshVEnabledState(row); });
-      refreshVEnabledState(row);
+      input.addEventListener('change', function(){ setZoneText(input.files.length ? input.files[0].name : defaultText); });
+      ['dragenter','dragover'].forEach(function(ev){ zone.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); zone.classList.add('dragover'); if(e.dataTransfer){ e.dataTransfer.dropEffect='copy'; } }); });
+      ['dragleave','dragend'].forEach(function(ev){ zone.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); zone.classList.remove('dragover'); }); });
+      zone.addEventListener('drop', function(e){ e.preventDefault(); e.stopPropagation(); zone.classList.remove('dragover'); if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length){ input.files=e.dataTransfer.files; setZoneText(e.dataTransfer.files[0].name); } });
     });
 
+    function refreshVEnabledState(row){ var cb=row.querySelector('.v-enabled-toggle'); if(!cb){return;} var input=row.querySelector('.v-markable'); if(input){input.classList.toggle('v-disabled', !cb.checked);} }
+    document.querySelectorAll('.v-enabled-toggle').forEach(function(cb){ var row=cb.closest('tr'); cb.addEventListener('change',function(){refreshVEnabledState(row);}); refreshVEnabledState(row); });
+
+    (function(){
+      var modal=document.getElementById('sick-calendar-modal'), grid=document.getElementById('sick-calendar-grid'), title=document.getElementById('sick-calendar-title');
+      if(!modal||!grid) return;
+      var activeInput=null, activeForm=null, selected=new Set(), dragging=false, dragState=true;
+      var year={{ year }}, month={{ month }};
+      function parseRanges(raw){ var out=new Set(); (raw||'').split(',').map(function(x){return x.trim();}).filter(Boolean).forEach(function(part){ var bits=part.split('-').map(function(x){return parseInt(x.trim(),10);}); if(bits.length===2&&Number.isFinite(bits[0])&&Number.isFinite(bits[1])){ for(var d=bits[0];d<=bits[1];d++) out.add(d); } else if(Number.isFinite(bits[0])) out.add(bits[0]); }); return out; }
+      function formatRanges(set){ var a=Array.from(set).sort(function(x,y){return x-y;}); if(!a.length) return ''; var parts=[], start=a[0], prev=a[0]; for(var i=1;i<=a.length;i++){ var cur=a[i]; if(cur===prev+1){ prev=cur; continue; } parts.push(start===prev?String(start):(start+'-'+prev)); start=cur; prev=cur; } return parts.join(', '); }
+      function paint(btn,day,state){ if(state) selected.add(day); else selected.delete(day); btn.classList.toggle('selected',state); }
+      function build(){ grid.innerHTML=''; var first=new Date(year,month-1,1), days=new Date(year,month,0).getDate(), blanks=(first.getDay()+6)%7; for(var b=0;b<blanks;b++){ var blank=document.createElement('button'); blank.type='button'; blank.className='sick-day blank'; blank.tabIndex=-1; grid.appendChild(blank); } for(let day=1;day<=days;day++){ let btn=document.createElement('button'); btn.type='button'; btn.className='sick-day'+(selected.has(day)?' selected':''); btn.textContent=day; btn.addEventListener('pointerdown',function(e){ dragging=true; dragState=!selected.has(day); paint(btn,day,dragState); e.preventDefault(); }); btn.addEventListener('pointerenter',function(e){ if(dragging){ paint(btn,day,dragState); e.preventDefault(); } }); btn.addEventListener('click',function(e){e.preventDefault();}); grid.appendChild(btn); } }
+      function close(){ modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); dragging=false; }
+      document.addEventListener('pointerup',function(){dragging=false;});
+      document.querySelectorAll('.sick-calendar-open').forEach(function(open){ open.addEventListener('click',function(){ activeForm=document.getElementById(open.dataset.form); activeInput=document.querySelector('input.sick-days-input[form="'+open.dataset.form+'"]'); selected=parseRanges(activeInput?activeInput.value:''); title.textContent=(open.dataset.driverName||'')+' · {{ months[month] }} {{ year }}'; build(); modal.classList.add('open'); modal.setAttribute('aria-hidden','false'); }); });
+      document.getElementById('sick-calendar-close').addEventListener('click',close); document.getElementById('sick-calendar-cancel').addEventListener('click',close); modal.addEventListener('click',function(e){if(e.target===modal)close();});
+      document.getElementById('sick-calendar-save').addEventListener('click',function(){ if(!activeInput||!activeForm) return close(); activeInput.value=formatRanges(selected); var saveButton=activeForm.querySelector('button[name="action"][value="save"]') || document.querySelector('button[form="'+activeForm.id+'"][name="action"][value="save"]'); close(); if(saveButton){ activeForm.requestSubmit(saveButton); } });
+    })();
+
     document.querySelectorAll('tr.driver-row').forEach(function(row){
-      var fidInput = row.querySelector('form[id^="save-"] input[name="driver_id"]');
+      var fidInput=row.querySelector('form[id^="save-"] input[name="driver_id"]');
       if(!fidInput) return;
-      var formId = fidInput.closest('form').id.replace('save-', '');
+      var formId=fidInput.closest('form').id.replace('save-','');
+      function copy(selector, targetClass){ var el=row.querySelector(selector); var hidden=document.querySelector('.'+targetClass+CSS.escape(formId)); if(hidden&&el){hidden.value=el.value;} }
       function sync(){
-        var admin = row.querySelector('textarea[name="admin_info"]');
-        var worked = row.querySelector('input[name="worked_hours"]');
-        var payroll = row.querySelector('input[name="payroll_hours"]');
-        var v = row.querySelector('input[name="v_note"]');
-        var vEnabled = row.querySelector('.v-enabled-toggle');
-        var previousBalance = row.querySelector('input[name="previous_balance_manual"]');
-        var newBalance = row.querySelector('input[name="new_balance_manual"]');
-        var ha = document.querySelector('.all-copy-admin-' + CSS.escape(formId)); if(ha && admin) ha.value = admin.value;
-        var hw = document.querySelector('.all-copy-worked-' + CSS.escape(formId)); if(hw && worked) hw.value = worked.value;
-        var hp = document.querySelector('.all-copy-payroll-' + CSS.escape(formId)); if(hp && payroll) hp.value = payroll.value;
-        var hv = document.querySelector('.all-copy-v-' + CSS.escape(formId)); if(hv && v) hv.value = v.value;
-        var hve = document.querySelector('.all-copy-v-enabled-' + CSS.escape(formId)); if(hve && vEnabled) hve.value = vEnabled.checked ? '1' : '0';
-        var hpb = document.querySelector('.all-copy-previous-balance-' + CSS.escape(formId)); if(hpb && previousBalance) hpb.value = previousBalance.value;
-        var hnb = document.querySelector('.all-copy-new-balance-' + CSS.escape(formId)); if(hnb && newBalance) hnb.value = newBalance.value;
+        copy('textarea[name="admin_info"]','all-copy-admin-');
+        copy('textarea[name="payroll_office_info"]','all-copy-payroll-office-');
+        copy('input[name="worked_hours"]','all-copy-worked-');
+        copy('input[name="payroll_hours"]','all-copy-payroll-');
+        copy('input[name="v_note"]','all-copy-v-');
+        copy('input[name="payroll_surcharge"]','all-copy-surcharge-');
+        copy('input[name="fuel_voucher"]','all-copy-fuel-');
+        copy('input[name="vacation_days"]','all-copy-vacation-');
+        copy('input[name="sick_days"]','all-copy-sick-');
+        copy('input[name="previous_balance_manual"]','all-copy-previous-balance-');
+        copy('input[name="new_balance_manual"]','all-copy-new-balance-');
+        var vEnabled=row.querySelector('.v-enabled-toggle'); var hve=document.querySelector('.all-copy-v-enabled-'+CSS.escape(formId)); if(hve&&vEnabled){hve.value=vEnabled.checked?'1':'0';}
       }
-      row.addEventListener('input', function(e){
-        if(e.target && e.target.classList.contains('balance-previous')){
-          var own = row.querySelector('.balance-previous-touched'); if(own) own.value = '1';
-          var all = document.querySelector('.all-copy-previous-touched-' + CSS.escape(formId)); if(all) all.value = '1';
-        }
-        if(e.target && e.target.classList.contains('balance-new')){
-          var ownNew = row.querySelector('.balance-new-touched'); if(ownNew) ownNew.value = '1';
-          var allNew = document.querySelector('.all-copy-new-touched-' + CSS.escape(formId)); if(allNew) allNew.value = '1';
-        }
+      row.addEventListener('input',function(e){
+        if(e.target&&e.target.classList.contains('balance-previous')){ var own=row.querySelector('.balance-previous-touched'); if(own)own.value='1'; var all=document.querySelector('.all-copy-previous-touched-'+CSS.escape(formId)); if(all)all.value='1'; }
+        if(e.target&&e.target.classList.contains('balance-new')){ var ownNew=row.querySelector('.balance-new-touched'); if(ownNew)ownNew.value='1'; var allNew=document.querySelector('.all-copy-new-touched-'+CSS.escape(formId)); if(allNew)allNew.value='1'; }
         sync();
       });
-      row.addEventListener('change', sync);
+      row.addEventListener('change',sync);
       sync();
     });
     </script>
-    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, fmt_balance_input=fmt_balance_input, signed_class=signed_class, row_v_enabled=row_v_enabled, row_get=row_get, employment_class=employment_class, global_v_all=global_v_all)
-    return base_page("Plus/Minus Stunden", body, "months")
+    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, fmt_balance_input=fmt_balance_input, signed_class=signed_class, row_v_enabled=row_v_enabled, row_get=row_get, employment_class=employment_class, vacation_display=vacation_display, sick_days_display=sick_days_display, sick_days_count=sick_days_count, global_v_all=global_v_all)
+    return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
 @app.route("/admin/import-pdf", methods=["GET","POST"])
@@ -2607,209 +2715,8 @@ def admin_import_pdf():
 @app.route("/admin/payroll-hours", methods=["GET","POST"])
 @admin_login_required
 def admin_payroll_hours():
-    year = int(request.values.get("year") or datetime.now().year)
-    month = int(request.values.get("month") or datetime.now().month)
-    editable = month_is_editable(year, month)
-    locked_note = month_locked_message(year, month)
-    with db_conn() as conn:
-        if request.method == "POST":
-            action = request.form.get("action", "save")
-            if not editable:
-                flash(locked_note, "err")
-                return redirect(url_for("admin_payroll_hours", year=year, month=month))
-            if action == "set_global_v":
-                enabled = request.form.get("global_v_enabled") == "1"
-                set_global_v_enabled(conn, year, month, enabled)
-                recalc_all(conn)
-                audit(conn, "global_v_toggle", f"{year}-{month} {int(enabled)}")
-                conn.commit()
-                flash("V wurde bei allen Fahrern aktiviert." if enabled else "V wurde bei allen Fahrern deaktiviert.", "ok")
-                return redirect(url_for("admin_payroll_hours", year=year, month=month))
-            if action == "save_all":
-                saved_count = 0
-                for key in request.form:
-                    if not key.startswith("row_driver_id_"):
-                        continue
-                    suffix = key.replace("row_driver_id_", "", 1)
-                    did = int(request.form.get(key))
-                    monthly_id = get_or_create_month_row(conn, did, year, month)
-                    worked = parse_hours(request.form.get(f"worked_hours_{suffix}", "0"))
-                    payroll = parse_hours(request.form.get(f"payroll_hours_{suffix}", "0"))
-                    v_note = request.form.get(f"v_note_{suffix}", "").strip()
-                    v_enabled = form_v_enabled(f"v_enabled_{suffix}")
-                    admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
-                    payroll_office_info = request.form.get(f"payroll_office_info_{suffix}", "").strip()
-                    payroll_surcharge = parse_decimal(request.form.get(f"payroll_surcharge_{suffix}", "0"))
-                    fuel_voucher = parse_decimal(request.form.get(f"fuel_voucher_{suffix}", "0"))
-                    vacation_days = normalize_vacation_count(request.form.get(f"vacation_days_{suffix}", ""))
-                    sick_days = normalize_day_ranges(request.form.get(f"sick_days_{suffix}", ""))
-                    conn.execute("""
-                        UPDATE monthly_data
-                        SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0,
-                            payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
-                            vacation_days=?, sick_days=?, updated_at=?
-                        WHERE id=?
-                    """, (worked, payroll, v_note, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
-                    sync_member_admin_info_to_group(conn, did, year, month, admin_info)
-                    update_balance_overrides_from_form(
-                        conn, monthly_id,
-                        previous_value_key=f"previous_balance_manual_{suffix}",
-                        previous_touched_key=f"previous_balance_touched_{suffix}",
-                        new_value_key=f"new_balance_manual_{suffix}",
-                        new_touched_key=f"new_balance_touched_{suffix}",
-                    )
-                    recalc_month_adjustments(conn, monthly_id)
-                    recalc_driver(conn, did)
-                    create_driver_pdf(conn, did, year, month)
-                    saved_count += 1
-                audit(conn, "payroll_hours_save_all", f"{year}-{month} {saved_count}")
-                conn.commit()
-                flash(f"Alle Einträge gespeichert ({saved_count}).", "ok")
-                return redirect(url_for("admin_payroll_hours", year=year, month=month))
-            if action == "save":
-                did = int(request.form["driver_id"])
-                monthly_id = get_or_create_month_row(conn, did, year, month)
-                worked = parse_hours(request.form.get("worked_hours", "0"))
-                payroll = parse_hours(request.form.get("payroll_hours", "0"))
-                v_note = request.form.get("v_note", "").strip()
-                v_enabled = form_v_enabled("v_enabled")
-                admin_info = request.form.get("admin_info", "").strip()
-                payroll_office_info = request.form.get("payroll_office_info", "").strip()
-                payroll_surcharge = parse_decimal(request.form.get("payroll_surcharge", "0"))
-                fuel_voucher = parse_decimal(request.form.get("fuel_voucher", "0"))
-                vacation_days = normalize_vacation_count(request.form.get("vacation_days", ""))
-                sick_days = normalize_day_ranges(request.form.get("sick_days", ""))
-                conn.execute("""
-                    UPDATE monthly_data
-                    SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0,
-                        payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
-                        vacation_days=?, sick_days=?, updated_at=?
-                    WHERE id=?
-                """, (worked, payroll, v_note, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
-                sync_member_admin_info_to_group(conn, did, year, month, admin_info)
-                update_balance_overrides_from_form(conn, monthly_id)
-                recalc_month_adjustments(conn, monthly_id)
-                recalc_driver(conn, did)
-                create_driver_pdf(conn, did, year, month)
-                audit(conn, "payroll_hours_save", f"{did} {year}-{month}")
-                conn.commit()
-                flash("Stunden für Lohnabrechnung und Stundenkonto gespeichert.", "ok")
-
-        recalc_all(conn); conn.commit()
-        drivers = conn.execute("SELECT * FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0 ORDER BY COALESCE(NULLIF(display_order,0), id), name COLLATE NOCASE").fetchall()
-        if editable:
-            for d in drivers:
-                get_or_create_month_row(conn, int(d["id"]), year, month, carry_admin_info=True)
-            recalc_all(conn)
-            conn.commit()
-        rows = {int(r["driver_id"]): r for r in conn.execute("SELECT * FROM monthly_data WHERE year=? AND month=?", (year, month)).fetchall()}
-        global_v_all = month_all_drivers_v_enabled(conn, year, month)
-
-    body = render_template_string("""
-    <div class="card">
-      <form method="get" class="actions" id="payroll-filter-form">
-        <div><label>Jahr</label><input name="year" value="{{ year }}" onchange="this.form.submit()"></div>
-        <div><label>Monat</label><select name="month" onchange="this.form.submit()">{% for n,m in months.items() %}<option value="{{ n }}" {% if n==month %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
-        <noscript><button class="primary">Anzeigen</button></noscript>
-        <a class="btn" href="{{ url_for('download_payroll_hours_export', year=year, month=month) }}">Lohnbüro-PDF herunterladen</a>
-        <button class="primary" type="submit" form="all-payroll-form" {% if not editable %}disabled title="{{ locked_note }}"{% endif %}>Alle Einträge speichern</button>
-        <div class="download-note">Interne Admin-Infos werden in dieser PDF nicht angezeigt. „Allgemeine Infos für Lohnbüro“ werden ganz links angezeigt.</div>
-        {% if not editable %}<div class="month-locked-note">{{ locked_note }}</div>{% endif %}
-      </form>
-    </div>
-    <div class="card"><h2>Stunden für Lohnabrechnung – {{ months[month] }} {{ year }}</h2>
-      <p class="muted">Lohnabrechnung und Stundenkonto in einer Ansicht. Diff wird automatisch berechnet; Alt und Neu kannst du bei Bedarf manuell korrigieren. Ein manuelles Neu wird in den Folgemonat übernommen.</p>
-      <form method="post" id="global-v-form-payroll"><input type="hidden" name="action" value="set_global_v"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" id="global-v-value-payroll" name="global_v_enabled" value="{{ 1 if global_v_all else 0 }}"></form>
-      <form method="post" id="all-payroll-form"><input type="hidden" name="action" value="save_all"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"></form>
-      <div class="table-wrap mobile-cards"><table class="months-table payroll-table">
-      <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-pay-info">Allgemeine Infos für Lohnbüro</th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V<br><label class="global-v-toggle" title="Aktiv-Markierung für alle Fahrer"><input type="checkbox" {% if global_v_all %}checked{% endif %} {% if not editable %}disabled{% endif %} onchange="document.getElementById('global-v-value-payroll').value=this.checked?'1':'0';document.getElementById('global-v-form-payroll').submit()"> alle aktiv</label></th><th class="col-pay-num">Zuschlag</th><th class="col-pay-num">Tankgutschein</th><th class="col-days">Urlaub</th><th class="col-days">Krank</th><th class="col-small">Diff</th><th class="col-balance">Alt</th><th class="col-balance">Neu</th><th class="col-action">Aktion</th></tr></thead><tbody>
-      {% for d in drivers %}
-      {% set r = rows.get(d['id']) %}
-      <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
-        <td class="admin-info" data-label="Allgemeine Infos"><textarea form="payroll-{{ d['id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea></td>
-        <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="payroll-{{ d['id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea></td>
-        <td class="nowrap" data-label="Fahrer"><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b></td>
-        <td data-label="geleistete Stunden"><form method="post" id="payroll-{{ d['id'] }}"><input type="hidden" name="action" value="save"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
-        <td data-label="Abrechnung"><input form="payroll-{{ d['id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"></td>
-        {% set v_enabled = row_v_enabled(r) %}
-        <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" form="payroll-{{ d['id'] }}" name="v_note" value="{{ fmt_v_input(row_get(r, 'v_note', '')) if r else '' }}" placeholder="Notiz"><input type="hidden" form="payroll-{{ d['id'] }}" name="v_enabled" value="0"><label class="v-toggle" title="Nur Aktiv-Markierung; V wird nie berechnet"><input class="v-enabled-toggle" form="payroll-{{ d['id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> aktiv</label><div class="v-disabled-note">nur Notiz · ohne Berechnung</div></td>
-        <td data-label="Zuschlag"><input form="payroll-{{ d['id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"></td>
-        <td data-label="Tankgutschein"><input form="payroll-{{ d['id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"></td>
-        <td data-label="Urlaub" class="days-vacation"><div class="vacation-input-wrap"><input form="payroll-{{ d['id'] }}" name="vacation_days" inputmode="numeric" pattern="[0-9]*" value="{{ vacation_display(row_get(r, 'vacation_days', '')) if r else '' }}"><span class="suffix">Tage</span></div></td>
-        <td data-label="Krank" class="days-sick"><input type="hidden" class="sick-days-input" form="payroll-{{ d['id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}"><button type="button" class="sick-calendar-open" data-form="payroll-{{ d['id'] }}" data-driver-name="{{ d['name'] }}">Kalender öffnen</button><div class="sick-days-overview">{% if r and row_get(r, 'sick_days', '') %}{{ row_get(r, 'sick_days', '') }} = <span class="sick-days-total">{{ sick_days_count(row_get(r, 'sick_days', '')) }} Tage</span>{% else %}Keine Kranktage{% endif %}</div></td>
-        <td data-label="Diff" class="{{ signed_class(row_get(r, 'difference_hours', 0)) if r else '' }} nowrap">{{ fmt_signed(row_get(r, 'difference_hours', 0)) if r else '-' }}</td>
-        <td data-label="Alt" class="nowrap"><input class="balance-input balance-previous" form="payroll-{{ d['id'] }}" name="previous_balance_manual" value="{{ fmt_balance_input(row_get(r, 'previous_balance', 0)) if r else '' }}" title="Ändern = manueller Wert. Feld leeren und speichern = wieder automatisch."><input type="hidden" form="payroll-{{ d['id'] }}" name="previous_balance_touched" value="0" class="balance-previous-touched"><div class="balance-mode {{ 'manual' if r and row_get(r, 'previous_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'previous_balance_override', None) is not none else 'auto' }}</div></td>
-        <td data-label="Neu" class="nowrap"><input class="balance-input balance-new {{ signed_class(row_get(r, 'new_balance', 0)) if r else '' }}" form="payroll-{{ d['id'] }}" name="new_balance_manual" value="{{ fmt_balance_input(row_get(r, 'new_balance', 0)) if r else '' }}" title="Ändern = manueller Wert. Dieser Wert wird als Basis in den nächsten Monat übernommen. Feld leeren = wieder automatisch."><input type="hidden" form="payroll-{{ d['id'] }}" name="new_balance_touched" value="0" class="balance-new-touched"><div class="balance-mode {{ 'manual' if r and row_get(r, 'new_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'new_balance_override', None) is not none else 'auto' }}</div></td>
-        <td data-label="Aktion" class="actions compact-save"><button form="payroll-{{ d['id'] }}" class="small primary">Speichern</button></td>
-      </tr>
-      {% endfor %}
-      </tbody></table></div></div>
-    <div id="sick-calendar-modal" class="sick-calendar-modal" aria-hidden="true"><div class="sick-calendar-panel"><div class="sick-calendar-head"><div><h3 style="margin:0">Kranktage auswählen</h3><div class="muted" id="sick-calendar-title"></div></div><button type="button" class="small" id="sick-calendar-close" style="width:auto">Schließen</button></div><div class="sick-calendar-week"><div>Mo</div><div>Di</div><div>Mi</div><div>Do</div><div>Fr</div><div>Sa</div><div>So</div></div><div id="sick-calendar-grid" class="sick-calendar-grid"></div><div class="sick-calendar-hint">Einzelne Tage anklicken oder mit gedrückter Maustaste / Finger über mehrere Tage ziehen. Erneutes Markieren entfernt Tage.</div><div class="actions" style="justify-content:flex-end"><button type="button" class="small" id="sick-calendar-cancel">Abbrechen</button><button type="button" class="small primary" id="sick-calendar-save">Speichern</button></div></div></div>
-    <script>
-    {% if not editable %}
-    document.querySelectorAll('.payroll-table input, .payroll-table textarea, .payroll-table select, .payroll-table button, button[form="all-payroll-form"]').forEach(function(el){
-      if(el.type !== 'hidden'){ el.disabled = true; el.title = '{{ locked_note }}'; }
-    });
-    {% endif %}
-    function refreshVEnabledState(row){var cb=row.querySelector('.v-enabled-toggle'); if(!cb){return;} var input=row.querySelector('.v-markable'); if(input){input.classList.toggle('v-disabled', !cb.checked);}}
-    document.querySelectorAll('.v-enabled-toggle').forEach(function(cb){var row=cb.closest('tr'); cb.addEventListener('change', function(){refreshVEnabledState(row);}); refreshVEnabledState(row);});
-
-    document.querySelectorAll('.payroll-table tr.driver-row').forEach(function(row){
-      var previous = row.querySelector('.balance-previous');
-      var next = row.querySelector('.balance-new');
-      function mark(input, touchedSelector){
-        if(!input) return;
-        input.addEventListener('input', function(){
-          var touched = row.querySelector(touchedSelector);
-          if(touched) touched.value = '1';
-          var mode = input.parentElement ? input.parentElement.querySelector('.balance-mode') : null;
-          if(mode){ mode.textContent = input.value.trim() ? 'manuell' : 'auto nach Speichern'; mode.classList.toggle('manual', !!input.value.trim()); }
-        });
-      }
-      mark(previous, '.balance-previous-touched');
-      mark(next, '.balance-new-touched');
-    });
-
-    (function(){
-      var modal=document.getElementById('sick-calendar-modal'), grid=document.getElementById('sick-calendar-grid'), title=document.getElementById('sick-calendar-title');
-      if(!modal||!grid) return;
-      var activeInput=null, activeForm=null, selected=new Set(), dragging=false, dragState=true;
-      var year={{ year }}, month={{ month }};
-      function parseRanges(raw){ var out=new Set(); (raw||'').split(',').map(function(x){return x.trim();}).filter(Boolean).forEach(function(part){ var bits=part.split('-').map(function(x){return parseInt(x.trim(),10);}); if(bits.length===2&&Number.isFinite(bits[0])&&Number.isFinite(bits[1])){ for(var d=bits[0];d<=bits[1];d++) out.add(d); } else if(Number.isFinite(bits[0])) out.add(bits[0]); }); return out; }
-      function formatRanges(set){ var a=Array.from(set).sort(function(x,y){return x-y;}); if(!a.length) return ''; var parts=[], start=a[0], prev=a[0]; for(var i=1;i<=a.length;i++){ var cur=a[i]; if(cur===prev+1){ prev=cur; continue; } parts.push(start===prev?String(start):(start+'-'+prev)); start=cur; prev=cur; } return parts.join(', '); }
-      function paint(btn, day, state){ if(state) selected.add(day); else selected.delete(day); btn.classList.toggle('selected', state); }
-      function build(){ grid.innerHTML=''; var first=new Date(year,month-1,1), days=new Date(year,month,0).getDate(), blanks=(first.getDay()+6)%7; for(var b=0;b<blanks;b++){ var blank=document.createElement('button'); blank.type='button'; blank.className='sick-day blank'; blank.tabIndex=-1; grid.appendChild(blank); } for(let day=1;day<=days;day++){ let btn=document.createElement('button'); btn.type='button'; btn.className='sick-day'+(selected.has(day)?' selected':''); btn.textContent=day; btn.addEventListener('pointerdown',function(e){ dragging=true; dragState=!selected.has(day); paint(btn,day,dragState); e.preventDefault(); }); btn.addEventListener('pointerenter',function(e){ if(dragging){ paint(btn,day,dragState); e.preventDefault(); } }); btn.addEventListener('click',function(e){ e.preventDefault(); }); grid.appendChild(btn); } }
-      function close(){ modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); dragging=false; }
-      document.addEventListener('pointerup',function(){ dragging=false; });
-      document.querySelectorAll('.sick-calendar-open').forEach(function(open){ open.addEventListener('click',function(){ activeForm=document.getElementById(open.dataset.form); activeInput=document.querySelector('input.sick-days-input[form="'+open.dataset.form+'"]'); selected=parseRanges(activeInput?activeInput.value:''); title.textContent=(open.dataset.driverName||'')+' · {{ months[month] }} {{ year }}'; build(); modal.classList.add('open'); modal.setAttribute('aria-hidden','false'); }); });
-      document.getElementById('sick-calendar-close').addEventListener('click',close); document.getElementById('sick-calendar-cancel').addEventListener('click',close);
-      modal.addEventListener('click',function(e){ if(e.target===modal) close(); });
-      document.getElementById('sick-calendar-save').addEventListener('click',function(){ if(!activeInput||!activeForm) return close(); activeInput.value=formatRanges(selected); close(); activeForm.requestSubmit(); });
-    })();
-
-    var allPayrollForm = document.getElementById('all-payroll-form');
-    if(allPayrollForm){
-      allPayrollForm.addEventListener('submit', function(){
-        allPayrollForm.querySelectorAll('input[data-dynamic="1"]').forEach(function(x){x.remove();});
-        document.querySelectorAll('form[id^="payroll-"]').forEach(function(f){
-          var id = f.id.replace('payroll-', '');
-          var row = f.closest('tr');
-          if(!row) return;
-          function add(name, value){ var inp=document.createElement('input'); inp.type='hidden'; inp.name=name; inp.value=value || ''; inp.dataset.dynamic='1'; allPayrollForm.appendChild(inp); }
-          add('row_driver_id_' + id, id);
-          ['admin_info','payroll_office_info','worked_hours','payroll_hours','v_note','payroll_surcharge','fuel_voucher','vacation_days','sick_days','previous_balance_manual','previous_balance_touched','new_balance_manual','new_balance_touched'].forEach(function(name){
-            var el = row.querySelector('[name="' + name + '"]');
-            add(name + '_' + id, el ? el.value : '');
-          });
-          var vEnabled = row.querySelector('.v-enabled-toggle');
-          add('v_enabled_' + id, vEnabled && vEnabled.checked ? '1' : '0');
-        });
-      });
-    }
-    </script>
-    """, year=year, month=month, months=MONATE, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, fmt_hours=fmt_hours, fmt_signed=fmt_signed, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, fmt_balance_input=fmt_balance_input, signed_class=signed_class, row_get=row_get, row_v_enabled=row_v_enabled, employment_class=employment_class, vacation_display=vacation_display, sick_days_display=sick_days_display, sick_days_count=sick_days_count, global_v_all=global_v_all)
-    return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
-
+    # Alte URL bleibt kompatibel, verwendet aber exakt dieselbe zusammengefuehrte Ansicht.
+    return admin_months()
 
 @app.get("/admin/payroll-hours/export/<int:year>/<int:month>.pdf")
 @admin_login_required
