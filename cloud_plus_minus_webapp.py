@@ -59,7 +59,7 @@ BASE_CSS = r"""
 :root{--bg:#eef1f6;--card:#fff;--text:#101827;--muted:#667085;--line:#d9dee8;--blue:#123e7c;--blue2:#0f62fe;--green:#067647;--red:#b42318;--amber:#b54708;--soft:#f8fafc;--shadow:0 12px 35px rgba(16,24,40,.08)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:radial-gradient(circle at top left,#dce9ff 0,#eef1f6 35%,#f7f8fb 100%);color:var(--text)}
 a{color:inherit}.shell{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{background:#0f2446;color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{font-size:1.35rem;font-weight:900;letter-spacing:-.02em;margin-bottom:22px}.nav a{display:block;text-decoration:none;padding:12px 14px;border-radius:14px;margin:6px 0;color:#d9e7ff}.nav a:hover,.nav a.active{background:rgba(255,255,255,.13);color:#fff}.main{padding:24px;max-width:1600px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:20px}.title{font-size:2rem;font-weight:900;color:#0f2446;letter-spacing:-.03em}.subtitle{color:var(--muted);margin-top:4px}.card{background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:22px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}.grid{display:grid;gap:16px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{padding:18px;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid var(--line)}.kpi b{display:block;font-size:1.65rem;margin-top:6px}.muted{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-weight:800}.pos{color:var(--green);font-weight:800}.neg{color:var(--red);font-weight:800}.zero{color:var(--muted);font-weight:800}
-label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:125px}.col-adjust{width:350px}.col-small{width:62px}.col-action{width:100px}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_note]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_note]{max-width:115px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#667085;font-size:11px;font-weight:800;line-height:1;white-space:nowrap;max-width:70px;overflow:hidden;margin-bottom:0}.v-toggle input{width:auto!important;min-width:13px!important;height:13px!important;padding:0!important;margin:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#667085!important;opacity:.72}.v-disabled-note{font-size:10px;color:#98a2b3;margin-top:3px;font-weight:800;line-height:1.05;max-width:70px}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick .sick-calendar-open{border-color:#fda29b;background:#fff1f0;color:#b42318;text-align:left}.payroll-table textarea{min-height:74px;font-size:14px}.driver-name{font-weight:900}.employment-vollzeit{color:#7c3aed}.employment-teilzeit{color:#d4a000}.employment-aushilfe{color:#38bdf8}.vacation-input-wrap{position:relative}.vacation-input-wrap input{padding-right:48px}.vacation-input-wrap .suffix{position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;color:#667085;opacity:.55;font-weight:800;font-size:12px}.sick-days-overview{margin-top:6px;font-size:12px;font-weight:600;color:#b42318;line-height:1.3}.sick-days-total{font-weight:900;text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:2px}.sick-calendar-modal{position:fixed;inset:0;background:rgba(15,36,70,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:1000}.sick-calendar-modal.open{display:flex}.sick-calendar-panel{width:min(520px,100%);background:#fff;border-radius:22px;border:1px solid var(--line);box-shadow:0 24px 70px rgba(16,24,40,.25);padding:18px}.sick-calendar-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.sick-calendar-week,.sick-calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.sick-calendar-week div{text-align:center;color:#667085;font-size:12px;font-weight:900;padding:5px}.sick-day{min-height:46px;padding:8px 4px;border-radius:12px;text-align:center;font-weight:900;touch-action:none;user-select:none}.sick-day.selected{background:#fee4e2;border-color:#f04438;color:#b42318}.sick-day.blank{visibility:hidden}.sick-calendar-hint{font-size:12px;color:#667085;margin:10px 0}.global-v-toggle{display:inline-flex!important;align-items:center;gap:5px;font-size:11px;font-weight:900;color:#667085;margin-top:5px;white-space:nowrap}.global-v-toggle input{width:auto!important;margin:0!important;padding:0!important}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}.driver-balance-mini{display:block;margin-top:4px;font-size:11px;font-weight:900;opacity:.68;line-height:1.1;letter-spacing:.01em}.month-locked-note{margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#b54708;font-weight:800;font-size:13px}
+label{display:block;font-weight:800;margin-bottom:6px}input,select,textarea,button,.btn{width:100%;padding:11px 12px;border:1px solid #c7ceda;border-radius:12px;font-size:15px;background:#fff}textarea{min-height:42px;resize:vertical}button,.btn{cursor:pointer;text-decoration:none;text-align:center;display:inline-block;background:#f8fafc;font-weight:800}.btn.primary,button.primary{background:linear-gradient(135deg,var(--blue),var(--blue2));border-color:var(--blue);color:#fff}.btn.danger,button.danger{background:#fff1f0;border-color:#fda29b;color:#b42318}.btn.small{width:auto;padding:8px 11px;border-radius:10px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.actions .btn,.actions button{width:auto}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;background:#fff}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px}th,td{padding:12px;border-bottom:1px solid #edf0f5;text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#f3f6fb;color:#344054;font-size:13px;z-index:1}tr:hover td{background:#fbfdff}.flash{padding:12px 14px;border-radius:14px;margin-bottom:14px;font-weight:700}.flash.ok{background:#ecfdf3;color:#067647;border:1px solid #abefc6}.flash.err{background:#fff1f0;color:#b42318;border:1px solid #fecdca}.login-wrap{max-width:520px;margin:8vh auto;padding:24px}.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.month-card{padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff;text-decoration:none}.month-card strong{display:block;color:#123e7c;font-size:1.1rem;margin-bottom:6px}.right{text-align:right}.nowrap{white-space:nowrap}.item-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;border:1px solid #edf0f5;border-radius:12px;background:#fbfdff}.item-row form{margin-left:auto}.mini-form{display:grid;grid-template-columns:110px 90px minmax(160px,1fr) auto;gap:8px;align-items:center}.sum-box{font-size:13px;margin-top:8px;color:var(--muted)}.admin-info{min-width:240px}.admin-info textarea{min-height:86px;font-size:14px;background:#fffef7;border-color:#f6d98b}.download-note{font-size:12px;color:var(--muted);margin-top:4px}.driver-row.row-base td{background:#ffffff}.driver-row.row-alt td{background:#f3f6fb}.driver-row:hover td{background:#eaf1fb!important}.adjustment-list{margin-top:12px;padding-top:10px;border-top:1px dashed #cfd6e3}.delete-month-btn{font-size:11px!important;padding:5px 8px!important;border-radius:9px!important;opacity:.82}.delete-month-btn:hover{opacity:1}.admin-info textarea.carried{background:#f5f8ff;border-color:#b8c8f0}.months-table{table-layout:fixed;min-width:0}.months-table th,.months-table td{padding:8px 7px}.col-admin{width:155px}.col-driver{width:190px}.col-hours{width:82px}.col-payroll{width:82px}.col-v{width:125px}.col-adjust{width:350px}.col-small{width:62px}.col-balance{width:92px}.col-action{width:100px}.balance-input{min-width:72px;padding:8px 7px;font-size:13px;font-weight:800}.balance-mode{margin-top:3px;font-size:10px;color:#98a2b3;font-weight:800;line-height:1.05}.balance-mode.manual{color:#b54708}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_note]{padding:12px 9px;font-size:16px}.months-table input[name=worked_hours]{max-width:70px}.months-table input[name=payroll_hours]{max-width:74px}.months-table input[name=v_note]{max-width:115px}.v-preview{font-size:12px;color:#98a2b3;margin-top:4px;line-height:1.2;white-space:nowrap}.v-toggle{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#667085;font-size:11px;font-weight:800;line-height:1;white-space:nowrap;max-width:70px;overflow:hidden;margin-bottom:0}.v-toggle input{width:auto!important;min-width:13px!important;height:13px!important;padding:0!important;margin:0!important}.v-disabled{background:#f2f4f7!important;border-color:#d0d5dd!important;color:#667085!important;opacity:.72}.v-disabled-note{font-size:10px;color:#98a2b3;margin-top:3px;font-weight:800;line-height:1.05;max-width:70px}.mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mini-form select{width:78px}.mini-form input[name=item_hours]{width:58px}.mini-form input[name=item_note]{width:105px}.mini-form button{width:auto}.dropzone{position:relative;border:2px dashed #b8c4d6;background:#f8fafc;border-radius:14px;padding:14px 12px;text-align:center;font-size:13px;line-height:1.25;color:#475467;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:center;width:115px}.dropzone.dragover{border-color:#067647;background:#ecfdf3;color:#067647}.dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}.file-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#eef4ff;color:#123e7c;font-size:12px;margin-top:6px}.file-pill form{display:inline;margin:0}.file-remove{width:auto!important;padding:3px 7px!important;border-radius:999px!important;font-size:11px!important}.compact-save{display:flex;flex-direction:column;gap:7px;align-items:flex-start}.mobile-row-title{display:none;font-weight:900;color:#0f2446;margin-bottom:8px}.payroll-table{table-layout:fixed;min-width:0}.payroll-table th,.payroll-table td{padding:9px 8px}.col-pay-info{width:150px}.col-pay-num{width:84px}.col-days{width:105px}.days-vacation input{border-color:#75c087;background:#f0fdf4;color:#067647}.days-sick .sick-calendar-open{border-color:#fda29b;background:#fff1f0;color:#b42318;text-align:left}.payroll-table textarea{min-height:74px;font-size:14px}.driver-name{font-weight:900}.employment-vollzeit{color:#7c3aed}.employment-teilzeit{color:#d4a000}.employment-aushilfe{color:#38bdf8}.vacation-input-wrap{position:relative}.vacation-input-wrap input{padding-right:48px}.vacation-input-wrap .suffix{position:absolute;right:11px;top:50%;transform:translateY(-50%);pointer-events:none;color:#667085;opacity:.55;font-weight:800;font-size:12px}.sick-days-overview{margin-top:6px;font-size:12px;font-weight:600;color:#b42318;line-height:1.3}.sick-days-total{font-weight:900;text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:2px}.sick-calendar-modal{position:fixed;inset:0;background:rgba(15,36,70,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:1000}.sick-calendar-modal.open{display:flex}.sick-calendar-panel{width:min(520px,100%);background:#fff;border-radius:22px;border:1px solid var(--line);box-shadow:0 24px 70px rgba(16,24,40,.25);padding:18px}.sick-calendar-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.sick-calendar-week,.sick-calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.sick-calendar-week div{text-align:center;color:#667085;font-size:12px;font-weight:900;padding:5px}.sick-day{min-height:46px;padding:8px 4px;border-radius:12px;text-align:center;font-weight:900;touch-action:none;user-select:none}.sick-day.selected{background:#fee4e2;border-color:#f04438;color:#b42318}.sick-day.blank{visibility:hidden}.sick-calendar-hint{font-size:12px;color:#667085;margin:10px 0}.global-v-toggle{display:inline-flex!important;align-items:center;gap:5px;font-size:11px;font-weight:900;color:#667085;margin-top:5px;white-space:nowrap}.global-v-toggle input{width:auto!important;margin:0!important;padding:0!important}.group-member-preview{margin-top:8px;padding:8px;border-radius:12px;background:#f8fafc;border:1px dashed #cfd6e3;font-size:12px;color:#344054;min-width:0;max-width:100%;overflow:auto}.group-member-preview table{min-width:0!important;width:100%;font-size:12px}.group-member-preview th,.group-member-preview td{padding:4px 5px;white-space:nowrap}.group-worked-note{font-size:12px;color:#667085;margin-top:4px}.group-mini-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.group-mini-form select{width:78px}.group-mini-form input[name=item_hours]{width:58px}.group-mini-form input[name=item_note]{width:105px}.group-mini-form button{width:auto}.driver-balance-mini{display:block;margin-top:4px;font-size:11px;font-weight:900;opacity:.68;line-height:1.1;letter-spacing:.01em}.month-locked-note{margin-top:10px;padding:10px 12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;color:#b54708;font-weight:800;font-size:13px}
 
 @media(min-width:901px){.table-wrap.mobile-cards{max-height:calc(100vh - 230px);overflow:auto;position:relative}.months-table th,.payroll-table th{position:sticky;top:0;z-index:20;background:#f3f6fb}}
 @media(max-width:900px){.shell{display:block}.side{position:relative;height:auto}.main{padding:14px}.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}.top{display:block}.title{font-size:1.55rem}.mini-form{grid-template-columns:1fr}.table-wrap.mobile-cards{overflow:visible;border:0;background:transparent}.months-table{min-width:0;display:block}.months-table thead{display:none}.months-table tbody,.months-table tr,.months-table td{display:block;width:100%}.months-table tr{margin-bottom:14px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow);overflow:hidden}.months-table td{border-bottom:1px solid #edf0f5;padding:10px 12px}.months-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:900;color:#667085;margin-bottom:5px}.months-table .mobile-row-title{display:block}.months-table input[name=worked_hours],.months-table input[name=payroll_hours],.months-table input[name=v_note]{max-width:100%;width:100%}.admin-info{min-width:0}.col-adjust{width:auto}.compact-save{flex-direction:row;flex-wrap:wrap}.item-row{align-items:flex-start}.side .muted{display:none}}
@@ -134,6 +134,17 @@ def fmt_decimal_input(value: float) -> str:
         return ""
     text = f"{amount:.2f}".replace(".", ",")
     return text[:-3] if text.endswith(",00") else text
+
+
+def fmt_balance_input(value: Any) -> str:
+    """Editable German decimal display for balance fields; zero must stay visible."""
+    return f"{safe_float(value):.2f}".replace(".", ",")
+
+
+def parse_optional_hours(raw: str) -> Optional[float]:
+    """Blank means automatic balance calculation; otherwise parse a manual hour value."""
+    text = (raw or "").strip()
+    return None if not text else round(parse_hours(text), 2)
 
 
 def parse_decimal(raw: str) -> float:
@@ -825,6 +836,8 @@ def _init_postgres_schema(conn) -> None:
         difference_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
         previous_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
         new_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        previous_balance_override DOUBLE PRECISION DEFAULT NULL,
+        new_balance_override DOUBLE PRECISION DEFAULT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(driver_id, year, month)
     )
@@ -966,6 +979,8 @@ def _init_postgres_schema(conn) -> None:
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS fuel_voucher DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS vacation_days TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS sick_days TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS previous_balance_override DOUBLE PRECISION DEFAULT NULL",
+        "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS new_balance_override DOUBLE PRECISION DEFAULT NULL",
         "ALTER TABLE adjustment_files ADD COLUMN IF NOT EXISTS original_filename TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE adjustment_files ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE driver_group_month_data ADD COLUMN IF NOT EXISTS admin_info TEXT NOT NULL DEFAULT ''",
@@ -1060,6 +1075,8 @@ def db_conn():
         difference_hours REAL NOT NULL DEFAULT 0,
         previous_balance REAL NOT NULL DEFAULT 0,
         new_balance REAL NOT NULL DEFAULT 0,
+        previous_balance_override REAL DEFAULT NULL,
+        new_balance_override REAL DEFAULT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(driver_id) REFERENCES drivers(id) ON DELETE CASCADE,
         UNIQUE(driver_id, year, month)
@@ -1202,6 +1219,8 @@ def db_conn():
         "fuel_voucher":"ALTER TABLE monthly_data ADD COLUMN fuel_voucher REAL NOT NULL DEFAULT 0",
         "vacation_days":"ALTER TABLE monthly_data ADD COLUMN vacation_days TEXT NOT NULL DEFAULT ''",
         "sick_days":"ALTER TABLE monthly_data ADD COLUMN sick_days TEXT NOT NULL DEFAULT ''",
+        "previous_balance_override":"ALTER TABLE monthly_data ADD COLUMN previous_balance_override REAL DEFAULT NULL",
+        "new_balance_override":"ALTER TABLE monthly_data ADD COLUMN new_balance_override REAL DEFAULT NULL",
     }.items():
         if name not in cols:
             conn.execute(ddl)
@@ -1389,6 +1408,37 @@ def recalc_month_adjustments(conn: sqlite3.Connection, monthly_data_id: int) -> 
     )
 
 
+def update_balance_overrides_from_form(
+    conn: sqlite3.Connection,
+    monthly_data_id: int,
+    previous_value_key: str = "previous_balance_manual",
+    previous_touched_key: str = "previous_balance_touched",
+    new_value_key: str = "new_balance_manual",
+    new_touched_key: str = "new_balance_touched",
+) -> bool:
+    """Persist manual Alt/Neu only when the user actually edited the field.
+
+    An edited-but-empty field clears the override and returns that balance to automatic mode.
+    This prevents ordinary saves from accidentally freezing automatically calculated balances.
+    """
+    changed = False
+    if request.form.get(previous_touched_key) == "1":
+        value = parse_optional_hours(request.form.get(previous_value_key, ""))
+        conn.execute(
+            "UPDATE monthly_data SET previous_balance_override=?, updated_at=? WHERE id=?",
+            (value, now_iso(), monthly_data_id),
+        )
+        changed = True
+    if request.form.get(new_touched_key) == "1":
+        value = parse_optional_hours(request.form.get(new_value_key, ""))
+        conn.execute(
+            "UPDATE monthly_data SET new_balance_override=?, updated_at=? WHERE id=?",
+            (value, now_iso(), monthly_data_id),
+        )
+        changed = True
+    return changed
+
+
 def recalc_driver(conn: sqlite3.Connection, driver_id: int) -> None:
     driver = get_driver_by_db_id(conn, driver_id)
     if not driver:
@@ -1397,8 +1447,21 @@ def recalc_driver(conn: sqlite3.Connection, driver_id: int) -> None:
     rows = conn.execute("SELECT * FROM monthly_data WHERE driver_id=? ORDER BY year, month, id", (driver_id,)).fetchall()
     for r in rows:
         diff = compute_difference(r["worked_hours"], r["payroll_hours"], 0, r["bonus_hours"], r["deduction_hours"], 0)
-        new_balance = round(balance + diff, 2)
-        conn.execute("UPDATE monthly_data SET difference_hours=?, previous_balance=?, new_balance=? WHERE id=?", (diff, round(balance,2), new_balance, r["id"]))
+
+        # Alt normally comes from the previous month's effective Neu. A manual Alt override
+        # deliberately starts this month from a corrected balance without rewriting the prior month.
+        previous_override = row_get(r, "previous_balance_override", None)
+        previous_balance = round(float(previous_override), 2) if previous_override is not None else round(balance, 2)
+
+        calculated_new = round(previous_balance + diff, 2)
+        new_override = row_get(r, "new_balance_override", None)
+        new_balance = round(float(new_override), 2) if new_override is not None else calculated_new
+
+        conn.execute(
+            "UPDATE monthly_data SET difference_hours=?, previous_balance=?, new_balance=? WHERE id=?",
+            (diff, previous_balance, new_balance, r["id"]),
+        )
+        # The effective Neu (manual or automatic) is always the basis for the following month.
         balance = new_balance
 
 
@@ -2130,6 +2193,13 @@ def admin_months():
                             v_enabled = form_v_enabled(f"v_enabled_{suffix}")
                             admin_info = request.form.get(f"admin_info_{suffix}", "").strip()
                             conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v_note, v_enabled, admin_info, now_iso(), mid))
+                            update_balance_overrides_from_form(
+                                conn, mid,
+                                previous_value_key=f"previous_balance_manual_{suffix}",
+                                previous_touched_key=f"previous_balance_touched_{suffix}",
+                                new_value_key=f"new_balance_manual_{suffix}",
+                                new_touched_key=f"new_balance_touched_{suffix}",
+                            )
                             recalc_month_adjustments(conn, mid)
                             recalc_driver(conn, did2)
                             create_driver_pdf(conn, did2, year, month)
@@ -2227,6 +2297,7 @@ def admin_months():
                     admin_info = request.form.get("admin_info", "").strip()
                     monthly_id = get_or_create_month_row(conn, did, year, month)
                     conn.execute("UPDATE monthly_data SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?", (worked, payroll, v_note, v_enabled, admin_info, now_iso(), monthly_id))
+                    update_balance_overrides_from_form(conn, monthly_id)
 
                     should_add_item = action == "add_adjustment" or bool((request.form.get("item_hours", "") or "").strip() or (request.form.get("item_note", "") or "").strip() or (request.files.get("item_file") and request.files.get("item_file").filename))
 
@@ -2393,13 +2464,13 @@ def admin_months():
       </div>
     </div>
     <div class="card"><h2>{{ months[month] }} {{ year }}</h2><form method="post" id="all-months-form"><input type="hidden" name="action" value="save_all"></form><form method="post" id="global-v-form-months"><input type="hidden" name="action" value="set_global_v"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input type="hidden" id="global-v-value-months" name="global_v_enabled" value="{{ 1 if global_v_all else 0 }}"></form><div class="table-wrap mobile-cards"><table class="months-table">
-      <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V<br><label class="global-v-toggle" title="Aktiv-Markierung für alle Fahrer"><input type="checkbox" {% if global_v_all %}checked{% endif %} {% if not editable %}disabled{% endif %} onchange="document.getElementById('global-v-value-months').value=this.checked?'1':'0';document.getElementById('global-v-form-months').submit()"> alle aktiv</label></th><th class="col-adjust">Zuschüsse / Abzüge</th><th class="col-small">Diff</th><th class="col-small">Alt</th><th class="col-small">Neu</th><th class="col-action">Aktion</th></tr></thead><tbody>
+      <thead><tr><th class="col-admin">Allgemeine Infos<br><span class="muted">nur Admin</span></th><th class="col-driver">Fahrer</th><th class="col-hours">geleistete Stunden</th><th class="col-payroll">Abrechnung</th><th class="col-v">V<br><label class="global-v-toggle" title="Aktiv-Markierung für alle Fahrer"><input type="checkbox" {% if global_v_all %}checked{% endif %} {% if not editable %}disabled{% endif %} onchange="document.getElementById('global-v-value-months').value=this.checked?'1':'0';document.getElementById('global-v-form-months').submit()"> alle aktiv</label></th><th class="col-adjust">Zuschüsse / Abzüge</th><th class="col-small">Diff</th><th class="col-balance">Alt</th><th class="col-balance">Neu</th><th class="col-action">Aktion</th></tr></thead><tbody>
       {% for d in drivers %}
       {% set r = rows.get(d['id']) %}
       {% set items = adjustments.get(d['id'], []) %}
       <tr class="driver-row {{ 'row-alt' if loop.index0 % 2 else 'row-base' }}">
         {% if d['is_group'] %}
-        <td class="admin-info" data-label="Allgemeine Infos"><textarea form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><div class="download-note">Gruppe: {{ d['member_names'] }}</div></td>
+        <td class="admin-info" data-label="Allgemeine Infos"><textarea form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}"><div class="download-note">Gruppe: {{ d['member_names'] }}</div></td>
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</div><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b><div class="download-note">zusammengeführt nur in Plus/Minus Stunden</div>{% if d.member_preview %}<div class="group-member-preview"><b>Einzelvorschau</b><table><tr><th>Fahrer</th><th>Std.</th><th>Abr.</th><th>V</th><th>Diff</th></tr>{% for p in d.member_preview %}<tr><td class="driver-name {{ employment_class(p.employment_type) }}">{{ p.name }}</td><td>{{ fmt_hours(p.worked_hours) }}</td><td>{{ fmt_hours(p.payroll_hours) }}</td><td>{{ p.v_note or '-' }}</td><td class="{{ signed_class(p.difference_hours) }}">{{ fmt_signed(p.difference_hours) }}</td></tr>{% endfor %}</table></div>{% endif %}</td>
         <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"><div class="group-worked-note">Nur Gruppenwert für Plus/Minus Stunden.</div></form></td>
         <td data-label="Abrechnung"><input readonly value="{{ r['payroll_hours'] if r else '' }}"></td>
@@ -2410,11 +2481,11 @@ def admin_months():
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% if it.get('is_group_adj') %}{% for f in group_adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form>{% endif %}</div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
         <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
-        <td data-label="Alt" class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
-        <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
+        <td data-label="Alt" class="nowrap" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
+        <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button><span class="badge">Gruppe</span></td>
         {% else %}
-        <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}">{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
+        <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}">{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
         <td class="nowrap" data-label="Fahrer"><div class="mobile-row-title {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</div><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b></td>
         <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
         <td data-label="Abrechnung"><input form="save-{{ d['form_id'] }}" name="payroll_hours" value="{{ r['payroll_hours'] if r else '' }}"><input type="hidden" form="all-months-form" name="payroll_hours_{{ d['form_id'] }}" value="{{ r['payroll_hours'] if r else '' }}" class="all-copy-payroll-{{ d['form_id'] }}"></td>
@@ -2425,8 +2496,8 @@ def admin_months():
           <div class="adjustment-list">{% if items %}{% for it in items %}<div class="item-row"><span class="{{ 'pos' if it['kind']=='bonus' else 'neg' }}">{{ '+' if it['kind']=='bonus' else '-' }}{{ fmt_hours(it['hours']) }}</span><span>{{ it['note'] }}</span>{% for f in adjustment_files.get(it['id'], []) %}<span class="file-pill">📎 {{ f['original_filename'] or f['filename'] }}<form method="post"><input type="hidden" name="action" value="delete_adjustment_file"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="file_id" value="{{ f['id'] }}"><button class="file-remove danger" onclick="return confirm('Bild/Datei entfernen?')">entfernen</button></form></span>{% endfor %}<form method="post"><input type="hidden" name="action" value="delete_adjustment"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="item_id" value="{{ it['id'] }}"><button class="small danger" onclick="return confirm('Position löschen?')">x</button></form></div>{% endfor %}{% else %}<div class="muted">Keine Positionen</div>{% endif %}</div>
         </td>
         <td data-label="Diff" class="{{ signed_class(r['difference_hours']) if r else '' }} nowrap">{{ fmt_signed(r['difference_hours']) if r else '-' }}</td>
-        <td data-label="Alt" class="nowrap">{{ fmt_signed(r['previous_balance']) if r else '-' }}</td>
-        <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }} nowrap">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
+        <td data-label="Alt" class="nowrap"><input class="balance-input balance-previous" form="save-{{ d['form_id'] }}" name="previous_balance_manual" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" title="Ändern = manueller Wert. Feld leeren und speichern = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="previous_balance_touched" value="0" class="balance-previous-touched"><input type="hidden" form="all-months-form" name="previous_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['previous_balance']) if r else '' }}" class="all-copy-previous-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="previous_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-previous-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'previous_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'previous_balance_override', None) is not none else 'auto' }}</div></td>
+        <td data-label="Neu" class="nowrap"><input class="balance-input balance-new {{ signed_class(r['new_balance']) if r else '' }}" form="save-{{ d['form_id'] }}" name="new_balance_manual" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" title="Ändern = manueller Wert. Dieser Wert wird in den nächsten Monat übernommen. Feld leeren = wieder automatisch."><input type="hidden" form="save-{{ d['form_id'] }}" name="new_balance_touched" value="0" class="balance-new-touched"><input type="hidden" form="all-months-form" name="new_balance_manual_{{ d['form_id'] }}" value="{{ fmt_balance_input(r['new_balance']) if r else '' }}" class="all-copy-new-balance-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="new_balance_touched_{{ d['form_id'] }}" value="0" class="all-copy-new-touched-{{ d['form_id'] }}"><div class="balance-mode {{ 'manual' if r and row_get(r, 'new_balance_override', None) is not none else '' }}">{{ 'manuell' if r and row_get(r, 'new_balance_override', None) is not none else 'auto' }}</div></td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button>{% if r %}<form method="post" onsubmit="return confirm('Datensatz löschen?')"><input type="hidden" name="action" value="delete"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><button class="small danger delete-month-btn">Monat löschen</button></form>{% endif %}</td>
         {% endif %}
       </tr>
@@ -2497,18 +2568,32 @@ def admin_months():
         var payroll = row.querySelector('input[name="payroll_hours"]');
         var v = row.querySelector('input[name="v_note"]');
         var vEnabled = row.querySelector('.v-enabled-toggle');
+        var previousBalance = row.querySelector('input[name="previous_balance_manual"]');
+        var newBalance = row.querySelector('input[name="new_balance_manual"]');
         var ha = document.querySelector('.all-copy-admin-' + CSS.escape(formId)); if(ha && admin) ha.value = admin.value;
         var hw = document.querySelector('.all-copy-worked-' + CSS.escape(formId)); if(hw && worked) hw.value = worked.value;
         var hp = document.querySelector('.all-copy-payroll-' + CSS.escape(formId)); if(hp && payroll) hp.value = payroll.value;
         var hv = document.querySelector('.all-copy-v-' + CSS.escape(formId)); if(hv && v) hv.value = v.value;
         var hve = document.querySelector('.all-copy-v-enabled-' + CSS.escape(formId)); if(hve && vEnabled) hve.value = vEnabled.checked ? '1' : '0';
+        var hpb = document.querySelector('.all-copy-previous-balance-' + CSS.escape(formId)); if(hpb && previousBalance) hpb.value = previousBalance.value;
+        var hnb = document.querySelector('.all-copy-new-balance-' + CSS.escape(formId)); if(hnb && newBalance) hnb.value = newBalance.value;
       }
-      row.addEventListener('input', sync);
+      row.addEventListener('input', function(e){
+        if(e.target && e.target.classList.contains('balance-previous')){
+          var own = row.querySelector('.balance-previous-touched'); if(own) own.value = '1';
+          var all = document.querySelector('.all-copy-previous-touched-' + CSS.escape(formId)); if(all) all.value = '1';
+        }
+        if(e.target && e.target.classList.contains('balance-new')){
+          var ownNew = row.querySelector('.balance-new-touched'); if(ownNew) ownNew.value = '1';
+          var allNew = document.querySelector('.all-copy-new-touched-' + CSS.escape(formId)); if(allNew) allNew.value = '1';
+        }
+        sync();
+      });
       row.addEventListener('change', sync);
       sync();
     });
     </script>
-    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, signed_class=signed_class, row_v_enabled=row_v_enabled, row_get=row_get, employment_class=employment_class, global_v_all=global_v_all)
+    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, fmt_balance_input=fmt_balance_input, signed_class=signed_class, row_v_enabled=row_v_enabled, row_get=row_get, employment_class=employment_class, global_v_all=global_v_all)
     return base_page("Plus/Minus Stunden", body, "months")
 
 
@@ -3244,6 +3329,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
