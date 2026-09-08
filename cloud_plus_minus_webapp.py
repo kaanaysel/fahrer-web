@@ -479,9 +479,10 @@ def sync_group_admin_info(conn, group_id: int, year: int, month: int, admin_info
     for member in members:
         monthly_id = get_or_create_month_row(conn, int(member["id"]), year, month)
         conn.execute(
-            "UPDATE monthly_data SET admin_info=?, admin_info_carried=0, updated_at=? WHERE id=?",
+            "UPDATE monthly_data SET admin_info=?, admin_info_carried=0, info_carry_initialized=1, updated_at=? WHERE id=?",
             (text, now_iso(), monthly_id),
         )
+        propagate_admin_info_forward_only(conn, int(member["id"]), year, month, text)
 
 
 def sync_member_admin_info_to_group(conn, driver_id: int, year: int, month: int, admin_info: str) -> None:
@@ -903,7 +904,9 @@ def _init_postgres_schema(conn) -> None:
         comment TEXT NOT NULL DEFAULT '',
         admin_info TEXT NOT NULL DEFAULT '',
         admin_info_carried INTEGER NOT NULL DEFAULT 0,
+        info_carry_initialized INTEGER NOT NULL DEFAULT 1,
         payroll_office_info TEXT NOT NULL DEFAULT '',
+        payroll_office_info_carried INTEGER NOT NULL DEFAULT 0,
         payroll_surcharge DOUBLE PRECISION NOT NULL DEFAULT 0,
         fuel_voucher DOUBLE PRECISION NOT NULL DEFAULT 0,
         payroll_carry_initialized INTEGER NOT NULL DEFAULT 0,
@@ -1048,6 +1051,8 @@ def _init_postgres_schema(conn) -> None:
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS deduction_comment TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS admin_info TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS admin_info_carried INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS info_carry_initialized INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS payroll_office_info_carried INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS adjustment_hours DOUBLE PRECISION NOT NULL DEFAULT 0",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE monthly_data ADD COLUMN IF NOT EXISTS payroll_office_info TEXT NOT NULL DEFAULT ''",
@@ -1142,7 +1147,9 @@ def db_conn():
         comment TEXT NOT NULL DEFAULT '',
         admin_info TEXT NOT NULL DEFAULT '',
         admin_info_carried INTEGER NOT NULL DEFAULT 0,
+        info_carry_initialized INTEGER NOT NULL DEFAULT 1,
         payroll_office_info TEXT NOT NULL DEFAULT '',
+        payroll_office_info_carried INTEGER NOT NULL DEFAULT 0,
         payroll_surcharge REAL NOT NULL DEFAULT 0,
         fuel_voucher REAL NOT NULL DEFAULT 0,
         payroll_carry_initialized INTEGER NOT NULL DEFAULT 0,
@@ -1290,6 +1297,8 @@ def db_conn():
         "deduction_comment":"ALTER TABLE monthly_data ADD COLUMN deduction_comment TEXT NOT NULL DEFAULT ''",
         "admin_info":"ALTER TABLE monthly_data ADD COLUMN admin_info TEXT NOT NULL DEFAULT ''",
         "admin_info_carried":"ALTER TABLE monthly_data ADD COLUMN admin_info_carried INTEGER NOT NULL DEFAULT 0",
+        "info_carry_initialized":"ALTER TABLE monthly_data ADD COLUMN info_carry_initialized INTEGER NOT NULL DEFAULT 1",
+        "payroll_office_info_carried":"ALTER TABLE monthly_data ADD COLUMN payroll_office_info_carried INTEGER NOT NULL DEFAULT 0",
         "payroll_office_info":"ALTER TABLE monthly_data ADD COLUMN payroll_office_info TEXT NOT NULL DEFAULT ''",
         "payroll_surcharge":"ALTER TABLE monthly_data ADD COLUMN payroll_surcharge REAL NOT NULL DEFAULT 0",
         "fuel_voucher":"ALTER TABLE monthly_data ADD COLUMN fuel_voucher REAL NOT NULL DEFAULT 0",
@@ -1341,35 +1350,121 @@ def previous_month(year: int, month: int) -> Tuple[int, int]:
     return year, month - 1
 
 
-def maybe_carry_admin_info(conn: sqlite3.Connection, monthly_data_id: int, driver_id: int, year: int, month: int) -> None:
-    """Copy admin-only info exactly one month forward.
+def maybe_carry_month_infos(conn: sqlite3.Connection, monthly_data_id: int, driver_id: int, year: int, month: int) -> None:
+    """Initialize the two rolling info fields from the immediately previous month.
 
-    If January has manually saved info, February gets it automatically.
-    The copied February value is marked as carried, so it will not automatically continue into March.
-    If the admin edits/saves February, it becomes manual again and can carry into March.
+    A deliberately cleared field is still a valid monthly value. The
+    ``info_carry_initialized`` flag distinguishes a new month from a month that
+    has already been inherited or explicitly saved, so a deleted September note
+    does not reappear from August on the next page load.
     """
     current = conn.execute(
-        "SELECT admin_info, COALESCE(admin_info_carried,0) AS admin_info_carried FROM monthly_data WHERE id=?",
+        """
+        SELECT COALESCE(info_carry_initialized,0) AS info_carry_initialized
+        FROM monthly_data WHERE id=?
+        """,
         (monthly_data_id,),
     ).fetchone()
-    if not current or (current["admin_info"] or "").strip():
+    if not current or int(row_get(current, "info_carry_initialized", 0) or 0) == 1:
         return
 
     py, pm = previous_month(year, month)
     prev = conn.execute(
         """
-        SELECT admin_info, COALESCE(admin_info_carried,0) AS admin_info_carried
+        SELECT admin_info, payroll_office_info
         FROM monthly_data
         WHERE driver_id=? AND year=? AND month=?
         """,
         (driver_id, py, pm),
     ).fetchone()
 
-    if prev and (prev["admin_info"] or "").strip() and int(prev["admin_info_carried"] or 0) == 0:
+    admin_info = str(row_get(prev, "admin_info", "") or "") if prev else ""
+    payroll_office_info = str(row_get(prev, "payroll_office_info", "") or "") if prev else ""
+    inherited = 1 if prev else 0
+    conn.execute(
+        """
+        UPDATE monthly_data
+        SET admin_info=?, admin_info_carried=?, payroll_office_info=?,
+            payroll_office_info_carried=?, info_carry_initialized=1, updated_at=?
+        WHERE id=?
+        """,
+        (admin_info, inherited, payroll_office_info, inherited, now_iso(), monthly_data_id),
+    )
+
+
+def rolling_info_save_state(
+    conn: sqlite3.Connection, monthly_data_id: int, admin_info: str, payroll_office_info: str
+) -> Dict[str, Any]:
+    """Return carried/manual flags and whether either rolling field was changed."""
+    old = conn.execute(
+        """
+        SELECT admin_info, COALESCE(admin_info_carried,0) AS admin_info_carried,
+               payroll_office_info, COALESCE(payroll_office_info_carried,0) AS payroll_office_info_carried
+        FROM monthly_data WHERE id=?
+        """,
+        (monthly_data_id,),
+    ).fetchone()
+    old_admin = str(row_get(old, "admin_info", "") or "") if old else ""
+    old_payroll = str(row_get(old, "payroll_office_info", "") or "") if old else ""
+    admin_text = (admin_info or "").strip()
+    payroll_text = (payroll_office_info or "").strip()
+    admin_changed = admin_text != old_admin
+    payroll_changed = payroll_text != old_payroll
+    return {
+        "admin_changed": admin_changed,
+        "payroll_changed": payroll_changed,
+        "admin_carried": 0 if admin_changed else int(row_get(old, "admin_info_carried", 0) or 0),
+        "payroll_carried": 0 if payroll_changed else int(row_get(old, "payroll_office_info_carried", 0) or 0),
+    }
+
+
+def propagate_rolling_info_forward(
+    conn: sqlite3.Connection, driver_id: int, year: int, month: int,
+    field: str, value: str,
+) -> None:
+    """Update only later months that are still inherited for this field.
+
+    Propagation stops at the first later month that has its own manual value.
+    Earlier months are never touched.
+    """
+    if field == "admin_info":
+        carried_field = "admin_info_carried"
+    elif field == "payroll_office_info":
+        carried_field = "payroll_office_info_carried"
+    else:
+        raise ValueError("Unsupported rolling info field")
+
+    rows = conn.execute(
+        f"""
+        SELECT id, COALESCE({carried_field},0) AS carried,
+               COALESCE(info_carry_initialized,0) AS info_carry_initialized
+        FROM monthly_data
+        WHERE driver_id=? AND (year>? OR (year=? AND month>?))
+        ORDER BY year, month, id
+        """,
+        (driver_id, year, year, month),
+    ).fetchall()
+    text = (value or "").strip()
+    for future in rows:
+        initialized = int(row_get(future, "info_carry_initialized", 0) or 0)
+        carried = int(row_get(future, "carried", 0) or 0)
+        if initialized == 1 and carried == 0:
+            break
         conn.execute(
-            "UPDATE monthly_data SET admin_info=?, admin_info_carried=1, updated_at=? WHERE id=?",
-            (prev["admin_info"], now_iso(), monthly_data_id),
+            f"""
+            UPDATE monthly_data
+            SET {field}=?, {carried_field}=1, info_carry_initialized=1, updated_at=?
+            WHERE id=?
+            """,
+            (text, now_iso(), int(future["id"])),
         )
+
+
+def propagate_admin_info_forward_only(
+    conn: sqlite3.Connection, driver_id: int, year: int, month: int, admin_info: str
+) -> None:
+    """Forward only the internal admin note, used by grouped-driver synchronization."""
+    propagate_rolling_info_forward(conn, driver_id, year, month, "admin_info", admin_info)
 
 
 def maybe_carry_payroll_values(conn: sqlite3.Connection, monthly_data_id: int, driver_id: int, year: int, month: int) -> None:
@@ -1408,13 +1503,13 @@ def get_or_create_month_row(conn: sqlite3.Connection, driver_id: int, year: int,
         monthly_id = int(row["id"])
     else:
         cur = conn.execute(
-            "INSERT INTO monthly_data(driver_id, year, month, v_enabled, payroll_carry_initialized, updated_at) VALUES(?,?,?,?,?,?)",
-            (driver_id, year, month, 0, 0, now_iso()),
+            "INSERT INTO monthly_data(driver_id, year, month, v_enabled, info_carry_initialized, payroll_carry_initialized, updated_at) VALUES(?,?,?,?,?,?,?)",
+            (driver_id, year, month, 0, 0, 0, now_iso()),
         )
         monthly_id = int(cur.lastrowid)
 
     if carry_admin_info:
-        maybe_carry_admin_info(conn, monthly_id, driver_id, year, month)
+        maybe_carry_month_infos(conn, monthly_id, driver_id, year, month)
     maybe_carry_payroll_values(conn, monthly_id, driver_id, year, month)
     return monthly_id
 
@@ -2349,13 +2444,19 @@ def admin_months():
                             fuel_voucher = parse_decimal(request.form.get(f"fuel_voucher_{suffix}", "0"))
                             vacation_days = normalize_vacation_count(request.form.get(f"vacation_days_{suffix}", ""))
                             sick_days = normalize_day_ranges(request.form.get(f"sick_days_{suffix}", ""))
+                            info_state = rolling_info_save_state(conn, mid, admin_info, payroll_office_info)
                             conn.execute("""
                                 UPDATE monthly_data
-                                SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0,
-                                    payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
+                                SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=?,
+                                    info_carry_initialized=1, payroll_office_info=?, payroll_office_info_carried=?,
+                                    payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
                                     vacation_days=?, sick_days=?, updated_at=?
                                 WHERE id=?
-                            """, (worked, payroll, v_note, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), mid))
+                            """, (worked, payroll, v_note, v_enabled, admin_info, info_state["admin_carried"], payroll_office_info, info_state["payroll_carried"], payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), mid))
+                            if info_state["admin_changed"]:
+                                propagate_rolling_info_forward(conn, did2, year, month, "admin_info", admin_info)
+                            if info_state["payroll_changed"]:
+                                propagate_rolling_info_forward(conn, did2, year, month, "payroll_office_info", payroll_office_info)
                             sync_member_admin_info_to_group(conn, did2, year, month, admin_info)
                             update_balance_overrides_from_form(
                                 conn, mid,
@@ -2465,13 +2566,19 @@ def admin_months():
                     vacation_days = normalize_vacation_count(request.form.get("vacation_days", ""))
                     sick_days = normalize_day_ranges(request.form.get("sick_days", ""))
                     monthly_id = get_or_create_month_row(conn, did, year, month)
+                    info_state = rolling_info_save_state(conn, monthly_id, admin_info, payroll_office_info)
                     conn.execute("""
                         UPDATE monthly_data
-                        SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=0,
-                            payroll_office_info=?, payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
+                        SET worked_hours=?, payroll_hours=?, v_hours=0, v_note=?, v_enabled=?, admin_info=?, admin_info_carried=?,
+                            info_carry_initialized=1, payroll_office_info=?, payroll_office_info_carried=?,
+                            payroll_surcharge=?, fuel_voucher=?, payroll_carry_initialized=1,
                             vacation_days=?, sick_days=?, updated_at=?
                         WHERE id=?
-                    """, (worked, payroll, v_note, v_enabled, admin_info, payroll_office_info, payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                    """, (worked, payroll, v_note, v_enabled, admin_info, info_state["admin_carried"], payroll_office_info, info_state["payroll_carried"], payroll_surcharge, fuel_voucher, vacation_days, sick_days, now_iso(), monthly_id))
+                    if info_state["admin_changed"]:
+                        propagate_rolling_info_forward(conn, did, year, month, "admin_info", admin_info)
+                    if info_state["payroll_changed"]:
+                        propagate_rolling_info_forward(conn, did, year, month, "payroll_office_info", payroll_office_info)
                     sync_member_admin_info_to_group(conn, did, year, month, admin_info)
                     update_balance_overrides_from_form(conn, monthly_id)
 
@@ -2617,6 +2724,12 @@ def admin_months():
         drivers = display_drivers
         month_released = is_month_released(conn, year, month)
         global_v_all = month_all_drivers_v_enabled(conn, year, month)
+        fuel_voucher_count = sum(
+            1
+            for d in display_drivers
+            if not d.get("is_group")
+            and abs(safe_float(row_get(rows.get(int(d["id"])), "fuel_voucher", 0))) > 0.0001
+        )
 
     body = render_template_string("""
     <div class="card combined-toolbar">
@@ -2654,7 +2767,7 @@ def admin_months():
         <th class="col-payroll">Abrechnung</th>
         <th class="col-v">V<br><label class="global-v-toggle" title="Aktiv-Markierung für alle Fahrer"><input type="checkbox" {% if global_v_all %}checked{% endif %} {% if not editable %}disabled{% endif %} onchange="document.getElementById('global-v-value-months').value=this.checked?'1':'0';document.getElementById('global-v-form-months').submit()"> alle aktiv</label></th>
         <th class="col-pay-num">Zuschlag</th>
-        <th class="col-pay-num">Tankgutschein</th>
+        <th class="col-pay-num" id="fuel-voucher-count-head">Tankgutschein ={{ fuel_voucher_count }}</th>
         <th class="col-days">Urlaub</th>
         <th class="col-sick">Krank</th>
         <th class="col-adjust">Zuschüsse / Abzüge</th>
@@ -2688,7 +2801,7 @@ def admin_months():
         <td data-label="Neu" class="{{ signed_class(r['new_balance']) if r else '' }}" title="Gruppensumme aus den einzelnen Fahrerständen">{{ fmt_signed(r['new_balance']) if r else '-' }}</td>
         <td data-label="Aktion" class="actions compact-save"><button form="save-{{ d['form_id'] }}" name="action" value="save" class="small primary">Speichern</button><span class="badge">Gruppe</span></td>
         {% else %}
-        <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}">{% if r and r['admin_info_carried'] %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
+        <td class="admin-info" data-label="Allgemeine Infos"><textarea class="{{ 'carried' if r and r['admin_info_carried'] else '' }}" form="save-{{ d['form_id'] }}" name="admin_info" placeholder="Interne Infos, nur für Admin sichtbar">{{ r['admin_info'] if r else '' }}</textarea><input type="hidden" form="all-months-form" name="row_driver_id_{{ d['form_id'] }}" value="{{ d['id'] }}"><input type="hidden" form="all-months-form" name="admin_info_{{ d['form_id'] }}" value="{{ r['admin_info'] if r else '' }}" class="all-copy-admin-{{ d['form_id'] }}"><input type="hidden" form="all-months-form" name="worked_hours_{{ d['form_id'] }}" value="{{ r['worked_hours'] if r else '' }}" class="all-copy-worked-{{ d['form_id'] }}">{% if r and r['admin_info_carried'] and (r['admin_info'] or '').strip() %}<div class="download-note">aus Vormonat übernommen</div>{% endif %}</td>
         <td data-label="Allgemeine Infos für Lohnbüro"><textarea form="save-{{ d['form_id'] }}" name="payroll_office_info" placeholder="Text für Lohnbüro-PDF">{{ row_get(r, 'payroll_office_info', '') if r else '' }}</textarea><input type="hidden" form="all-months-form" name="payroll_office_info_{{ d['form_id'] }}" value="{{ row_get(r, 'payroll_office_info', '') if r else '' }}" class="all-copy-payroll-office-{{ d['form_id'] }}"></td>
         <td data-label="Fahrer"><b class="driver-name {{ employment_class(row_get(d, 'employment_type', '')) }}">{{ d['name'] }}</b></td>
         <td data-label="geleistete Stunden"><form method="post" enctype="multipart/form-data" id="save-{{ d['form_id'] }}"><input type="hidden" name="driver_id" value="{{ d['id'] }}"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}"><input name="worked_hours" value="{{ r['worked_hours'] if r else '' }}"></form></td>
@@ -2696,7 +2809,7 @@ def admin_months():
         {% set v_enabled = row_v_enabled(r) %}
         <td data-label="V"><input class="v-input v-markable {{ 'v-disabled' if not v_enabled else '' }}" form="save-{{ d['form_id'] }}" name="v_note" value="{{ fmt_v_input(row_get(r, 'v_note', '')) if r else '' }}" placeholder="Notiz"><input type="hidden" form="all-months-form" name="v_note_{{ d['form_id'] }}" value="{{ fmt_v_input(row_get(r, 'v_note', '')) if r else '' }}" class="all-copy-v-{{ d['form_id'] }}"><input type="hidden" form="save-{{ d['form_id'] }}" name="v_enabled" value="0"><label class="v-toggle" title="Nur Aktiv-Markierung; V wird nie berechnet"><input class="v-enabled-toggle" form="save-{{ d['form_id'] }}" type="checkbox" name="v_enabled" value="1" {% if v_enabled %}checked{% endif %}> aktiv</label><input type="hidden" form="all-months-form" name="v_enabled_{{ d['form_id'] }}" value="{{ 1 if v_enabled else 0 }}" class="all-copy-v-enabled-{{ d['form_id'] }}"><div class="v-disabled-note">nur Notiz · ohne Berechnung</div></td>
         <td data-label="Zuschlag"><input form="save-{{ d['form_id'] }}" name="payroll_surcharge" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}"><input type="hidden" form="all-months-form" name="payroll_surcharge_{{ d['form_id'] }}" value="{{ fmt_decimal_input(row_get(r, 'payroll_surcharge', 0)) if r else '' }}" class="all-copy-surcharge-{{ d['form_id'] }}"></td>
-        <td data-label="Tankgutschein"><input form="save-{{ d['form_id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"><input type="hidden" form="all-months-form" name="fuel_voucher_{{ d['form_id'] }}" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}" class="all-copy-fuel-{{ d['form_id'] }}"></td>
+        <td data-label="Tankgutschein"><input class="fuel-voucher-input" form="save-{{ d['form_id'] }}" name="fuel_voucher" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}"><input type="hidden" form="all-months-form" name="fuel_voucher_{{ d['form_id'] }}" value="{{ fmt_decimal_input(row_get(r, 'fuel_voucher', 0)) if r else '' }}" class="all-copy-fuel-{{ d['form_id'] }}"></td>
         <td data-label="Urlaub" class="days-vacation"><div class="vacation-input-wrap"><input form="save-{{ d['form_id'] }}" name="vacation_days" inputmode="numeric" pattern="[0-9]*" value="{{ vacation_display(row_get(r, 'vacation_days', '')) if r else '' }}"><span class="suffix">Tage</span></div><input type="hidden" form="all-months-form" name="vacation_days_{{ d['form_id'] }}" value="{{ vacation_display(row_get(r, 'vacation_days', '')) if r else '' }}" class="all-copy-vacation-{{ d['form_id'] }}"></td>
         <td data-label="Krank" class="days-sick"><input type="hidden" class="sick-days-input" form="save-{{ d['form_id'] }}" name="sick_days" value="{{ row_get(r, 'sick_days', '') if r else '' }}"><input type="hidden" form="all-months-form" name="sick_days_{{ d['form_id'] }}" value="{{ row_get(r, 'sick_days', '') if r else '' }}" class="all-copy-sick-{{ d['form_id'] }}"><button type="button" class="sick-calendar-open" data-form="save-{{ d['form_id'] }}" data-driver-name="{{ d['name'] }}">Kalender öffnen</button><div class="sick-days-overview">{% if r and row_get(r, 'sick_days', '') %}{{ row_get(r, 'sick_days', '') }} = <span class="sick-days-total">{{ sick_days_count(row_get(r, 'sick_days', '')) }} Tage</span>{% else %}Keine Kranktage{% endif %}</div></td>
         <td data-label="Zuschüsse / Abzüge"><div class="mini-form"><select form="save-{{ d['form_id'] }}" name="kind"><option value="deduction">Abzug</option><option value="bonus">Zuschuss</option></select><input form="save-{{ d['form_id'] }}" name="item_hours" placeholder="Std."><input form="save-{{ d['form_id'] }}" name="item_note" placeholder="Grund, z.B. Auto dreckig"><label class="dropzone">Bild/Datei<input form="save-{{ d['form_id'] }}" type="file" name="item_file" accept="image/*,.pdf"></label><button form="save-{{ d['form_id'] }}" name="action" value="add_adjustment" class="small primary">Hinzufügen</button></div>
@@ -2729,6 +2842,18 @@ def admin_months():
       ['dragleave','dragend'].forEach(function(ev){ zone.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); zone.classList.remove('dragover'); }); });
       zone.addEventListener('drop', function(e){ e.preventDefault(); e.stopPropagation(); zone.classList.remove('dragover'); if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length){ input.files=e.dataTransfer.files; setZoneText(e.dataTransfer.files[0].name); } });
     });
+
+    function refreshFuelVoucherCount(){
+      var head=document.getElementById('fuel-voucher-count-head');
+      if(!head){return;}
+      var count=0;
+      document.querySelectorAll('.fuel-voucher-input').forEach(function(input){
+        if((input.value || '').trim() !== ''){ count += 1; }
+      });
+      head.textContent='Tankgutschein =' + count;
+    }
+    document.querySelectorAll('.fuel-voucher-input').forEach(function(input){ input.addEventListener('input', refreshFuelVoucherCount); });
+    refreshFuelVoucherCount();
 
     function refreshVEnabledState(row){ var cb=row.querySelector('.v-enabled-toggle'); if(!cb){return;} var input=row.querySelector('.v-markable'); if(input){input.classList.toggle('v-disabled', !cb.checked);} }
     document.querySelectorAll('.v-enabled-toggle').forEach(function(cb){ var row=cb.closest('tr'); cb.addEventListener('change',function(){refreshVEnabledState(row);}); refreshVEnabledState(row); });
@@ -2777,7 +2902,7 @@ def admin_months():
       sync();
     });
     </script>
-    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, fmt_balance_input=fmt_balance_input, signed_class=signed_class, row_v_enabled=row_v_enabled, row_get=row_get, employment_class=employment_class, vacation_display=vacation_display, sick_days_display=sick_days_display, sick_days_count=sick_days_count, global_v_all=global_v_all)
+    """, year=year, month=month, months=MONATE, month_released=month_released, editable=editable, locked_note=locked_note, drivers=drivers, rows=rows, adjustments=adjustments, adjustment_files=adjustment_files, group_adjustment_files=locals().get("group_adjustment_files", {}), fmt_signed=fmt_signed, fmt_hours=fmt_hours, fmt_v_input=fmt_v_input, fmt_decimal_input=fmt_decimal_input, fmt_balance_input=fmt_balance_input, signed_class=signed_class, row_v_enabled=row_v_enabled, row_get=row_get, employment_class=employment_class, vacation_display=vacation_display, sick_days_display=sick_days_display, sick_days_count=sick_days_count, global_v_all=global_v_all, fuel_voucher_count=fuel_voucher_count)
     return base_page("Stunden für Lohnabrechnung", body, "payroll_hours")
 
 
@@ -3340,6 +3465,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
