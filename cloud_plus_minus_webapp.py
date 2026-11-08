@@ -5444,8 +5444,10 @@ def admin_shiftbase_pruefvorschau():
     correct_user=(os.environ.get('SHIFTBASE_VERIFIED_WRITE_USER_ID','').strip()==source['uid']
                   and source['uid']=='1338173' and normalize(source['name'])=='kaan aysel')
     writable=enable and correct_user
-    # Preview-only data are read from this GET. They are NEVER saved, and
-    # not included in any timesheet correction POST or Shiftbase payload.
+    # Preview-only values are shown as EDITABLE, locally prefilled suggestions.
+    # Only the admin's explicit collective certification button can submit
+    # their current values as attested actual time corrections. Nothing is
+    # written by merely opening or recomputing this page.
     source['preview_vacation_days'] = str(request.args.get('urlaubs_tage','')).strip()[:100]
     plan=_sb_hypothetical_preview(source)
     with db_conn() as conn:
@@ -5478,7 +5480,7 @@ def admin_shiftbase_pruefvorschau():
 .sb-simple .sb-confirm input{width:auto;margin:3px 0 0}
 .sb-simple .sb-send{font-size:1rem;padding:13px}
 .sb-simple .sb-muted{color:#667085;font-size:.9rem}
-.sb-simple .sb-review-grid{display:grid;grid-template-columns:1fr 1.35fr 1.5fr 2.2fr .55fr 1.1fr;gap:10px;align-items:center}
+.sb-simple .sb-review-grid{display:grid;grid-template-columns:1fr 1.6fr 2.5fr .65fr 1.25fr;gap:10px;align-items:center}
 .sb-simple .sb-review-head{font-size:.78rem;color:#64748b;font-weight:800;padding:8px 12px}
 .sb-simple .sb-review-day{border:1px solid #dae3ed;background:#fff;border-radius:13px;padding:12px;margin:9px 0}
 .sb-simple .sb-review-day.sb-dirty{border-color:#1d6bb5;background:#f6faff}
@@ -5487,7 +5489,10 @@ def admin_shiftbase_pruefvorschau():
 .sb-simple .sb-times input{margin-top:4px;padding:8px 5px;font-size:.91rem;min-width:0;width:100%}
 .sb-simple .sb-review-day .sb-day-status{font-weight:750;font-size:.82rem}
 .sb-simple .sb-review-day .sb-original{font-size:.92rem}
-.sb-simple .sb-review-day .sb-suggestion{font-size:.92rem}
+ .sb-simple .sb-review-day .sb-suggestion{font-size:.92rem}
+.sb-simple .sb-input-cell .sb-field-note{display:block;margin-top:5px;font-size:.74rem;color:#a04b00}
+.sb-simple .sb-review-day[data-had-suggestion="1"]{border-left:4px solid #b7791f}
+.sb-simple .sb-times input:focus{outline:2px solid #125eb2;outline-offset:1px}
 .sb-simple .sb-batch-actions{position:sticky;bottom:8px;z-index:7;background:#fff;border:1px solid #cad6e5;box-shadow:0 6px 26px #0e244124;padding:12px;border-radius:14px;margin-top:16px}
 .sb-simple .sb-batch-actions button{width:100%}
 .sb-simple .sb-batch-actions .sb-muted{margin:7px 0 0}
@@ -5511,7 +5516,7 @@ def admin_shiftbase_pruefvorschau():
        '<div class="sb-cards"><div class="sb-value">Shiftbase – Iststunden<strong>'+_sb_dayview_hm(source['actual'])+'</strong></div>',
        '<div class="sb-value">Cloud – Abrechnung<strong>'+(_sb_dayview_hm(source['payroll']) if source['payroll'] is not None else 'nicht hinterlegt')+'</strong></div>',
        '<div class="sb-value">Abrechnung minus Iststunden<strong>'+_sb_signed_hm((source['payroll']-source['actual']) if source['payroll'] is not None else None)+'</strong></div></div>',
-       '<div class="sb-hint"><b>Unverbindlicher rechnerischer Prüf-Vorschlag – kein Arbeitszeitnachweis.</b> Die Berechnung verteilt nur eine Abrechnungsdifferenz. Uhrzeiten und automatisch ergänzte Pausen (*) sind reine Annahmen und keine festgestellten Istzeiten. Nichts davon wird gespeichert oder automatisch an Shiftbase übertragen. Echte Istzeitkorrekturen werden nach Abgleich mit Talex/Originalbelegen direkt in die Tagesfelder eingetragen und mit einem gemeinsamen Abschlussbutton bestätigt. Die Vorschau prüft nicht die tatsächliche Pausenlage, die Arbeitszeit über längere Ausgleichszeiträume oder arbeitsrechtliche Sonderfälle.</div>',
+       '<div class="sb-hint"><b>Vorschläge sind rechnerische Annahmen, keine nachgewiesenen Arbeitszeiten.</b> Prüfe deshalb jede vorgeschlagene Schicht und Pause anhand von Talex oder anderen Originalnachweisen. Du kannst die Werte direkt in der einzigen Spalte <b>Vorschlag</b> ändern. Es erfolgt keine Übertragung, bevor du mit dem Abschlussbutton bestätigst, dass <b>alle übermittelten Werte tatsächlich geleistete und geprüfte Arbeitszeiten</b> sind. Eine reine Abrechnungsdifferenz ist kein Zeitnachweis.</div>',
        '<div class="sb-cards"><div class="sb-value">Hypothetische Monatssumme<strong>'+_sb_dayview_hm(plan['net_after'])+'</strong></div>',
        '<div class="sb-value">Rechnerisch noch offen<strong>'+_sb_signed_hm(plan['unallocated'])+'</strong></div>',
        '<div class="sb-value">Vorgeschlagene Schichten<strong>'+str(len(plan['days']))+'</strong></div></div>']
@@ -5526,12 +5531,12 @@ def admin_shiftbase_pruefvorschau():
         h.append('<div class="flash '+color+'">'+esc(reply)+'</div>')
     if not writable:
         h.append('<div class="flash err">Direktes Senden noch gesperrt. Auf Render müssen SHIFTBASE_VERIFIED_WRITE_ENABLED=1 und SHIFTBASE_VERIFIED_WRITE_USER_ID='+esc(source['uid'])+' gesetzt sein.</div>')
-    h.append('<div class="sb-hint"><b>Einfacher Ablauf:</b> Vergleiche die Vorschläge mit deinen Talex-Nachweisen und trage ausschließlich die dort bestätigten <em>tatsächlichen</em> Zeiten direkt in die Felder ein. Keine Häkchen, keine Begründung pro Schicht. <b>Unveränderte Felder werden nicht gesendet</b>. Der Button „Alles geprüft“ bestätigt nur die von dir eingegebenen Istzeitkorrekturen; hypothetische Vorschläge werden nicht automatisch als tatsächliche Arbeitszeit verbucht.</div>')
-    h.append('<p class="sb-muted">Die Felder zeigen zuerst die originalen Shiftbase-Zeiten; die rechnerischen Vorschläge stehen daneben. Ein automatisch angenommener Pausenwert (*) ist keine bestätigte Pause. Bitte nur tatsächlich genommene Pausen eintragen.</p>')
+    h.append('<div class="sb-hint"><b>Ein Ablauf, ein Button:</b> Vorschläge direkt ansehen und bei Bedarf korrigieren. Wenn sämtliche zu sendenden Zeiten und Pausen mit den Talex-Nachweisen übereinstimmen, bestätigst du sie gemeinsam unten. Es werden nur von den ursprünglichen Shiftbase-Daten abweichende Schichten gesendet, keine unveränderten Einträge.</div>')
+    h.append('<p class="sb-muted">Die editierbaren Felder sind mit dem rechnerischen Vorschlag vorbelegt (falls verfügbar), sonst mit den ursprünglichen Zeiten. Ein Stern (*) an der Pause bedeutet: nur vom Modell angenommen; die tatsächlich genommene Pause muss vor dem Senden geprüft werden.</p>')
     h.append('<form id="sb-batch-form" method="post" action="'+url_for('admin_shiftbase_verified_batch')+'">')
     for key,val in [('csrf_token',_sb_csrf_token()),('driver_id',did),('year',year),('month',month),('urlaubs_tage',source['preview_vacation_days'])]:
         h.append('<input type="hidden" name="'+key+'" value="'+esc(val)+'">')
-    h.append('<div class="sb-review-grid sb-review-head"><span>Datum</span><span>Bisher</span><span>Rechnerischer Vorschlag</span><span>Tatsächliche Zeiten laut Beleg</span><span>Diff.</span><span>Status</span></div>')
+    h.append('<div class="sb-review-grid sb-review-head"><span>Datum</span><span>Bisher</span><span>Vorschlag (direkt bearbeitbar)</span><span>Diff.</span><span>Status</span></div>')
     for r in source['rows']:
         eid=str(r['entry_id'])
         orig=_sb_review_row_obj(r)
@@ -5541,36 +5546,45 @@ def admin_shiftbase_pruefvorschau():
             readable_date=str(r['day'])
         suggestion=plan['days'].get(eid)
         before_summary=orig['start']+'–'+orig['end']+' · '+orig['hours']+' Std. · Pause '+orig['break_minutes']+' Min.'
-        if suggestion:
-            proposed_summary=(suggestion['new_start']+'–'+suggestion['new_end']+' · '+suggestion['new_hours']+' Std. · Pause '+suggestion['new_pause']+' Min.'+ ('*' if suggestion['assumed_break_change'] else ''))
-            delta_summary=_sb_signed_hm(Decimal(suggestion['delta_minutes'])/Decimal(60))
-            status_summary='Zu prüfen · hypothetisch'
-        else:
-            proposed_summary='Unverändert'
-            delta_summary='0:00'
-            status_summary='Unverändert'
+        # Editable 'Vorschlag' is prefilled only in the HTML. The POST still
+        # checks every timesheet independently against its signed original,
+        # the selected user/month, daily rules, and Shiftbase's live records.
+        values = {
+            'start': suggestion['new_start'] if suggestion else orig['start'],
+            'end': suggestion['new_end'] if suggestion else orig['end'],
+            'pause': suggestion['new_pause'] if suggestion else orig['break_minutes'],
+        }
+        delta_summary = (_sb_signed_hm(Decimal(suggestion['delta_minutes']) / Decimal(60))
+                         if suggestion else '0:00')
+        status_summary = 'Zu prüfen · rechnerisch' if suggestion else 'Unverändert'
         signed=_sb_direct_baseline_signature(did,source['uid'],year,month,eid,orig)
         try:
             cloud_sick = int(str(r['day'])[-2:]) in set(_expand_day_ranges(source.get('sick_ranges','')))
         except ValueError:
             cloud_sick = True
-        unusable=bool(r.get('deleted') or r.get('absence') or cloud_sick or orig['break_minutes']=='' or orig['start']=='–' or orig['end']=='–' or str(r.get('status','')).lower() in {'rejected','declined','abgelehnt'})
+        unusable=bool(r.get('deleted') or r.get('absence') or cloud_sick or
+                      orig['break_minutes']=='' or orig['start']=='–' or orig['end']=='–' or
+                      str(r.get('status','')).lower() in {'rejected','declined','abgelehnt'})
         if unusable:
             status_summary='Gesperrt / Klärung nötig'
-        h.append('<div class="sb-review-grid sb-review-day'+(' sb-editable-row' if not unusable else '')+'"'+(' data-orig-start="'+esc(orig['start'])+'" data-orig-end="'+esc(orig['end'])+'" data-orig-pause="'+esc(orig['break_minutes'])+'"' if not unusable else '')+'>')
-        h.append('<strong>'+esc(readable_date)+'</strong><span class="sb-original">'+esc(before_summary)+'</span><span class="sb-suggestion">'+esc(proposed_summary)+'</span>')
+        h.append('<div class="sb-review-grid sb-review-day'+(' sb-editable-row' if not unusable else '')+'"'+
+                 (' data-orig-start="'+esc(orig['start'])+'" data-orig-end="'+esc(orig['end'])+'" data-orig-pause="'+esc(orig['break_minutes'])+'" data-had-suggestion="'+('1' if suggestion else '0')+'"' if not unusable else '')+'>')
+        h.append('<strong>'+esc(readable_date)+'</strong><span class="sb-original">'+esc(before_summary)+'</span>')
         if unusable:
-            h.append('<span class="sb-input-cell sb-muted">Nicht bearbeitbar: Abwesenheit, unvollständige oder gesperrte Schicht.</span>')
+            h.append('<span class="sb-input-cell sb-muted">Kein Vorschlag bearbeitbar: Abwesenheit, unvollständige oder gesperrte Schicht.</span>')
         else:
             h.append('<input type="hidden" name="sb_sig_'+esc(eid)+'" value="'+esc(signed)+'">')
-            h.append('<div class="sb-input-cell sb-times">')
-            h.append('<label>Beginn<input type="time" name="sb_start_'+esc(eid)+'" value="'+esc(orig['start'])+'" required aria-label="Beginn am '+esc(readable_date)+'"></label>')
-            h.append('<label>Ende<input type="time" name="sb_end_'+esc(eid)+'" value="'+esc(orig['end'])+'" required aria-label="Ende am '+esc(readable_date)+'"></label>')
-            h.append('<label>Pause Min.<input type="number" name="sb_pause_'+esc(eid)+'" min="0" max="600" step="1" value="'+esc(orig['break_minutes'])+'" required aria-label="Pause am '+esc(readable_date)+'"></label>')
+            h.append('<div class="sb-input-cell"><div class="sb-times">')
+            h.append('<label>Beginn<input type="time" name="sb_start_'+esc(eid)+'" value="'+esc(values['start'])+'" required aria-label="Vorschlag Beginn am '+esc(readable_date)+'"></label>')
+            h.append('<label>Ende<input type="time" name="sb_end_'+esc(eid)+'" value="'+esc(values['end'])+'" required aria-label="Vorschlag Ende am '+esc(readable_date)+'"></label>')
+            h.append('<label>Pause Min.'+('*' if suggestion and suggestion['assumed_break_change'] else '')+'<input type="number" name="sb_pause_'+esc(eid)+'" min="0" max="600" step="1" value="'+esc(values['pause'])+'" required aria-label="Vorschlag Pause am '+esc(readable_date)+'"></label>')
             h.append('</div>')
-        h.append('<span>'+esc(delta_summary)+'</span><span class="sb-day-status">'+esc(status_summary)+'</span></div>')
+            if suggestion and suggestion['assumed_break_change']:
+                h.append('<span class="sb-field-note">* Pause rechnerisch ergänzt – mit Nachweis abgleichen.</span>')
+            h.append('</div>')
+        h.append('<span class="sb-day-diff">'+esc(delta_summary)+'</span><span class="sb-day-status">'+esc(status_summary)+'</span></div>')
     h.append('<input type="hidden" name="confirmed_batch" value="actual_work_verified_using_records">')
-    h.append('<div class="sb-batch-actions"><button class="primary" type="submit"'+('' if writable else ' disabled')+'>Alles geprüft – geänderte Istzeiten an Shiftbase senden</button><p class="sb-muted"><span id="sb-changed-count">Noch keine Zeiten geändert.</span> Mit diesem Klick bestätigst du, dass sämtliche geänderten Zeiten und Pausen anhand echter Arbeitszeitnachweise geprüft wurden. Nicht geänderte Tage bleiben unverändert.</p></div>')
+    h.append('<div class="sb-batch-actions"><button class="primary" type="submit"'+('' if writable else ' disabled')+'>Alle Vorschläge anhand Talex geprüft – an Shiftbase senden</button><p class="sb-muted"><span id="sb-changed-count">Vorschläge werden gezählt …</span> Dieser eine Klick ist deine ausdrückliche Bestätigung, dass <b>jede zu übertragende Schicht einschließlich der Pausen tatsächlich so stattgefunden hat</b> und durch die Originalnachweise geprüft wurde. Nicht geänderte Schichten bleiben unverändert.</p></div>')
     h.append('</form>')
     h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_vorschlaege_pruefliste_csv',driver_id=did,year=year,month=month,urlaubs_tage=source['preview_vacation_days'])+'">Vorschläge als unverbindliche Prüfliste (CSV)</a></p>')
     h.append(r"""<script>
@@ -5578,6 +5592,17 @@ def admin_shiftbase_pruefvorschau():
   const form=document.getElementById('sb-batch-form');
   if(!form) return;
   const rows=Array.from(form.querySelectorAll('.sb-editable-row'));
+  function signedHours(minutes){
+    if(!Number.isFinite(minutes))return '–';
+    const abs=Math.abs(minutes), h=Math.floor(abs/60), m=abs%60;
+    return (minutes>0?'+':minutes<0?'−':'')+h+':'+String(m).padStart(2,'0');
+  }
+  function netMinutes(s,e,p){
+    if(!/^\d{2}:\d{2}$/.test(s)||!/^\d{2}:\d{2}$/.test(e)||!/^\d+$/.test(p))return null;
+    const sm=Number(s.slice(0,2))*60+Number(s.slice(3)),em=Number(e.slice(0,2))*60+Number(e.slice(3)),pm=Number(p);
+    const span=(em<=sm?em+1440:em)-sm;
+    return (span>0&&pm<=span&&pm>=0)?span-pm:null;
+  }
   function refresh(){
     let count=0;
     rows.forEach(function(row){
@@ -5588,12 +5613,16 @@ def admin_shiftbase_pruefvorschau():
       const changed=(s.value!==row.dataset.origStart||e.value!==row.dataset.origEnd||p.value!==row.dataset.origPause);
       row.classList.toggle('sb-dirty',changed);
       const label=row.querySelector('.sb-day-status');
-      if(label && changed)label.textContent='Geändert · nicht gesendet';
-      else if(label)label.textContent=(row.querySelector('.sb-suggestion').textContent==='Unverändert'?'Unverändert':'Zu prüfen · hypothetisch');
+      if(label)label.textContent=changed?'Zu prüfen · wird bei Bestätigung gesendet':
+        (row.dataset.hadSuggestion==='1'?'Zurück auf Original':'Unverändert');
+      const oldNet=netMinutes(row.dataset.origStart,row.dataset.origEnd,row.dataset.origPause);
+      const newNet=netMinutes(s.value,e.value,p.value);
+      const diff=row.querySelector('.sb-day-diff');
+      if(diff)diff.textContent=(oldNet===null||newNet===null)?'–':signedHours(newNet-oldNet);
       if(changed)count++;
     });
     const info=document.getElementById('sb-changed-count');
-    if(info)info.textContent=count?count+' geänderte Schicht(en) zur Übertragung.':'Noch keine Zeiten geändert.';
+    if(info)info.textContent=count?count+' vorgeschlagene oder angepasste Schicht(en) zur Übertragung.':'Keine Änderung gegenüber Shiftbase.';
   }
   rows.forEach(function(row){
     row.querySelectorAll('input[type=time],input[type=number]').forEach(function(el){el.addEventListener('input',refresh);el.addEventListener('change',refresh);});
@@ -5601,10 +5630,10 @@ def admin_shiftbase_pruefvorschau():
   form.addEventListener('submit',function(e){
     refresh();
     const count=form.querySelectorAll('.sb-editable-row.sb-dirty').length;
-    if(!count){e.preventDefault();alert('Es wurden keine tatsächlichen Zeiten geändert. Rechnerische Vorschläge werden nicht automatisch übertragen.');return;}
+    if(!count){e.preventDefault();alert('Keine Änderung gegenüber Shiftbase. Es gibt nichts zu senden.');return;}
     // Avoid accidental double-submission; no additional confirmation popup.
     const btn=form.querySelector('.sb-batch-actions button[type="submit"]');
-    if(btn){btn.disabled=true;btn.textContent='Sende geprüfte Korrekturen …';}
+    if(btn){btn.disabled=true;btn.textContent='Übertrage bestätigte Arbeitszeiten …';}
   });
   refresh();
 })();
@@ -5755,10 +5784,12 @@ def admin_shiftbase_direct_put():
 
 
 def _sb_verified_inline_batch_preflight(source, form, did, year, month):
-    """Validate manual input against an authenticated, scoped, freshly read month.
+    """Validate a ONE-click collectively attested proposal or manual edit.
 
-    No value from _sb_hypothetical_preview is used in this method. An untouched
-    field is not an approval to upload a mathematical time allocation.
+    UI may prefill tentative numbers from _sb_hypothetical_preview, but the
+    submit button explicitly certifies every changed value as checked against
+    original time records. It is not a claim that the numerical model is proof.
+    Each change is rechecked against the newly read Shiftbase source.
     """
     if form.get('confirmed_batch') != 'actual_work_verified_using_records':
         raise ShiftbaseIntegrationError('Bestätigung, dass geänderte Zeiten anhand von Arbeitszeitnachweisen geprüft sind, fehlt.')
@@ -5817,10 +5848,10 @@ def _sb_verified_inline_batch_preflight(source, form, did, year, month):
                 raise ShiftbaseIntegrationError('Zeit-/Pausengrenzen am '+str(r['day'])+' nicht erfüllt. Keine Übertragung.')
             after={**orig,'start':values['start'],'end':values['end'],
                    'break_minutes':str(pm),'hours':_sb_dayview_hm(Decimal(net)/Decimal(60))}
-            evidence=('Sammelfreigabe des Administrators: nach eigener Prüfung anhand '
+            evidence=('Sammelbestätigung des Administrators: laut eigener Erklärung nach Prüfung anhand '
                       'von Arbeitszeitnachweisen als Istzeit bestätigt; kein individueller '
                       'Belegverweis in der Cloud erfasst.')
-            # User attests as part of the ONE submission, not from per-row checkboxes.
+            # Collective attestation is a user assertion, not automatic verification of records.
             data={'original_sig':signature,'certified':'yes','evidence':evidence,
                   'start':values['start'],'end':values['end'],'pause':str(pm),
                   'vacation_ack':'yes' if source.get('vacation_count') not in ('','0') else '',
@@ -5859,10 +5890,12 @@ def _sb_verified_inline_batch_preflight(source, form, did, year, month):
 @app.post('/admin/shiftbase/gepruefte-sammelkorrektur')
 @admin_login_required
 def admin_shiftbase_verified_batch():
-    """One button for user-entered, attested actual corrections; never PUT previews.
+    """One button for collectively certified actual-time corrections.
 
-    Each PUT still has live ownership, baseline and GET-after-PUT checks. Fail at
-    the first unclear outcome; successful earlier writes cannot be rolled back.
+    Input values may originate from editable mathematical suggestions, but
+    certification MUST be based on attendance records, never on the payroll
+    difference alone. Each PUT has live ownership and GET-after-PUT checks.
+    Stop on first unclear outcome; previous PUTs cannot be rolled back.
     """
     did,year,month=_sb_verified_post_scope(request.form)
     sent=[]
@@ -5873,7 +5906,7 @@ def admin_shiftbase_verified_batch():
             day=_sb_verified_write_one(data,source,did,year,month,eid)
             sent.append(str(day))
         session['shiftbase_direct_result']=(
-            'Erfolg: '+str(len(sent))+' manuell eingegebene Istzeitkorrektur(en) '
+            'Erfolg: '+str(len(sent))+' insgesamt als Istzeit bestätigte Korrektur(en) '
             'in Shiftbase geschrieben und jede durch GET bestätigt.')
     except (ShiftbaseIntegrationError,ValueError) as exc:
         session['shiftbase_direct_result']=(
