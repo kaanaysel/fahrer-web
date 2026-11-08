@@ -4327,6 +4327,7 @@ def admin_shiftbase_abgleich():
     h.append('<input type="hidden" name="laden" value="1"><button class="primary" style="width:auto">Shiftbase auslesen & vergleichen</button></form>')
     h.append('<p class="muted">Erforderliche Render-Variablen: SHIFTBASE_API_BASE_URL und SHIFTBASE_API_TOKEN. API-Pfad/Authentifizierung nach Shiftbase-Dokumentation prüfen. Für Demo lokal SHIFTBASE_MOCK_DIR setzen.</p>')
     h.append('<p><a class="btn primary" style="width:auto" href="'+url_for('admin_shiftbase_kaan_diagnose',year=year,month=month)+'">Kaan Aysel: 1 echten API-Schichtdatensatz prüfen</a></p>')
+    h.append('<p><a class="btn primary" style="width:auto" href="'+url_for('admin_shiftbase_tagesuebersicht',year=year,month=month)+'">Kaan Aysel: Alle Tagesschichten anzeigen</a></p>')
 
     if error: h.append('<div class="flash err">'+shiftbase_escape(error)+'</div>')
     h.append('</div>')
@@ -4373,7 +4374,11 @@ def admin_shiftbase_abgleich():
                 mins = round(v*60)
                 return f'{fmt(v)} ({mins//60}:{mins%60:02d})' 
             desc='; '.join(f'{a["art"]}: {a["von"]}–{a["bis"]} ({a["status"]})' for a in r['absences']) or '–'
-            h.append('<tr>'+''.join('<td>'+shiftbase_escape(str(v))+'</td>' for v in (r['fahrer'],r['shiftbase_user_id'] or 'nicht zugeordnet',fmt_work(r['timesheet_hours']),fmt(r['payroll_hours']),fmt(r['difference']),desc,'; '.join(r['notes']) or 'OK'))+'</tr>')
+            # Link only for securely mapped staff; no timesheet write actions.
+            _day_link = ('<a href="'+url_for('admin_shiftbase_tagesuebersicht',year=year,month=month,driver_id=r['driver_id'])+'">Tage anzeigen</a>' if r['shiftbase_user_id'] else '')
+            _cells = [shiftbase_escape(str(v)) for v in (r['fahrer'],r['shiftbase_user_id'] or 'nicht zugeordnet',fmt_work(r['timesheet_hours']),fmt(r['payroll_hours']),fmt(r['difference']),desc,'; '.join(r['notes']) or 'OK')]
+            _cells[-1] += (' · '+_day_link) if _day_link else ''
+            h.append('<tr>'+''.join('<td>'+v+'</td>' for v in _cells)+'</tr>')
         h.append('</tbody></table></div>')
         h.append(f'<p><a class="btn small" href="{url_for("admin_shiftbase_abgleich_csv",year=year,month=month)}">CSV-Prüfbericht herunterladen</a></p></div>')
     h.append('<div class="card"><h2>Fahrer einmalig zuordnen</h2><p>Die ID muss aus Shiftbase stammen. Es erfolgt bewusst keine automatische Zuordnung nur anhand ähnlicher Namen.</p>')
@@ -4560,6 +4565,154 @@ def admin_shiftbase_kaan_diagnose():
     response.headers['Cache-Control']='no-store'
     response.headers['X-Robots-Tag']='noindex, nofollow'
     return response
+
+
+
+# =================== Shiftbase Tagesschichten (nur lesen) ===================
+
+def _sb_dayview_hm(hours):
+    """Return HH:MM without inventing unknown/partial source hours."""
+    if hours is None:
+        return 'nicht verfügbar'
+    value = Decimal(str(hours))
+    if not value.is_finite() or value < 0:
+        return 'nicht verfügbar'
+    total_minutes = int((value * Decimal(60)).quantize(Decimal('1')))
+    return f'{total_minutes // 60}:{total_minutes % 60:02d}'
+
+
+def _sb_dayview_clock(value):
+    if isinstance(value, str) and re.fullmatch(r'\d{1,2}:\d{2}(?::\d{2})?',value.strip()):
+        return value.strip()[:5]
+    return '–'
+
+
+def _sb_dayview_break(value):
+    if value is None or value == '':
+        return '–'
+    minutes = _sb_break_as_minutes(value)
+    if minutes is None:
+        return 'Format prüfen'
+    return f'{int(minutes)} Min.' if minutes == minutes.to_integral_value() else str(minutes)+' Min.'
+
+
+def _sb_dayview_entries(times, uid, year, month):
+    """Filter locally even if Shiftbase ignores the API user_id parameter."""
+    start, end = _sb_month_window(year,month)
+    records=[]
+    for entry in times:
+        euid, day, hours, entry_id = _sb_timesheet_parts(entry)
+        if euid != uid or day is None or not (start <= day <= end):
+            continue
+        ts = _sb_get(entry,'Timesheet')
+        if not isinstance(ts,dict):
+            ts=entry
+        records.append({
+            'day':day, 'entry_id':entry_id or '',
+            'begin':_sb_dayview_clock(_sb_value(ts,'starttime','start_time')),
+            'end':_sb_dayview_clock(_sb_value(ts,'endtime','end_time')),
+            'break':_sb_dayview_break(_sb_value(ts,'break')),
+            'paid_break':_sb_dayview_break(_sb_value(ts,'paid_break')),
+            'hours':hours,
+            'status':str(_sb_value(ts,'status') or '–')[:48],
+            'deleted':bool(_sb_get(ts,'deleted')),
+        })
+    return sorted(records,key=lambda d:(d['day'],d['begin'],d['entry_id']))
+
+
+@app.get('/admin/shiftbase/tagesuebersicht')
+@admin_login_required
+def admin_shiftbase_tagesuebersicht():
+    """Admin-only read view. Does not send PATCH/POST/PUT/DELETE to Shiftbase."""
+    year, month = _sb_params()
+    try:
+        driver_id_raw=request.args.get('driver_id','').strip()
+        if driver_id_raw:
+            if not re.fullmatch(r'[0-9]{1,12}', driver_id_raw):
+                abort(400,'Ungültige Fahrer-ID')
+            driver_id=int(driver_id_raw)
+        else:
+            driver_id=None
+        with db_conn() as conn:
+            _sb_ensure_mapping_table(conn)
+            if driver_id is not None:
+                match=conn.execute('SELECT id,name,is_active FROM drivers WHERE id=? AND is_active=1',(driver_id,)).fetchone()
+            else:
+                matches=conn.execute('SELECT id,name,is_active FROM drivers WHERE lower(name)=lower(?) AND is_active=1',('Kaan Aysel',)).fetchall()
+                match=matches[0] if len(matches)==1 else None
+            if not match:
+                abort(404,'Fahrer nicht eindeutig gefunden')
+            did=int(match['id'])
+            uid=_sb_mapping(conn).get(did)
+            # `monthly_data` may be missing; a missing row is not 0 actual hours.
+            payroll_row=conn.execute('SELECT payroll_hours FROM monthly_data WHERE driver_id=? AND year=? AND month=?',(did,year,month)).fetchone()
+            payroll = Decimal(str(payroll_row['payroll_hours'])) if payroll_row and payroll_row['payroll_hours'] is not None else None
+            driver_name=str(match['name'])
+        if not uid:
+            raise ShiftbaseIntegrationError('Der Fahrer ist noch keiner Shiftbase-ID zugeordnet. Bitte zunächst die Zuordnung speichern.')
+        start,end=_sb_month_window(year,month)
+        # One bulk GET; keep a local user filter to prevent unrelated rows leaking into this view.
+        items=_shiftbase_get_all('timesheets',{'min_date':start,'max_date':end,'user_id':uid})
+        rows=_sb_dayview_entries(items,uid,year,month)
+        if rows and all(r['hours'] is not None for r in rows):
+            total=sum((r['hours'] for r in rows),Decimal('0'))
+        else:
+            total=None
+        # Absences are a separate type of record and never added to actual worked hours.
+        absences=_shiftbase_get_all('absentees',{'min_date':start,'max_date':end,'user_id':uid})
+        selected_abs=[]
+        for ab_entry in absences:
+            a = _sb_get(ab_entry,'Absentee')
+            if not isinstance(a,dict): a=ab_entry
+            u = _sb_get(ab_entry,'User')
+            au = (_sb_id(u,'id','user_id') or _sb_id(a,'user_id','user','employee_id') or _sb_id(ab_entry,'user_id','user','employee_id'))
+            if au != uid:
+                continue
+            astart=_sb_day(_sb_value(a,'start_date','min_date','start','date'))
+            aend=_sb_day(_sb_value(a,'end_date','max_date','end')) or astart
+            if astart and aend and astart<=end and aend>=start:
+                selected_abs.append((max(astart,start),min(aend,end),_sb_absence_name(a),str(_sb_value(a,'status') or '–')))
+    except ShiftbaseIntegrationError as exc:
+        result=('<div class="card"><h2>Shiftbase-Tagesübersicht</h2><div class="flash err">'+shiftbase_escape(str(exc))+'</div>'
+                +'<a class="btn small" href="'+url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1)+'">Zurück zum Monatsvergleich</a></div>')
+        return base_page('Shiftbase-Tagesübersicht',result,'shiftbase'),422
+
+    h=[]
+    h.append('<div class="card"><h2>Schichten von '+shiftbase_escape(driver_name)+' – '+f'{month:02d}/{year}'+'</h2>')
+    h.append('<p><b>Shiftbase-ID:</b> '+shiftbase_escape(uid)+' &nbsp; <b>Schichten:</b> '+str(len(rows))+'</p>')
+    h.append('<div class="grid grid-3">')
+    h.append('<div class="kpi">Arbeitsstunden laut Shiftbase<b>'+_sb_dayview_hm(total)+'</b></div>')
+    h.append('<div class="kpi">Abrechnung laut Cloud<b>'+(_sb_dayview_hm(payroll) if payroll is not None else 'nicht hinterlegt')+'</b></div>')
+    h.append('<div class="kpi">Abrechnung minus Arbeitsstunden<b>'+(_sb_dayview_hm(payroll-total) if payroll is not None and total is not None and payroll>=total else ('−'+_sb_dayview_hm(total-payroll) if payroll is not None and total is not None else 'nicht berechenbar'))+'</b></div>')
+    h.append('</div><p class="muted">Arbeitszeit und vergütete Zeit werden getrennt ausgewiesen. Diese Seite ändert keine Einträge in Shiftbase.</p>')
+    h.append('<p><b>API-Schreibstatus:</b> Bestehende Arbeitszeitprotokolle lesen: bestätigt. Änderung über API: noch nicht verifiziert; keine Schreibanfragen aktiv. Dienstplanänderungen sind nicht dasselbe wie Arbeitszeitkorrekturen.</p>')
+    h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1)+'">Zurück zum Monatsvergleich</a></p></div>')
+    h.append('<div class="card"><h2>Tagesübersicht</h2>')
+    if not rows:
+        h.append('<div class="flash err">Für diesen Fahrer wurden im ausgewählten Monat keine Schichten gefunden.</div>')
+    elif total is None:
+        h.append('<div class="flash err">Mindestens eine Schicht enthält keinen zuverlässig auswertbaren Stundenwert. Die Summe wurde bewusst nicht geschätzt.</div>')
+    h.append('<div class="table-wrap"><table style="min-width:900px"><thead><tr><th>Datum</th><th>Beginn</th><th>Ende</th><th>Unbezahlte Pause</th><th>Bezahlte Pause</th><th>Arbeitsstunden</th><th>Status</th></tr></thead><tbody>')
+    for row in rows:
+        day_label=shiftbase_date.fromisoformat(row['day']).strftime('%d.%m.%Y')
+        status=row['status']+(' · gelöscht markiert' if row['deleted'] else '')
+        cells=(day_label,row['begin'],row['end'],row['break'],row['paid_break'],_sb_dayview_hm(row['hours']),status)
+        h.append('<tr>'+''.join('<td>'+shiftbase_escape(str(value))+'</td>' for value in cells)+'</tr>')
+    h.append('</tbody></table></div></div>')
+    h.append('<div class="card"><h2>Urlaub / Krankheit / sonstige Abwesenheiten</h2>')
+    if selected_abs:
+        h.append('<div class="table-wrap"><table style="min-width:650px"><tr><th>Von</th><th>Bis</th><th>Art</th><th>Status</th></tr>')
+        for fr,to,kind,status in sorted(selected_abs):
+            h.append('<tr>'+''.join('<td>'+shiftbase_escape(str(v))+'</td>' for v in (fr,to,kind,status))+'</tr>')
+        h.append('</table></div>')
+    else:
+        h.append('<p>Keine zugeordneten Abwesenheiten im ausgewählten Zeitraum gefunden. Dies ist keine Bestätigung, dass keine Abwesenheit stattgefunden hat.</p>')
+    h.append('<p class="muted">Abwesenheiten sind nicht in der Summe tatsächlich geleisteter Arbeitsstunden enthalten. Abrechnungsrelevante Ausfallzeiten müssen gesondert bewertet werden.</p></div>')
+    resp=make_response(base_page('Shiftbase-Tagesübersicht', ''.join(h), 'shiftbase'))
+    resp.headers['Cache-Control']='no-store'
+    resp.headers['X-Robots-Tag']='noindex, nofollow'
+    return resp
+# =================== Ende Shiftbase Tagesschichten ===================
 
 
 # =================== ENDE: Shiftbase-Lohnabgleich ===================
