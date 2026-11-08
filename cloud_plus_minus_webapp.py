@@ -5253,6 +5253,11 @@ def _sb_ts_detail(timesheet_id):
     outside_user=_sb_get(r,'User') if isinstance(sub,dict) else None
     if isinstance(outside_user,dict):
         ts['_sb_envelope_user_id']=_sb_id(outside_user,'id','user_id')
+    # Diagnose nur fuer Administrierende: IDs und Feldnamen, niemals API-Schluessel,
+    # Namen, Lohnwerte oder ganze API-Datensaetze ausgeben.
+    ts['_sb_detail_root_id']=_sb_id(r,'id','timesheet_id')
+    ts['_sb_detail_root_fields']=sorted(str(k)[:48] for k in r.keys())[:35]
+    ts['_sb_detail_timesheet_fields']=sorted(str(k)[:48] for k in ts.keys() if not str(k).startswith('_sb_'))[:65]
     return ts
 
 
@@ -5267,8 +5272,21 @@ def _sb_assert_timesheet_owner(ts, expected_uid, timesheet_id):
         raise ShiftbaseIntegrationError('Einzelabruf liefert keinen Timesheet-Datensatz. Kein PUT.')
     expected=str(expected_uid).strip()
     entry_id=str(_sb_id(ts,'id','timesheet_id') or '').strip()
-    if entry_id!=str(timesheet_id).strip():
-        raise ShiftbaseIntegrationError('Einzelabruf liefert eine andere Timesheet-ID. Kein PUT.')
+    requested_id=str(timesheet_id).strip()
+    def _sb_safe_ident(value):
+        value=str(value or '').strip()
+        return value if re.fullmatch(r'[0-9]{1,20}',value) else '(fehlt oder nicht numerisch)'
+    if entry_id!=requested_id:
+        root_id=_sb_safe_ident(_sb_get(ts,'_sb_detail_root_id'))
+        fields=_sb_get(ts,'_sb_detail_root_fields') or []
+        nested=_sb_get(ts,'_sb_detail_timesheet_fields') or []
+        raise ShiftbaseIntegrationError(
+            'ID-Diagnose – kein PUT: Angeforderte Timesheet-ID '+_sb_safe_ident(requested_id)+
+            ', im Einzelabruf Timesheet.id '+_sb_safe_ident(entry_id)+
+            ', oberste Ebene id '+root_id+'. Root-Felder: '+', '.join(fields[:16])+
+            '. Timesheet-Felder: '+', '.join(nested[:24])+'. '
+            'Kein Schreibzugriff, bis die IDs eindeutig uebereinstimmen.'
+        )
     sources={}
     def record(label,value):
         if isinstance(value,dict):
