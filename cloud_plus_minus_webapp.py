@@ -5242,22 +5242,75 @@ def _sb_put_audit_table(conn):
 
 
 def _sb_ts_detail(timesheet_id):
-    r=_shiftbase_read_json('timesheet_detail',{'_detail_id':str(timesheet_id)})
-    if not isinstance(r,dict):
-        raise ShiftbaseIntegrationError('Shiftbase liefert kein Timesheet-Detailobjekt.')
-    sub=_sb_get(r,'Timesheet')
-    ts=dict(sub) if isinstance(sub,dict) else dict(r)
-    # The list endpoint may join a User object, while the detail endpoint puts
-    # it beside the Timesheet. Keep the *identity* for strict cross-checks;
-    # never fabricate/replace Timesheet.user_id from the monthly mapping.
-    outside_user=_sb_get(r,'User') if isinstance(sub,dict) else None
-    if isinstance(outside_user,dict):
-        ts['_sb_envelope_user_id']=_sb_id(outside_user,'id','user_id')
-    # Diagnose nur fuer Administrierende: IDs und Feldnamen, niemals API-Schluessel,
-    # Namen, Lohnwerte oder ganze API-Datensaetze ausgeben.
-    ts['_sb_detail_root_id']=_sb_id(r,'id','timesheet_id')
-    ts['_sb_detail_root_fields']=sorted(str(k)[:48] for k in r.keys())[:35]
-    ts['_sb_detail_timesheet_fields']=sorted(str(k)[:48] for k in ts.keys() if not str(k).startswith('_sb_'))[:65]
+    """Read one Shiftbase timesheet and unwrap its API response envelope.
+
+    Observed account response can use {"data": {"Timesheet": {...}, ...},
+    "meta": {...}} (and may contain a second data/meta wrapper). The monthly
+    list has a different shape. Never use a guessed ID or substitute the ID
+    requested in the URL: _sb_assert_timesheet_owner must verify the actual
+    returned Timesheet.id and user_id BEFORE any PUT.
+    """
+    response = _shiftbase_read_json('timesheet_detail', {'_detail_id': str(timesheet_id)})
+    if not isinstance(response, dict):
+        raise ShiftbaseIntegrationError('Shiftbase-Einzelabruf ist kein JSON-Objekt. Kein PUT.')
+
+    layer = response
+    parents = []
+    seen = set()
+    ts = None
+    envelope_user_ids = set()
+    # Only traverse documented, structural wrapper names; don't search all
+    # child objects (User, Rates etc. are not Timesheet records).
+    for depth in range(8):
+        if not isinstance(layer, dict) or id(layer) in seen:
+            break
+        seen.add(id(layer))
+        parents.append(layer)
+
+        user = layer.get('User')
+        if isinstance(user, dict):
+            user_id = _sb_id(user, 'id', 'user_id')
+            if user_id:
+                envelope_user_ids.add(str(user_id))
+
+        candidate = layer.get('Timesheet')
+        if isinstance(candidate, dict):
+            # The Timesheet value can itself be wrapped in data/meta.
+            layer = candidate
+            continue
+
+        # This identifies a timesheet payload, not an API wrapper. Explicitly
+        # require a real record ID and relevant timesheet fields.
+        if (_sb_id(layer, 'id', 'timesheet_id') is not None and
+            ('date' in layer or 'starttime' in layer or 'endtime' in layer) and
+            ('user_id' in layer or 'starttime' in layer or 'endtime' in layer)):
+            ts = dict(layer)
+            break
+
+        data = layer.get('data')
+        if isinstance(data, dict):
+            layer = data
+            continue
+        break
+
+    if ts is None:
+        # Avoid exposing values, names, tokens or sensitive information in UI.
+        chain = ' -> '.join(','.join(sorted(str(k)[:32] for k in node.keys())[:8])
+                            for node in parents[:6])
+        raise ShiftbaseIntegrationError(
+            'Timesheet konnte nicht aus data/Timesheet entpackt werden. '
+            'Antwort-Struktur (nur Feldnamen): ' + chain + '. Kein PUT.')
+
+    if len(envelope_user_ids) > 1:
+        raise ShiftbaseIntegrationError('Widersprüchliche Benutzer-IDs in der API-Antwort. Kein PUT.')
+    if envelope_user_ids:
+        ts['_sb_envelope_user_id'] = next(iter(envelope_user_ids))
+
+    # Diagnostic metadata: structural only, no secrets or private data.
+    ts['_sb_detail_root_id'] = _sb_id(response, 'id', 'timesheet_id')
+    ts['_sb_detail_root_fields'] = sorted(str(k)[:48] for k in response.keys())[:35]
+    ts['_sb_detail_timesheet_fields'] = sorted(str(k)[:48] for k in ts.keys()
+                                             if not str(k).startswith('_sb_'))[:65]
     return ts
 
 
