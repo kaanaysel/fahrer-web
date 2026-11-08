@@ -5146,8 +5146,7 @@ def admin_shiftbase_direct_put():
         if str(row.get('status','')).lower() in {'declined','abgelehnt','rejected'}:
             raise ShiftbaseIntegrationError('Abgelehnten Eintrag zunächst klären.')
         ts=_sb_ts_detail(eid)
-        if _sb_id(ts,'user_id')!=source['uid']:
-            raise ShiftbaseIntegrationError('Mitarbeiter stimmt nicht überein.')
+        _sb_assert_timesheet_owner(ts,source['uid'],eid)
         if any(_sb_get(ts,k) is not None for k in ('clocked_in','clocked_out')):
             raise ShiftbaseIntegrationError('Gestempelte Schicht: Stempelkorrektur erforderlich.')
         live=_sb_live_snapshot(ts)
@@ -5247,10 +5246,59 @@ def _sb_ts_detail(timesheet_id):
     if not isinstance(r,dict):
         raise ShiftbaseIntegrationError('Shiftbase liefert kein Timesheet-Detailobjekt.')
     sub=_sb_get(r,'Timesheet')
-    ts=sub if isinstance(sub,dict) else r
-    if not isinstance(ts,dict):
-        raise ShiftbaseIntegrationError('Timesheet-Detail ohne Timesheet-Datensatz.')
+    ts=dict(sub) if isinstance(sub,dict) else dict(r)
+    # The list endpoint may join a User object, while the detail endpoint puts
+    # it beside the Timesheet. Keep the *identity* for strict cross-checks;
+    # never fabricate/replace Timesheet.user_id from the monthly mapping.
+    outside_user=_sb_get(r,'User') if isinstance(sub,dict) else None
+    if isinstance(outside_user,dict):
+        ts['_sb_envelope_user_id']=_sb_id(outside_user,'id','user_id')
     return ts
+
+
+def _sb_assert_timesheet_owner(ts, expected_uid, timesheet_id):
+    """Strictly verify the user of one GET /timesheets/{id} response.
+
+    The monthly collection and single-item endpoints have different envelopes.
+    A missing user_id may be supplied by nested User.id, but an *actual mismatch*
+    is never ignored. Return a readable diagnostic without revealing tokens.
+    """
+    if not isinstance(ts,dict):
+        raise ShiftbaseIntegrationError('Einzelabruf liefert keinen Timesheet-Datensatz. Kein PUT.')
+    expected=str(expected_uid).strip()
+    entry_id=str(_sb_id(ts,'id','timesheet_id') or '').strip()
+    if entry_id!=str(timesheet_id).strip():
+        raise ShiftbaseIntegrationError('Einzelabruf liefert eine andere Timesheet-ID. Kein PUT.')
+    sources={}
+    def record(label,value):
+        if isinstance(value,dict):
+            value=_sb_id(value,'id','user_id')
+        if value is None or str(value).strip() in ('','null','None'):
+            return
+        txt=str(value).strip()
+        # IDs are decimal identifiers, not floating-point quantities.
+        if not re.fullmatch(r'\d{1,20}',txt):
+            raise ShiftbaseIntegrationError(label+' enthält keine gültige Shiftbase-Benutzer-ID. Kein PUT.')
+        sources[label]=str(int(txt))
+    record('Timesheet.user_id',_sb_get(ts,'user_id'))
+    record('Timesheet.User.id',_sb_get(ts,'User'))
+    record('Einzelabruf.User.id',_sb_get(ts,'_sb_envelope_user_id'))
+    if not sources:
+        raise ShiftbaseIntegrationError(
+            'Der Einzelabruf enthält keine erkennbare Benutzer-ID. '
+            'Bitte API-Detailstruktur prüfen; kein PUT ausgeführt.')
+    unique=set(sources.values())
+    if len(unique)!=1:
+        raise ShiftbaseIntegrationError(
+            'Widersprüchliche Mitarbeiter-IDs innerhalb der Shiftbase-API-Antwort '
+            '('+', '.join(sources.keys())+'). Kein PUT; API-Daten prüfen.')
+    actual=next(iter(unique))
+    if actual!=str(int(expected)):
+        raise ShiftbaseIntegrationError(
+            'Shiftbase meldet für diese Schicht eine andere Benutzer-ID '
+            '(Einzelabruf '+actual+', Cloud-Zuordnung '+expected+'). '
+            'Kein PUT. Bitte Mitarbeiterzuordnung und Schicht in Shiftbase prüfen.')
+    return actual
 
 
 def _sb_clean_clock(v):
@@ -5277,16 +5325,22 @@ def _sb_update_payload(ts, timesheet_id, new):
     # Herstellerbeispiel verwendet vollständige Identifikationsfelder und
     # starttime, endtime und break. Bewusst keine abgeleiteten Felder (total)
     # oder sensiblen Clock-/GPS-Daten übertragen.
-    mandatory=('id','date','user_id','department_id','team_id','shift_id')
+    mandatory=('id','date','department_id','team_id','shift_id')
     for field in mandatory:
         if _sb_get(ts,field) is None or _sb_get(ts,field)=='':
             raise ShiftbaseIntegrationError('Timesheet enthält nicht das erforderliche Feld '+field+'. Kein Schreibversuch.')
+    if _sb_id(ts,'user_id') is None and not _sb_get(ts,'_sb_envelope_user_id'):
+        raise ShiftbaseIntegrationError('Timesheet enthält keine bestätigte Benutzer-ID für den PUT-Nutzlast. Kein Schreibversuch.')
     if str(_sb_get(ts,'id'))!=str(timesheet_id):
         raise ShiftbaseIntegrationError('Timesheet-ID beim erneuten Auslesen abweichend.')
     keys=('id','date','user_id','roster_id','department_id','shift_id','team_id',
           'rate_card_id','starttime','endtime','break','paid_break',
           'meals','kilometers','note')
     payload={k:_sb_get(ts,k) for k in keys if _sb_get(ts,k) is not None}
+    # If this Shiftbase response uses a separate User envelope, retain the
+    # validated API-supplied ID instead of using a value from a form field.
+    if _sb_id(ts,'user_id') is None:
+        payload['user_id']=str(_sb_get(ts,'_sb_envelope_user_id'))
     payload['starttime']=new['start']+':00'
     payload['endtime']=new['end']+':00'
     payload['break']=str(int(new['break_minutes']))
@@ -5374,8 +5428,7 @@ def admin_shiftbase_put_verified():
         if after['start']<'06:00' or net>600 or (net>540 and pause<45) or (net>360 and pause<30):
             raise ShiftbaseIntegrationError('Korrektur verletzt die vereinbarten Planungs- bzw. Pausenprüfungen.')
         ts=_sb_ts_detail(eid)
-        if _sb_id(ts,'user_id')!=source['uid']:
-            raise ShiftbaseIntegrationError('Live-Mitarbeiter stimmt nicht mit dem geprüften Fahrer überein.')
+        _sb_assert_timesheet_owner(ts,source['uid'],eid)
         live=_sb_live_snapshot(ts)
         if live != {k:str(v) for k,v in before.items() if k in ('day','start','end','break_minutes')}:
             raise ShiftbaseIntegrationError('Shiftbase hat sich seit Erstellung des Entwurfs geändert. Erneut prüfen, kein PUT.')
