@@ -3809,25 +3809,54 @@ def _sb_hours_from_clock(row):
 
 
 def _sb_hours(row):
-    """Read known units or derive net hours from Timesheet.datetime/endtime/break.
+    """Return the real NET hours supplied by a Shiftbase Timesheet.
 
-    No rounding, made-up breaks, or alteration of original Shiftbase records.
+    The observed Shiftbase API response contains the field ``total`` as
+    a *decimal number of hours encoded as a string*: for example, an
+    08:00–18:00 shift with 45 minutes recorded break has ``total`` =
+    ``"9.250000"``.  Prefer that authoritative total over attempts to
+    reconstruct hours from the optional (sometimes empty) ``datetime``.
+
+    This function reads only; it never changes source timesheets or invents
+    missing breaks. Do not confuse payroll_hours with work hours.
     """
     if not isinstance(row, dict):
         return None
-    for key in ('worked_hours','total_worked_hours','hours_worked','duration_hours','net_hours','total_hours'):
-        v = _sb_get(row,key)
-        if v is not None:
-            return _sb_hhmm(v) if isinstance(v,str) and ':' in v else _sb_number(v)
-    for key, div in (('worked_minutes',60),('total_worked_minutes',60),('total_minutes',60),('duration_minutes',60),('worked_seconds',3600),('duration_seconds',3600)):
-        v = _sb_get(row,key)
-        if v is not None:
-            n=_sb_number(v)
-            return n/Decimal(div) if n is not None else None
-    for key in ('total','worked','hours','duration'):
-        result = _sb_hhmm(_sb_get(row,key))
-        if result is not None:
+
+    # 1) Shiftbase's own calculated net worked hours (confirmed in the
+    #    real Timesheet payload). Accept both 9.250000 and 9:15 formats.
+    for key in ('total', 'worked_hours', 'total_worked_hours', 'hours_worked',
+                'duration_hours', 'net_hours', 'total_hours'):
+        value = _sb_get(row, key)
+        if value is None or value == '':
+            continue
+        amount = (_sb_hhmm(value) if isinstance(value, str) and ':' in value
+                  else _sb_number(value))
+        # A single timesheet cannot reasonably exceed 24 hours; do not
+        # silently display negative or implausible source values.
+        if amount is not None and Decimal(0) <= amount <= Decimal(24):
+            return amount
+        return None
+
+    # 2) Explicit numeric lengths with a documented unit in the key.
+    for key, denominator in (('worked_minutes', 60), ('total_worked_minutes', 60),
+                             ('total_minutes', 60), ('duration_minutes', 60),
+                             ('worked_seconds', 3600), ('duration_seconds', 3600)):
+        value = _sb_get(row, key)
+        if value is not None and value != '':
+            amount = _sb_number(value)
+            if amount is None:
+                return None
+            hours = amount / Decimal(denominator)
+            return hours if Decimal(0) <= hours <= Decimal(24) else None
+
+    # 3) Older hour formats with an explicit HH:MM value.
+    for key in ('worked', 'hours', 'duration'):
+        result = _sb_hhmm(_sb_get(row, key))
+        if result is not None and Decimal(0) <= result <= Decimal(24):
             return result
+
+    # 4) Last resort: read real start/end and recorded break only.
     return _sb_hours_from_clock(row)
 
 
