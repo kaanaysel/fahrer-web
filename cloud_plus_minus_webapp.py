@@ -3472,7 +3472,8 @@ from datetime import datetime as _sb_datetime, timedelta as _sb_timedelta, timez
 from decimal import Decimal, InvalidOperation
 from html import escape as shiftbase_escape
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit, quote
+import unicodedata
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 import hmac
 import secrets
@@ -3504,6 +3505,14 @@ def _shiftbase_read_json(kind, params=None):
     cfg = _shiftbase_config()
     if cfg['mock_dir']:
         allowed = {'users':'users.json', 'timesheets':'timesheets.json', 'absentees':'absentees.json'}
+        if kind == 'timesheet_detail':
+            ident = str((params or {}).get('_detail_id', ''))
+            if not re.fullmatch(r'[0-9]{1,20}', ident):
+                raise ShiftbaseIntegrationError('Ungueltige Timesheet-ID')
+            f = Path(cfg['mock_dir']) / f'timesheet_{ident}.json'
+            if not f.is_file():
+                raise ShiftbaseIntegrationError(f'Testdatei timesheet_{ident}.json fehlt.')
+            return json.loads(f.read_text(encoding='utf-8'))
         f = Path(cfg['mock_dir']) / allowed[kind]
         if not f.is_file():
             raise ShiftbaseIntegrationError(f'Testdatei {f.name} fehlt.')
@@ -3512,7 +3521,14 @@ def _shiftbase_read_json(kind, params=None):
         except (OSError, ValueError) as exc:
             raise ShiftbaseIntegrationError(f'Testdatei {f.name} kann nicht gelesen werden.') from exc
     defaults = {'users':'/users', 'timesheets':'/timesheets', 'absentees':'/absentees'}
-    path = os.environ.get('SHIFTBASE_'+kind.upper()+'_PATH', defaults[kind]).strip()
+    if kind == 'timesheet_detail':
+        ident = str((params or {}).get('_detail_id', ''))
+        if not re.fullmatch(r'[0-9]{1,20}', ident):
+            raise ShiftbaseIntegrationError('Ungueltige Timesheet-ID')
+        path = '/timesheets/' + quote(ident, safe='')
+        params = None
+    else:
+        path = os.environ.get('SHIFTBASE_'+kind.upper()+'_PATH', defaults[kind]).strip()
     if not path.startswith('/') or path.startswith('//') or '?' in path or '#' in path:
         raise ShiftbaseIntegrationError(f'API-Pfad für {kind} ungültig.')
     url = cfg['base'] + path
@@ -3888,6 +3904,7 @@ def _sb_fetch_snapshot(year,month):
 def _sb_report(conn,year,month,users,times,absences):
     local=_sb_local_month(conn,year,month)
     mappings=_sb_mapping(conn)
+    csv_snapshots=_sb_csv_snapshots(conn,year,month)
     known_users={}
     for row in users:
         uid=_sb_id(row,'id','user_id','employee_id') or _sb_id(_sb_get(row,'User'),'id','user_id')
@@ -3953,13 +3970,23 @@ def _sb_report(conn,year,month,users,times,absences):
         selected=entries.get(uid,[]) if uid else []
         complete=bool(uid and selected and all(x['hours'] is not None for x in selected))
         tot=sum((x['hours'] for x in selected),Decimal(0)) if complete else None
+        csv_source=False
+        saved=csv_snapshots.get(r['driver_id'])
+        if tot is None and uid and saved and saved['shiftbase_user_id']==uid:
+            # This is a dated, Shiftbase-exported snapshot, not live API data.
+            # Do not confuse the two data sources or overwrite real timesheet rows.
+            try:
+                tot=Decimal(saved['worked_hours'])
+                csv_source=True
+            except (InvalidOperation,ValueError): pass
         payroll=Decimal(str(r['payroll_hours'])) if r['payroll_hours'] is not None else None
         diff=payroll-tot if payroll is not None and tot is not None else None
         notes=[]
         if not uid: notes.append('Noch keine eindeutige Shiftbase-Zuordnung')
         elif uid not in known_users: notes.append('Zugeordneter Shiftbase-Benutzer fehlt in der API-Antwort')
         if not selected and uid: notes.append('Keine Zeiteinträge im ausgewählten Monat')
-        if selected and not complete: notes.append('Mindestens eine API-Zeitangabe besitzt eine unbekannte Einheit; Summe nicht berechnet')
+        if selected and not complete and not csv_source: notes.append('Die API liefert keine berechenbare Arbeitszeit; Shiftbase-CSV importieren')
+        if csv_source: notes.append('Arbeitszeit aus Shiftbase-CSV vom '+str(saved['captured_at'])[:10]+'; keine Live-API-Summe')
         if r['payroll_hours'] is None: notes.append('Kein Abrechnungswert in der Cloud für diesen Monat')
         if r['vacation_days'] not in (None,'','0'): notes.append('Urlaub in Cloud nur als Tagesanzahl gespeichert, Shiftbase-Abwesenheitsdaten prüfen')
         if r['sick_days'] not in (None,''): notes.append('Krankheit aus Cloud und Shiftbase getrennt abstimmen')
@@ -3972,7 +3999,7 @@ def _sb_report(conn,year,month,users,times,absences):
             'difference':round(float(diff),2) if diff is not None else None,
             'worked_hours_cloud':r['worked_hours'],'vacation_days_cloud':r['vacation_days'] or '',
             'sick_days_cloud':r['sick_days'] or '', 'absences':absence_by_user.get(uid,[]) if uid else [],
-            'timesheets':len(selected),'notes':notes,
+            'timesheets':len(selected),'source':'shiftbase_csv' if csv_source else ('api' if tot is not None else 'nicht_berechenbar'),'notes':notes,
             'status':'ungeklärt' if diff is None else ('gleich' if abs(diff)<Decimal('0.01') else 'abweichung')})
     return {'year':year,'month':month,'readonly':True,'results':result,
             'api_users':len(users),'api_timesheets':len(times),'api_absences':len(absences),
@@ -3983,11 +4010,253 @@ def _sb_report(conn,year,month,users,times,absences):
                           'unknown_time_field_types':unknown_time_field_types}}
 
 
+def _sb_enrich_mapped_timesheets(times, mapped_ids, max_lookups=40):
+    """GET details only for mapped people; never modifies any Shiftbase entry.
+
+    Public list endpoints sometimes leave datetime empty. Detail may carry explicit
+    computed hours / full clock values. If it doesn't, retain an unknown hour
+    rather than fabricate one. To avoid 40 futile calls, stop after 2 no-results.
+    """
+    stats={'detail_checked':0,'detail_resolved':0,'detail_unavailable':0,'detail_skipped':0}
+    if not mapped_ids or os.environ.get('SHIFTBASE_DETAIL_LOOKUP','1').strip() == '0':
+        return times,stats
+    checked_no_result=0
+    for entry in times:
+        uid,day,hours,entry_id=_sb_timesheet_parts(entry)
+        if uid not in mapped_ids or hours is not None or not entry_id:
+            continue
+        if stats['detail_checked'] >= max_lookups or checked_no_result>=2:
+            stats['detail_skipped'] += 1
+            continue
+        stats['detail_checked']+=1
+        try:
+            detail=_shiftbase_read_json('timesheet_detail',{'_detail_id':entry_id})
+        except ShiftbaseIntegrationError:
+            stats['detail_unavailable']+=1
+            checked_no_result+=1
+            continue
+        if isinstance(detail,dict):
+            # Shiftbase typically wraps records under Timesheet.
+            candidate = _sb_get(detail,'Timesheet')
+            if not isinstance(candidate,dict):
+                candidate=_sb_get(detail,'data')
+            if not isinstance(candidate,dict):
+                candidate=detail
+            candidate_hours=_sb_hours(candidate)
+            if candidate_hours is not None and Decimal(0) <= candidate_hours <= Decimal(24):
+                # Keeping original User/date/id avoids accidental cross-employee mixups.
+                # Put explicit hours in the inner Timesheet; _sb_hours prefers them.
+                ts=_sb_get(entry,'Timesheet')
+                if isinstance(ts,dict):
+                    ts['duration_hours']=str(candidate_hours)
+                else:
+                    entry['duration_hours']=str(candidate_hours)
+                stats['detail_resolved']+=1
+                checked_no_result=0
+                continue
+        checked_no_result+=1
+    return times,stats
+
+
+def _sb_header(text):
+    text = unicodedata.normalize('NFKD',str(text or '').casefold())
+    text = ''.join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r'[^a-z0-9]','',text)
+
+
+def _sb_import_hours(value):
+    """Parse an explicitly labelled Worked/Gearbeitet value; not gross shift time."""
+    if isinstance(value,bool):
+        return None
+    text=str(value if value is not None else '').strip().lower().replace('std.','').replace('stunden','').replace('hours','').strip()
+    if not text: return None
+    m=re.fullmatch(r'(\d{1,3}):(\d{2})(?::(\d{2}))?',text)
+    if m:
+        h,minutes,sec=int(m.group(1)),int(m.group(2)),int(m.group(3) or 0)
+        if minutes>=60 or sec>=60: return None
+        return Decimal(h)+Decimal(minutes)/60+Decimal(sec)/3600
+    if not re.fullmatch(r'\d{1,4}(?:[,.]\d{1,4})?',text):
+        return None
+    n=_sb_number(text)
+    return n if n is not None and Decimal(0)<=n<=Decimal(744) else None
+
+
+def _sb_ensure_csv_snapshot_table(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS shiftbase_csv_snapshots (
+        driver_id INTEGER NOT NULL, year INTEGER NOT NULL, month INTEGER NOT NULL,
+        shiftbase_user_id TEXT NOT NULL, worked_hours TEXT NOT NULL,
+        entry_count INTEGER NOT NULL, captured_at TEXT NOT NULL,
+        PRIMARY KEY(driver_id,year,month)
+    )""")
+
+
+def _sb_save_csv_snapshot(conn, result, driver_id):
+    _sb_ensure_csv_snapshot_table(conn)
+    conn.execute("""INSERT INTO shiftbase_csv_snapshots
+        (driver_id,year,month,shiftbase_user_id,worked_hours,entry_count,captured_at)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(driver_id,year,month) DO UPDATE SET
+        shiftbase_user_id=excluded.shiftbase_user_id,
+        worked_hours=excluded.worked_hours,
+        entry_count=excluded.entry_count,
+        captured_at=excluded.captured_at""",
+        (driver_id,result['year'],result['month'],result['uid'],str(result['hours']),result['matched'],now_iso()))
+    conn.commit()
+
+
+def _sb_csv_snapshots(conn,year,month):
+    _sb_ensure_csv_snapshot_table(conn)
+    return {int(row['driver_id']):dict(row) for row in conn.execute(
+        'SELECT * FROM shiftbase_csv_snapshots WHERE year=? AND month=?',(year,month)).fetchall()}
+
+
+def _sb_csv_report_for_driver(raw_bytes,driver_id,year,month):
+    """Process official Shiftbase Timesheet detail CSV in memory for ONE driver.
+
+    Must have an actual worked-hours column. Never substitute paid time, scheduled
+    hours, standing time or clocked span. Do not store uploaded private report.
+    """
+    if not raw_bytes or len(raw_bytes)>5_000_000:
+        raise ShiftbaseIntegrationError('Bitte eine CSV-Datei bis 5 MB hochladen.')
+    text=None
+    for encoding in ('utf-8-sig','utf-16','cp1252'):
+        try:
+            text=raw_bytes.decode(encoding)
+            if '\x00' in text: text=None; continue
+            break
+        except UnicodeError: pass
+    if text is None:
+        raise ShiftbaseIntegrationError('CSV-Codierung nicht erkannt. Aus Shiftbase als CSV exportieren.')
+    lines=text.splitlines()
+    if not lines or len(lines)>20000:
+        raise ShiftbaseIntegrationError('Die Datei ist leer oder enthält zu viele Zeilen.')
+    best=None
+    for delim in (';',',','\t'):
+        parsed=list(csv.reader(io.StringIO(text),delimiter=delim))
+        # Shiftbase exports may have one or two preamble lines above the column headings.
+        for header_index in range(min(8,len(parsed))):
+            cols=parsed[header_index]
+            names=[_sb_header(c) for c in cols]
+            score=sum(any(x in names for x in group) for group in (
+                ('worked','workedhours','gearbeitet','gearbeitetestunden','arbeitsstunden','gearbeitetezeit','geleistetestunden'),
+                ('userid','benutzerid','mitarbeiterid','employeeid','name','mitarbeiter','employee'),
+                ('date','datum','arbeitsdatum'),))
+            if best is None or score>best[0]:best=(score,parsed,header_index)
+    if best is None or best[0]<3:
+        raise ShiftbaseIntegrationError('CSV-Spalten nicht erkannt. Bitte den Shiftbase-Bericht „Arbeitszeitprotokoll – Details“ mit Benutzer-ID, Datum und „Gearbeitet“ exportieren.')
+    _, parsed, first=best
+    cols=[_sb_header(c) for c in parsed[first]]
+    def idx(*names):
+        for n in names:
+            if n in cols:return cols.index(n)
+        return None
+    iwork=idx('worked','workedhours','gearbeitet','gearbeitetestunden','arbeitsstunden','gearbeitetezeit','geleistetestunden')
+    iid=idx('userid','benutzerid','mitarbeiterid','employeeid')
+    iname=idx('name','mitarbeiter','employee','mitarbeitername','employeename')
+    idate=idx('date','datum','arbeitsdatum')
+    its=idx('timesheetid','arbeitszeiteintragid','zeiteintragid')
+    istatus=idx('status','genehmigungsstatus')
+    if iwork is None or idate is None or (iid is None and iname is None):
+        raise ShiftbaseIntegrationError('Es fehlen die Spalten „Gearbeitet“, Datum oder Mitarbeiter/Benutzer-ID.')
+    with db_conn() as conn:
+        _sb_ensure_mapping_table(conn)
+        mapping=_sb_mapping(conn)
+        d=conn.execute('SELECT name FROM drivers WHERE id=?',(driver_id,)).fetchone()
+        monthrow=conn.execute('SELECT payroll_hours FROM monthly_data WHERE driver_id=? AND year=? AND month=?',(driver_id,year,month)).fetchone()
+    if not d:raise ShiftbaseIntegrationError('Fahrer existiert nicht in deiner Cloud.')
+    uid=mapping.get(driver_id)
+    if not uid:raise ShiftbaseIntegrationError('Fahrer muss zuerst mit Shiftbase verknüpft sein.')
+    fname=str(d['name'])
+    wanted_name=_sb_header(fname)
+    matched=0; failed=0; seen=set(); total=Decimal(0); dayvalues={}; omitted=0
+    for row in parsed[first+1:]:
+        if not row or not any(c.strip() for c in row):continue
+        def cell(i):return row[i].strip() if i is not None and i<len(row) else ''
+        if iid is not None:
+            if cell(iid)!=uid:continue
+        elif _sb_header(cell(iname))!=wanted_name:continue
+        rawdate=cell(idate)
+        # Date is required so the correct payroll month is guaranteed.
+        day=_sb_day(rawdate)
+        if not day:
+            m=re.fullmatch(r'(\d{1,2})\.(\d{1,2})\.(\d{4})',rawdate)
+            if m:
+                try: day=shiftbase_date(int(m.group(3)),int(m.group(2)),int(m.group(1))).isoformat()
+                except ValueError: pass
+        if not day:
+            failed+=1;continue
+        if not day.startswith(f'{year:04d}-{month:02d}-'):
+            omitted+=1;continue
+        if istatus is not None and _sb_header(cell(istatus)) in {'declined','rejected','abgelehnt','abgewiesen'}:
+            omitted+=1;continue
+        record_id=cell(its)
+        if record_id:
+            if record_id in seen:
+                omitted+=1;continue
+            seen.add(record_id)
+        value=_sb_import_hours(cell(iwork))
+        if value is None or value>Decimal(24):
+            failed+=1;continue
+        total+=value
+        dayvalues[day]=dayvalues.get(day,Decimal(0))+value
+        matched+=1
+    if failed:
+        raise ShiftbaseIntegrationError(f'{failed} Einträge von {fname} sind im CSV nicht eindeutig auswertbar. Keine Monatssumme berechnet.')
+    if not matched:
+        raise ShiftbaseIntegrationError('Für diesen Fahrer und Monat sind im CSV keine passenden Zeiteinträge enthalten. Prüfe den Berichtsfilter und die Benutzer-ID.')
+    payroll=Decimal(str(monthrow['payroll_hours'])) if monthrow and monthrow['payroll_hours'] is not None else None
+    return {'fahrer':fname,'uid':uid,'year':year,'month':month,'matched':matched,'omitted':omitted,
+            'hours':total,'payroll':payroll,'difference':payroll-total if payroll is not None else None,
+            'dayvalues':sorted(dayvalues.items()),'identity':'Shiftbase-Benutzer-ID' if iid is not None else 'exakter Name'}
+
+
+@app.post('/admin/shiftbase/csv-test')
+@admin_login_required
+def admin_shiftbase_csv_test():
+    csrf=session.get('shiftbase_csrf','')
+    if not csrf or not hmac.compare_digest(csrf,str(request.form.get('csrf_token',''))):
+        abort(403)
+    try:
+        driver_id=int(request.form.get('driver_id','0'))
+        year=int(request.form.get('year','0'))
+        month=int(request.form.get('month','0'))
+        if not (2020<=year<=2100 and 1<=month<=12):raise ValueError()
+    except ValueError:abort(400)
+    upload=request.files.get('timesheet_csv')
+    if not upload or not str(upload.filename).lower().endswith(('.csv','.txt')):
+        error='Bitte eine CSV-Datei aus Shiftbase auswählen.'
+        return base_page('Shiftbase CSV-Test','<div class="card"><h2>CSV-Test</h2><div class="flash err">'+shiftbase_escape(error)+'</div></div>','shiftbase'),400
+    try:
+        result=_sb_csv_report_for_driver(upload.read(5_000_001),driver_id,year,month)
+    except ShiftbaseIntegrationError as exc:
+        return base_page('Shiftbase CSV-Test','<div class="card"><h2>CSV-Test</h2><div class="flash err">'+shiftbase_escape(str(exc))+'</div><a class="btn small" href="'+url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1)+'">Zurück zum Abgleich</a></div>','shiftbase'),422
+    with db_conn() as conn:
+        _sb_save_csv_snapshot(conn,result,driver_id)
+    def hfmt(x):
+        if x is None:return '–'
+        minutes=int((x*60).quantize(Decimal('1')))
+        return f'{minutes//60}:{minutes%60:02d} h ({x:.2f} Dezimalstunden)'
+    page=['<div class="card"><h2>Shiftbase-CSV – '+shiftbase_escape(result['fahrer'])+'</h2>',
+          '<p><b>Arbeitszeit aus offizieller CSV:</b> '+shiftbase_escape(hfmt(result['hours']))+'</p>',
+          '<p><b>Abrechnung deiner Cloud:</b> '+shiftbase_escape(hfmt(result['payroll']))+'</p>',
+          '<p><b>Differenz (Abrechnung minus Arbeitszeit):</b> '+shiftbase_escape(hfmt(result['difference']))+'</p>',
+          '<p>Einträge: '+str(result['matched'])+' · Identifikation: '+shiftbase_escape(result['identity'])+'. Nur die geprüfte Monatssumme wurde in deiner Cloud gespeichert. Die CSV-Datei wurde nicht gespeichert und Shiftbase wurde nicht verändert.</p>',
+          '<h3>Tageswerte aus Shiftbase</h3><div class="table-wrap"><table><tr><th>Datum</th><th>Gearbeitete Stunden</th></tr>']
+    for day,val in result['dayvalues']:
+        page.append('<tr><td>'+shiftbase_escape(day)+'</td><td>'+shiftbase_escape(hfmt(val))+'</td></tr>')
+    page.append('</table></div><p><a class="btn small" href="'+url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1)+'">Zurück zum Abgleich</a></p></div>')
+    return base_page('Shiftbase CSV-Test',''.join(page),'shiftbase')
+
+
 def _sb_report_for_month(year,month):
     with db_conn() as conn:
         _sb_ensure_mapping_table(conn)
         users,times,absences=_sb_fetch_snapshot(year,month)
-        return _sb_report(conn,year,month,users,times,absences)
+        mappings=_sb_mapping(conn)
+        times,detail_stats=_sb_enrich_mapped_timesheets(times,set(mappings.values()))
+        report=_sb_report(conn,year,month,users,times,absences)
+        report['diagnostic']['detail']=detail_stats
+        return report
 
 
 def _sb_params():
@@ -4030,6 +4299,21 @@ def admin_shiftbase_abgleich():
     h.append('<p class="muted">Erforderliche Render-Variablen: SHIFTBASE_API_BASE_URL und SHIFTBASE_API_TOKEN. API-Pfad/Authentifizierung nach Shiftbase-Dokumentation prüfen. Für Demo lokal SHIFTBASE_MOCK_DIR setzen.</p>')
     if error: h.append('<div class="flash err">'+shiftbase_escape(error)+'</div>')
     h.append('</div>')
+    # CSV fallback: official Shiftbase report already includes calculated net hours.
+    with db_conn() as _sb_conn:
+        _csv_locals=_sb_local_month(_sb_conn,year,month)
+        _csv_mappings=_sb_mapping(_sb_conn)
+    _csv_choices=[r for r in _csv_locals if r['driver_id'] in _csv_mappings]
+    h.append('<div class="card"><h2>Stunden aus dem offiziellen Shiftbase-Bericht prüfen (CSV)</h2><p>Wenn die API keine vollständigen Zeitwerte liefert: In Shiftbase → Berichte → Arbeitszeitprotokoll detailliert den Monat und den Mitarbeiter auswählen und als <b>CSV</b> exportieren. Die Datei wird nur geprüft und nicht gespeichert.</p>')
+    h.append('<form method="post" action="'+url_for('admin_shiftbase_csv_test')+'" enctype="multipart/form-data" class="actions">')
+    h.append('<input type="hidden" name="csrf_token" value="'+shiftbase_escape(_sb_csrf_token(),quote=True)+'"><input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">')
+    _csv_options=''
+    for _r in _csv_choices:
+        _selected=' selected' if 'kaan aysel' in _r['name'].casefold() else ''
+        _csv_options+='<option value="'+str(_r['driver_id'])+'"'+_selected+'>'+shiftbase_escape(_r['name'])+'</option>'
+    h.append('<label>Fahrer <select name="driver_id" required style="max-width:260px">'+_csv_options+'</select></label>')
+    h.append('<label>Shiftbase-CSV <input type="file" name="timesheet_csv" accept=".csv,.txt,text/csv" required></label>')
+    h.append('<button type="submit" class="primary" style="width:auto"'+('' if _csv_choices else ' disabled')+'>CSV prüfen</button></form></div>')
     if report:
         h.append('<div class="card"><h2>Monatsvergleich</h2>')
         h.append(f'<p>Shiftbase: {report["api_users"]} Benutzer, {report["api_timesheets"]} Zeiteinträge, {report["api_absences"]} Abwesenheiten. Nicht zuordenbare Zeiteinträge: {report["ignored_entries"]}.</p>')
@@ -4044,7 +4328,12 @@ def admin_shiftbase_abgleich():
                 h.append(' Unterfelder: <code>' + shiftbase_escape(json.dumps(diag['nested_field_names'],ensure_ascii=False)) + '</code>.')
             h.append('</div>')
         if report['diagnostic']['missing_hour_units']:
-            h.append('<div class="flash err">Bei '+str(report['diagnostic']['missing_hour_units'])+' Zeiteinträgen fehlen weiterhin verlässlich auswertbare Stunden. Die vorhandenen Beginn-/Ende-/Pausenformate werden nicht geraten. Feldtypen eines Beispiel-Eintrags (keine Werte): <code>'+shiftbase_escape(json.dumps(report['diagnostic']['unknown_time_field_types'],ensure_ascii=False))+'</code>.</div>')
+            detail_stats=report['diagnostic'].get('detail',{})
+            h.append('<div class="flash" style="background:#fff8e5;color:#92400e;border:1px solid #f3c77d"><b>API-Zeiten unvollständig:</b> '
+                     +str(report['diagnostic']['missing_hour_units'])+' Einträge liefern keine sicher berechenbaren Arbeitsstunden. '
+                     +'Einzelabruf: '+str(detail_stats.get('detail_resolved',0))+' zusätzliche Einträge erfolgreich ausgewertet. '
+                     +'Falls der Einzelabruf keine Stunden liefert, importiere unten den Shiftbase-CSV-Bericht mit der Spalte <b>Gearbeitet</b>. '
+                     +'Die API-Monatssumme wird absichtlich nicht als 0 angezeigt oder erfunden.</div>')
         h.append('<div class="table-wrap"><table><thead><tr><th>Fahrer</th><th>Shiftbase-ID</th><th>Shiftbase Std.</th><th>Abrechnung Std.</th><th>Differenz</th><th>Abwesenheiten</th><th>Hinweise</th></tr></thead><tbody>')
         for r in report['results']:
             fmt=lambda v: '–' if v is None else f'{v:.2f}'.replace('.',',')
