@@ -3481,6 +3481,69 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 import hmac
 import secrets
 
+# Reuse TLS connections during large transfers if urllib3 is present on Render.
+# Safe fallback is the existing urllib transport; no extra package is required.
+try:
+    import urllib3 as _sb_urllib3
+except ImportError:
+    _sb_urllib3 = None
+
+import threading as _sb_threading
+_SB_HTTP_POOL = None
+_SB_HTTP_POOL_LOCK = _sb_threading.Lock()
+
+
+def _sb_http_request(method, url, headers, timeout, payload=None, max_bytes=5_000_000):
+    """One HTTP operation, no redirects or automatic retries (especially PUT).
+
+    A per-process urllib3 connection pool avoids a fresh TLS handshake for
+    every timesheet. HTTPS certificate and hostname validation stay enabled.
+    If urllib3 isn't installed, keep the previous urllib behavior.
+    """
+    global _SB_HTTP_POOL, _SB_HTTP_POOL_LOCK
+    if _sb_urllib3 is not None and os.environ.get('SHIFTBASE_DISABLE_HTTP_POOL','').strip() != '1':
+        if _SB_HTTP_POOL is None:
+            # The pool is thread-safe; initialize once under a standard lock.
+            with _SB_HTTP_POOL_LOCK:
+                if _SB_HTTP_POOL is None:
+                    _SB_HTTP_POOL = _sb_urllib3.PoolManager(
+                        num_pools=4, maxsize=4, block=True,
+                        cert_reqs='CERT_REQUIRED', retries=False)
+        try:
+            response = _SB_HTTP_POOL.request(
+                method, url, body=payload, headers=headers,
+                timeout=_sb_urllib3.Timeout(connect=min(3.0, float(timeout)), read=float(timeout)),
+                retries=False, redirect=False, preload_content=False)
+            try:
+                status = int(response.status)
+                raw = response.read(max_bytes + 1)
+                if len(raw) > max_bytes:
+                    response.close()  # don't leave a truncated connection in pool
+                    raise ShiftbaseIntegrationError('Shiftbase-Antwort überschreitet die zulässige Größe.')
+            finally:
+                response.release_conn()
+            if 300 <= status < 400:
+                raise ShiftbaseIntegrationError('Unerwartete Weiterleitung der Shiftbase-API abgebrochen.')
+            if status >= 400:
+                # Preserve the existing sanitized error-handling paths.
+                return _sb_raise_http_error(url, status, raw)
+            return status, raw
+        except _sb_urllib3.exceptions.HTTPError as exc:
+            # Never retry a failed or ambiguous PUT automatically.
+            raise URLError('Shiftbase-Verbindung fehlgeschlagen oder Zeitüberschreitung') from exc
+    req = Request(url, data=payload, method=method, headers=headers)
+    with build_opener(_ShiftbaseNoRedirect()).open(req, timeout=timeout) as response:
+        raw=response.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ShiftbaseIntegrationError('Shiftbase-Antwort überschreitet die zulässige Größe.')
+        return response.status, raw
+
+
+def _sb_raise_http_error(url, status, body):
+    import io
+    raise HTTPError(url, status, 'Shiftbase-API-Fehler', {}, io.BytesIO(body))
+
+
 class ShiftbaseIntegrationError(Exception):
     pass
 
@@ -3560,12 +3623,9 @@ def _shiftbase_read_json(kind, params=None):
         # X-API-Key and X-Auth-Token headers take only the raw token.
         auth_value = raw_token
     headers={'Accept':'application/json', 'User-Agent':'PlusMinusCloud-ShiftbaseAbgleich/1.1', auth_header: auth_value}
-    req=Request(url, headers=headers, method='GET')
     try:
-        with build_opener(_ShiftbaseNoRedirect()).open(req, timeout=_SB_STEP_READ_TIMEOUT.get()) as r:
-            raw=r.read(5_000_001)
-        if len(raw)>5_000_000:
-            raise ShiftbaseIntegrationError('Antwort der Shiftbase-API zu groß.')
+        _, raw = _sb_http_request('GET', url, headers, _SB_STEP_READ_TIMEOUT.get(),
+                                  max_bytes=5_000_000)
         return json.loads(raw.decode('utf-8'))
     except HTTPError as exc:
         # Antworttext nicht weitergeben, da personenbezogene Daten enthalten sein koennen.
@@ -6258,16 +6318,13 @@ def _sb_put_timesheet(timesheet_id, payload):
         raise ShiftbaseIntegrationError('Ungültige Shiftbase-Timesheet-ID.')
     url = cfg['base'] + '/timesheets/' + quote(str(timesheet_id), safe='')
     data = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-    req = Request(url, data=data, method='PUT', headers={
+    headers = {
         'Authorization': 'API ' + raw, 'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'PlusMinusCloud-VerifiedTimesheetCorrection/2.0'})
+        'User-Agent': 'PlusMinusCloud-VerifiedTimesheetCorrection/2.0'}
     try:
-        with build_opener(_ShiftbaseNoRedirect()).open(req, timeout=20) as response:
-            status = response.status
-            raw_response = response.read(1_000_001)
-        if len(raw_response) > 1_000_000:
-            raise ShiftbaseIntegrationError('PUT-Antwort ungewöhnlich groß; Status ungeklärt.')
+        status, raw_response = _sb_http_request('PUT', url, headers, 20,
+                                                payload=data, max_bytes=1_000_000)
         if status not in (200, 201, 204):
             raise ShiftbaseIntegrationError('Shiftbase PUT HTTP ' + str(status) + '; GET-Kontrolle erforderlich.')
         if raw_response.strip():
@@ -6775,7 +6832,6 @@ def _sb_verified_post_csrf(form):
 def _sb_run_record(run_id):
     if not re.fullmatch(r'[a-f0-9]{32}',run_id):abort(404)
     with db_conn() as conn:
-        _sb_queue_schema(conn)
         run=conn.execute('SELECT * FROM shiftbase_transfer_runs WHERE id=?',(run_id,)).fetchone()
         if not run: abort(404)
         tasks=[dict(t) for t in conn.execute('SELECT * FROM shiftbase_transfer_tasks WHERE run_id=? ORDER BY ordinal',(run_id,)).fetchall()]
@@ -6783,18 +6839,32 @@ def _sb_run_record(run_id):
 
 
 def _sb_run_state(run_id):
-    run,tasks=_sb_run_record(run_id)
-    total=len(tasks)
-    done=sum(t['state']=='confirmed' for t in tasks)
-    flagged=next((t for t in tasks if t['state'] in ('uncertain','error')),None)
-    active=next((t for t in tasks if t['state']!='confirmed'),None)
-    finished=active is None
-    return {'total':total,'confirmed':done,'finished':finished,'blocked':bool(flagged),
-            'error':str(flagged['message']) if flagged else '',
+    """Read compact progress without copying every signed timesheet JSON blob."""
+    if not re.fullmatch(r'[a-f0-9]{32}',run_id):
+        abort(404)
+    with db_conn() as conn:
+        run=conn.execute('SELECT year,month FROM shiftbase_transfer_runs WHERE id=?',
+                         (run_id,)).fetchone()
+        if not run:
+            abort(404)
+        summary=conn.execute("""SELECT COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN state='confirmed' THEN 1 ELSE 0 END),0) AS confirmed
+            FROM shiftbase_transfer_tasks WHERE run_id=?""",(run_id,)).fetchone()
+        flagged=conn.execute('SELECT message FROM shiftbase_transfer_tasks '
+                             'WHERE run_id=? AND state IN (?,?) ORDER BY ordinal LIMIT 1',
+                             (run_id,'uncertain','error')).fetchone()
+        active=conn.execute('SELECT ordinal,driver_id,timesheet_id,state FROM shiftbase_transfer_tasks '
+                            'WHERE run_id=? AND state<>? ORDER BY ordinal LIMIT 1',
+                            (run_id,'confirmed')).fetchone()
+        recent=conn.execute('SELECT driver_id,timesheet_id,state,message FROM shiftbase_transfer_tasks '
+                            'WHERE run_id=? ORDER BY ordinal DESC LIMIT 40',(run_id,)).fetchall()
+    total=int(summary['total'] or 0)
+    done=int(summary['confirmed'] or 0)
+    return {'total':total,'confirmed':done,'finished':active is None and total>0,
+            'blocked':bool(flagged),'error':str(flagged['message']) if flagged else '',
             'next':(str(active['ordinal'])+' / '+str(total)+' · Mitarbeiter '+str(active['driver_id'])+
                     ', Schicht '+str(active['timesheet_id'])+' · '+str(active['state'])) if active else 'Alles bestätigt',
-            'tasks':[{'driver_id':t['driver_id'],'timesheet_id':t['timesheet_id'],
-                      'state':t['state'],'message':t['message']} for t in tasks[-40:]],
+            'tasks':[dict(x) for x in reversed(recent)],
             'run_id':run_id,'year':run['year'],'month':run['month']}
 
 
@@ -6811,7 +6881,7 @@ def admin_shiftbase_transfer_view(run_id):
 .sb-transfer button{max-width:450px}
 </style>''',
        '<div class="sb-transfer"><div class="card"><h2>Shiftbase – überprüfte Korrekturen übertragen</h2>',
-       '<p>Je Anfrage genau ein API-Schritt: Original nachlesen, PUT senden, anschließend erneut nachlesen. Der Fortschritt bleibt in deiner Datenbank erhalten. Ein unsicherer PUT wird <b>niemals</b> automatisch wiederholt.</p>',
+       '<p>Beschleunigter Versand: HTTPS-Verbindungen werden nach Möglichkeit wiederverwendet und unnötige Statusanfragen entfallen. Original-GET, genau ein PUT und bestätigender GET bleiben erhalten. Bei Verbindungsabbruch wird <b>kein PUT automatisch wiederholt</b>.</p>',
        '<div id="sb-transfer-label" class="sb-big">Bereit zur Übertragung</div>',
        '<progress id="sb-transfer-progress" value="0" max="'+str(max(len(tasks),1))+'"></progress>',
        '<p id="sb-transfer-current" role="status">'+str(len(tasks))+' geprüfte Schichtkorrektur(en).</p>',
@@ -6843,22 +6913,26 @@ err.style.display=j.error?'block':'none';err.textContent=j.error||'';
 details.textContent=(j.tasks||[]).map(x=>'Fahrer '+x.driver_id+' · Schicht '+x.timesheet_id+': '+x.state+' · '+x.message).join('\\n');
 }
 async function read(){const j=await getJSON(base+'/status');paint(j);return j;}
-async function tick(){
-if(running)return;running=true;btn.disabled=true;
-try{
- while(true){
-  const current=await read();
-  if(current.finished||current.blocked)break;
-  const next=await getJSON(base+'/step',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'csrf_token='+encodeURIComponent(token)});
-  paint(next);
-  if(next.finished||next.blocked||next.pause)break;
-  await new Promise(resolve=>setTimeout(resolve,250));
- }
-}catch(e){err.style.display='block';err.textContent='Verbindung unterbrochen: '+e.message+'. Übertragungsstand erneut laden; PUT nicht unkontrolliert wiederholen.';}
-finally{running=false;btn.disabled=false;}
+async function tick(initialState){
+ if(running)return;running=true;btn.disabled=true;
+ try{
+  // One response per remote operation: POST already returns full progress.
+  // The original UI performed an extra GET and 250-ms sleep every time.
+  let current=initialState||await read();
+  while(!current.finished&&!current.blocked){
+   current=await getJSON(base+'/step',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'csrf_token='+encodeURIComponent(token)});
+   paint(current);
+   if(current.finished||current.blocked||current.pause)break;
+   // Rare case: another browser tab is currently using the same task.
+   if(current.retry_after_ms){await new Promise(resolve=>setTimeout(resolve,current.retry_after_ms));}
+  }
+ }catch(e){
+  err.style.display='block';
+  err.textContent='Verbindung unterbrochen: '+e.message+'. Status neu laden; PUT niemals blind wiederholen.';
+ }finally{running=false;btn.disabled=false;}
 }
-btn.addEventListener('click',tick);
-read().then(j=>{if(shouldAutostart&&!j.finished&&!j.blocked)tick();}).catch(e=>{err.style.display='block';err.textContent='Status kann nicht geladen werden: '+e.message;});
+btn.addEventListener('click',()=>tick());
+read().then(j=>{if(shouldAutostart&&!j.finished&&!j.blocked)tick(j);}).catch(e=>{err.style.display='block';err.textContent='Status kann nicht geladen werden: '+e.message;});
 })();
 </script>'''.replace('RUNID',run_id).replace('CSRF',csrf).replace('AUTOSTART','true' if autostart else 'false')]
     response=make_response(base_page('Shiftbase – Übertragungsfortschritt',''.join(h),'shiftbase'))
@@ -6940,7 +7014,18 @@ def _sb_prepare_task(task):
     _sb_rest_check_before_write(source,eid,complete)
     payload=_sb_update_payload(ts,eid,complete,expected_uid=source['uid'],
                                monthly_entry=source['raw_timesheets'].get(eid))
-    return payload
+    return payload,source,before,after,eid
+
+
+def _sb_task_is_stale(task, seconds=65):
+    """Only recover a supposedly in-flight operation after its timeout window."""
+    try:
+        changed=datetime.fromisoformat(str(task['updated_at']))
+        if changed.tzinfo is None:
+            changed=changed.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc)-changed).total_seconds() >= seconds
+    except (ValueError,TypeError,KeyError):
+        return False
 
 
 def _sb_task_dispatch_one(task):
@@ -6949,9 +7034,8 @@ def _sb_task_dispatch_one(task):
         if not _sb_task_transition(tid,'pending','preparing','Original wird nachgelesen'):
             return
         try:
-            payload=_sb_prepare_task(task)
+            payload,source,before,after,eid=_sb_prepare_task(task)
             # Persist audit intent before any PUT; task is still not sent.
-            source,before,after,eid=_sb_task_context(task)
             audit_id=secrets.token_hex(16)
             with db_conn() as conn:
                 _sb_put_audit_table(conn)
@@ -6971,18 +7055,25 @@ def _sb_task_dispatch_one(task):
     if state=='prepared':
         # This state is committed BEFORE the network request. A process death
         # between sending and receiving can never cause an automatic second PUT.
-        if not _sb_task_transition(tid,'prepared','sent','PUT möglicherweise unterwegs; noch nicht bestätigt'):
+        if not _sb_task_transition(tid,'prepared','sending','PUT möglicherweise unterwegs; noch nicht bestätigt'):
             return
         try:
             _sb_task_context(task)
             status=_sb_put_timesheet(eid,json.loads(task['payload_json']))
-            _sb_task_transition(tid,'sent','verifying','PUT HTTP '+str(status)+'; GET-Kontrolle steht aus')
+            _sb_task_transition(tid,'sending','verifying','PUT HTTP '+str(status)+'; GET-Kontrolle steht aus')
         except (ShiftbaseIntegrationError,ValueError,TypeError) as exc:
-            # Keep 'sent'. The next step is a read-only GET, never another PUT.
+            # Keep 'sending'. The next step is a read-only GET, never another PUT.
             with db_conn() as conn:
                 conn.execute('UPDATE shiftbase_transfer_tasks SET message=?,updated_at=? WHERE id=? AND state=?',
-                             ('PUT-Ergebnis unklar: '+str(exc)+'; zuerst nur GET prüfen',now_iso(),tid,'sent'))
+                             ('PUT-Ergebnis unklar: '+str(exc)+'; zuerst nur GET prüfen',now_iso(),tid,'sending'))
                 conn.commit()
+        return
+    if state=='sending':
+        # Another browser tab must not GET while the original PUT is in flight.
+        # After a worker loss, reconcile using GET; never send that PUT again.
+        if _sb_task_is_stale(task):
+            _sb_task_transition(tid,'sending','verifying',
+                                'PUT-Antwort unbekannt; nur Shiftbase-GET zur Wiederaufnahme')
         return
     if state in ('sent','verifying'):
         if not _sb_task_transition(tid,state,'checking','Lese Shiftbase erneut – kein PUT'):
@@ -7029,12 +7120,14 @@ def _sb_task_dispatch_one(task):
                     conn.commit()
         return
     if state=='checking':
-        # A worker died during GET (not PUT). Reading again is safe.
-        _sb_task_transition(tid,'checking','verifying','GET wird sicher erneut geprüft')
+        # Don't interfere with an active GET from another browser tab.
+        if _sb_task_is_stale(task):
+            _sb_task_transition(tid,'checking','verifying','GET nach Unterbrechung erneut prüfen')
         return
     if state=='preparing':
-        # A worker died before PUT. Preparing again is safe; no mutation yet.
-        _sb_task_transition(tid,'preparing','pending','Vorbereitung nach Unterbrechung wiederholen')
+        # This is read-only preparation; don't race another active request.
+        if _sb_task_is_stale(task):
+            _sb_task_transition(tid,'preparing','pending','Vorbereitung nach Unterbrechung wiederholen')
         return
 
 
@@ -7042,11 +7135,18 @@ def _sb_task_dispatch_one(task):
 @admin_login_required
 def admin_shiftbase_transfer_step(run_id):
     _sb_verified_post_csrf(request.form)
-    run,tasks=_sb_run_record(run_id)
-    if not tasks: return jsonify({'error':'Leerer Versandauftrag.'}),422
-    flagged=next((t for t in tasks if t['state'] in ('error','uncertain')),None)
-    if flagged:return jsonify(_sb_run_state(run_id))
-    next_task=next((t for t in tasks if t['state']!='confirmed'),None)
+    if not re.fullmatch(r'[a-f0-9]{32}',run_id): abort(404)
+    with db_conn() as conn:
+        run=conn.execute('SELECT id FROM shiftbase_transfer_runs WHERE id=?',(run_id,)).fetchone()
+        if not run: abort(404)
+        flagged=conn.execute('SELECT id FROM shiftbase_transfer_tasks WHERE run_id=? '
+                             'AND state IN (?,?) LIMIT 1',(run_id,'error','uncertain')).fetchone()
+        next_row=conn.execute('SELECT * FROM shiftbase_transfer_tasks WHERE run_id=? '
+                              'AND state<>? ORDER BY ordinal LIMIT 1',(run_id,'confirmed')).fetchone()
+        task_count=conn.execute('SELECT id FROM shiftbase_transfer_tasks WHERE run_id=? LIMIT 1',(run_id,)).fetchone()
+    if not task_count: return jsonify({'error':'Leerer Versandauftrag.'}),422
+    if flagged: return jsonify(_sb_run_state(run_id))
+    next_task=dict(next_row) if next_row else None
     if next_task is not None:
         try:
             read_timeout = max(3,min(9,int(os.environ.get('SHIFTBASE_STEP_READ_TIMEOUT','8'))))
@@ -7069,6 +7169,8 @@ def admin_shiftbase_transfer_step(run_id):
             _SB_STEP_READ_TIMEOUT.reset(timeout_token)
     result=_sb_run_state(run_id)
     result['pause']=bool(result['blocked'])
+    result['retry_after_ms']=(1200 if next_task and next_task['state'] in ('preparing','checking','sending')
+                              and not _sb_task_is_stale(next_task) else 0)
     return jsonify(result)
 
 # ========== End resumable transfer ==========
