@@ -5505,6 +5505,12 @@ def admin_shiftbase_pruefvorschau():
         h.append('<div class="flash '+color+'">'+esc(reply)+'</div>')
     if not writable:
         h.append('<div class="flash err">Direktes Senden noch gesperrt. Auf Render müssen SHIFTBASE_VERIFIED_WRITE_ENABLED=1 und SHIFTBASE_VERIFIED_WRITE_USER_ID='+esc(source['uid'])+' gesetzt sein.</div>')
+    h.append('<div class="sb-hint"><b>Nur einmal bearbeiten:</b> Trage nach dem Talex-Abgleich die <em>tatsächlich belegten</em> Zeiten in die aufgeklappten Tage ein und setze die Prüf-Bestätigung. Mit dem Sammelbutton sendest du alle so bestätigten Änderungen in einem Vorgang. Rein rechnerische Vorschläge werden niemals übernommen.</div>')
+    h.append('<form id="sb-batch-form" method="post" action="'+url_for('admin_shiftbase_verified_batch')+'">')
+    for key,val in [('csrf_token',_sb_csrf_token()),('driver_id',did),('year',year),('month',month)]:
+        h.append('<input type="hidden" name="'+key+'" value="'+esc(val)+'">')
+    h.append('<button class="primary" type="submit"'+('' if writable else ' disabled')+'>Alle einzeln geprüften Korrekturen an Shiftbase senden</button></form>')
+    h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_vorschlaege_pruefliste_csv',driver_id=did,year=year,month=month,urlaubs_tage=source['preview_vacation_days'])+'">Alle Vorschläge als unverbindliche Prüfliste (CSV)</a></p>')
     h.append('<h3>Tagesliste und geprüfte Korrekturen</h3><p class="sb-muted">Tage aufklappen und Talex-Protokolle prüfen. Die Bearbeitungsfelder enthalten bewusst die ursprünglichen Shiftbase-Werte (nicht den Vorschlag). Eine mit * gekennzeichnete Pause ist nur für das Rechenmodell ergänzt und niemals als genommen bestätigt. Nur belegte Istzeiten dürfen übertragen werden.</p>')
     h.append('<div class="sb-column-head"><span>Datum</span><span>Bisher</span><span>Rechnerischer Vorschlag</span><span>Differenz</span><span>Status</span></div>')
     h.append('<div aria-label="Tageskorrekturen">')
@@ -5540,10 +5546,12 @@ def admin_shiftbase_pruefvorschau():
             h.append('<p style="padding:12px;color:#a23d10">Abwesenheit eingetragen: '+esc(r['absence'])+'. Bitte zunächst klären; automatisches Schreiben gesperrt.</p>')
         if r.get('deleted'):
             h.append('<p style="padding:12px">Gelöschter Eintrag – keine automatische Korrektur.</p>')
-        h.append('<form class="sb-edit" method="post" action="'+url_for('admin_shiftbase_direct_put')+'">')
+        h.append('<form class="sb-edit" data-sb-eid="'+esc(eid)+'" method="post" action="'+url_for('admin_shiftbase_direct_put')+'">')
         for key,val in [('csrf_token',_sb_csrf_token()),('driver_id',did),('year',year),('month',month),('timesheet_id',eid),('original_sig',signed)]:
             h.append('<input type="hidden" name="'+key+'" value="'+esc(val)+'">')
         h.append('<div class="sb-wide sb-muted">Original laut Shiftbase: '+esc(before_summary)+' · Pause '+esc(orig['break_minutes'])+' Min. – Vorschlag nur als Vergleich; keine automatische Übernahme.</div>')
+        if suggestion and not unusable:
+            h.append('<div class="sb-wide"><button type="button" class="btn small sb-preview-copy" data-start="'+esc(suggestion['new_start'])+'" data-end="'+esc(suggestion['new_end'])+'" data-pause="'+esc(suggestion['new_pause'])+'">Rechenvorschlag als Eingabehilfe übernehmen (weiterhin ungeprüft)</button></div>')
         h.append('<label>Beginn<input type="time" name="start" value="'+esc(orig['start'])+'" required></label>')
         h.append('<label>Ende<input type="time" name="end" value="'+esc(orig['end'])+'" required></label>')
         h.append('<label>Pause in Minuten<input type="number" name="pause" min="0" max="600" value="'+esc(orig['break_minutes'])+'" required></label>')
@@ -5558,6 +5566,47 @@ def admin_shiftbase_pruefvorschau():
         disabled='' if writable and not unusable else ' disabled'
         h.append('<div class="sb-wide"><button class="primary sb-send" type="submit"'+disabled+'>Geprüfte Korrektur an Shiftbase senden</button></div>')
         h.append('</form></details>')
+    h.append(r"""<script>
+(function(){
+  const batch=document.getElementById('sb-batch-form');
+  if(!batch) return;
+  // Copying only fills local inputs. It never confirms evidence or writes data.
+  document.querySelectorAll('button.sb-preview-copy').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      const form=btn.closest('form.sb-edit');
+      if(!form) return;
+      form.elements.namedItem('start').value=btn.dataset.start;
+      form.elements.namedItem('end').value=btn.dataset.end;
+      form.elements.namedItem('pause').value=btn.dataset.pause;
+      const cert=form.elements.namedItem('certified');
+      if(cert) cert.checked=false;
+      const evidence=form.elements.namedItem('evidence');
+      if(evidence) evidence.focus();
+    });
+  });
+  batch.addEventListener('submit',function(event){
+    batch.querySelectorAll('input[data-batch-collected]').forEach(el=>el.remove());
+    const names=['original_sig','certified','evidence','start','end','pause','vacation_ack','approved_ack'];
+    let count=0;
+    function add(name,value){
+      const h=document.createElement('input');h.type='hidden';
+      h.name=name;h.value=value;h.dataset.batchCollected='1';batch.appendChild(h);
+    }
+    document.querySelectorAll('form.sb-edit[data-sb-eid]').forEach(function(form){
+      const attestation=form.elements.namedItem('certified');
+      if(!attestation || !attestation.checked) return;
+      const eid=form.getAttribute('data-sb-eid');
+      if(!/^\d{1,20}$/.test(eid)) return;
+      count++;add('selected_id',eid);
+      names.forEach(function(name){
+        const el=form.elements.namedItem(name);
+        add(name+'_'+eid,el ? (el.type==='checkbox' ? (el.checked?el.value:'') : el.value) : '');
+      });
+    });
+    if(!count){event.preventDefault();alert('Bitte zuerst die tatsächlichen Zeiten anhand von Talex prüfen und bei mindestens einem Tag bestätigen.');}
+  });
+})();
+</script>""")
     h.append('</div><p class="sb-muted">Nach dem Senden liest die Cloud die Schicht erneut aus. Wenn Shiftbase die Änderung nicht bestätigt, erscheint ein Fehler statt einer Erfolgsmeldung.</p>')
     with db_conn() as conn:
         _sb_put_audit_table(conn)
@@ -5574,105 +5623,243 @@ def admin_shiftbase_pruefvorschau():
     return resp
 
 
-@app.post('/admin/shiftbase/direkt-senden')
-@admin_login_required
-def admin_shiftbase_direct_put():
-    # One action: user-verified single shift correction, no draft/save step.
-    expected_csrf=str(session.get('shiftbase_csrf',''))
-    supplied_csrf=str(request.form.get('csrf_token',''))
+def _sb_write_access_checked(source):
+    """Fail closed: production remains restricted to the explicit test employee."""
+    if os.environ.get('SHIFTBASE_VERIFIED_WRITE_ENABLED','').strip()!='1':
+        raise ShiftbaseIntegrationError('Der Shiftbase-Schreibzugriff ist nicht aktiviert.')
+    if (source['uid'] != os.environ.get('SHIFTBASE_VERIFIED_WRITE_USER_ID','').strip()
+            or source['uid'] != '1338173' or normalize(source['name']) != 'kaan aysel'):
+        raise ShiftbaseIntegrationError('Schreibtest nur für Kaan Aysel (1338173) freigegeben.')
+
+
+def _sb_verified_write_one(form, source, did, year, month, eid):
+    """Only Talex-checked, expressly confirmed actual times can be PUT.
+
+    Never accepts data from _sb_hypothetical_preview. One remote PUT, then GET.
+    Caller may be the single-day UI or the verified batch action.
+    """
+    _sb_write_access_checked(source)
+    if not re.fullmatch(r'\d{1,20}', str(eid)):
+        raise ShiftbaseIntegrationError('Ungültige Timesheet-ID.')
+    if form.get('certified')!='yes':
+        raise ShiftbaseIntegrationError('Bestätigung des Originalnachweises fehlt.')
+    evidence=str(form.get('evidence','')).strip()[:400]
+    if len(evidence)<15:
+        raise ShiftbaseIntegrationError('Belegquelle und Korrekturgrund fehlen.')
+    row=next((r for r in source['rows'] if str(r['entry_id'])==eid),None)
+    if row is None: raise ShiftbaseIntegrationError('Schicht nicht gefunden.')
+    orig=_sb_review_row_obj(row)
+    expected_sig=_sb_direct_baseline_signature(did,source['uid'],year,month,eid,orig)
+    if not hmac.compare_digest(str(form.get('original_sig','')),expected_sig):
+        raise ShiftbaseIntegrationError('Die Schicht wurde inzwischen geändert. Seite neu laden.')
+    if row.get('absence') or row.get('deleted'):
+        raise ShiftbaseIntegrationError('Abwesenheit bzw. gelöschter Eintrag: erst klären.')
+    try:
+        sick_days = set(_expand_day_ranges(source.get('sick_ranges','')))
+    except ValueError as exc:
+        raise ShiftbaseIntegrationError('Cloud-Krankheitsdaten unklar: kein PUT.') from exc
+    if int(str(row['day'])[-2:]) in sick_days:
+        raise ShiftbaseIntegrationError('Der Tag ist in der Cloud als Krankheitstag erfasst; kein PUT.')
+    if source.get('vacation_count') not in ('','0') and form.get('vacation_ack')!='yes':
+        raise ShiftbaseIntegrationError('Cloud-Urlaubstage sind nicht datumsgenau hinterlegt. Bitte bestätigen, dass dieser Tag kein Urlaubstag ist.')
+    if str(row.get('status','')).lower() in {'approved','bestätigt','genehmigt'} and form.get('approved_ack')!='yes':
+        raise ShiftbaseIntegrationError('Genehmigten Eintrag ausdrücklich bestätigen.')
+    start=str(form.get('start','')).strip();end=str(form.get('end','')).strip();pause=str(form.get('pause','')).strip()
+    if start==orig['start'] and end==orig['end'] and pause==orig['break_minutes']:
+        raise ShiftbaseIntegrationError('Keine Änderung eingegeben.')
+    try:
+        net,span,pm=_sb_review_minutes(start,end,pause)
+    except ValueError as exc:
+        raise ShiftbaseIntegrationError('Uhrzeit oder Pause ungültig: '+str(exc)) from exc
+    if start<'06:00' or net>600 or (net>540 and pm<45) or (net>360 and pm<30):
+        raise ShiftbaseIntegrationError('Zeiten liegen außerhalb der eingestellten Prüfgrenzen.')
+    if str(row.get('status','')).lower() in {'declined','abgelehnt','rejected'}:
+        raise ShiftbaseIntegrationError('Abgelehnten Eintrag zunächst klären.')
+    ts=_sb_ts_detail(eid)
+    _sb_assert_timesheet_owner(ts,source['uid'],eid)
+    if any(_sb_get(ts,k) is not None for k in ('clocked_in','clocked_out')):
+        raise ShiftbaseIntegrationError('Gestempelte Schicht: Stempelkorrektur erforderlich.')
+    live=_sb_live_snapshot(ts)
+    if live!={k:str(v) for k,v in orig.items() if k in ('day','start','end','break_minutes')}:
+        raise ShiftbaseIntegrationError('Originaleintrag wurde bereits geändert; bitte neu laden.')
+    paid_pause=_sb_break_as_minutes(_sb_get(ts,'paid_break'))
+    if paid_pause is None or paid_pause != 0:
+        raise ShiftbaseIntegrationError('Bezahlte Pause unklar oder vorhanden: muss zuerst gesondert geprüft werden.')
+    after={'day':orig['day'],'start':start,'end':end,'break_minutes':str(pm),'hours':_sb_dayview_hm(Decimal(net)/Decimal(60))}
+    _sb_rest_check_before_write(source,eid,after)
+    payload=_sb_update_payload(ts,eid,after,expected_uid=source['uid'],
+                               monthly_entry=source['raw_timesheets'].get(eid))
+    write_id=secrets.token_hex(16)
+    with db_conn() as conn:
+        _sb_put_audit_table(conn)
+        conn.execute('INSERT INTO shiftbase_verified_writes(id,driver_id,shiftbase_user_id,year,month,timesheet_id,before_json,after_json,proof_ref,reason,written_at,result) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+          (write_id,did,source['uid'],year,month,eid,json.dumps(orig,ensure_ascii=False),json.dumps(after,ensure_ascii=False),evidence,evidence,now_iso(),'VORBEREITET – noch nicht übertragen'))
+        conn.commit()
+    try:
+        status=_sb_put_timesheet(eid,payload)
+        after_detail=_sb_ts_detail(eid)
+        _sb_assert_timesheet_owner(after_detail,source['uid'],eid)
+        checked=_sb_live_snapshot(after_detail)
+        if checked!={k:str(v) for k,v in after.items() if k in ('day','start','end','break_minutes')}:
+            raise ShiftbaseIntegrationError('PUT gesendet, aber Rücklesen bestätigt die Änderungen nicht. Bitte direkt in Shiftbase prüfen.')
+    except ShiftbaseIntegrationError:
+        with db_conn() as conn:
+            conn.execute('UPDATE shiftbase_verified_writes SET result=? WHERE id=?',('Unbestätigt – vor erneutem Senden in Shiftbase prüfen',write_id))
+            conn.commit()
+        raise
+    with db_conn() as conn:
+        conn.execute('UPDATE shiftbase_verified_writes SET result=? WHERE id=?',('PUT '+str(status)+' – GET bestätigt',write_id))
+        conn.execute('DELETE FROM shiftbase_review_drafts WHERE driver_id=? AND year=? AND month=? AND timesheet_id=?',(did,year,month,eid))
+        conn.commit()
+
+    # Reflect the verified GET outcome in this request's user/month-only source.
+    # An unconfirmed/failed PUT never reaches this point.
+    row.update({'begin': after['start'], 'end': after['end'],
+                'break': str(pm) + ' Min.', 'hours': Decimal(net) / Decimal(60)})
+    return orig['day']
+
+
+def _sb_verified_post_scope(form):
+    expected_csrf = str(session.get('shiftbase_csrf',''))
+    supplied_csrf = str(form.get('csrf_token',''))
     if not expected_csrf or not supplied_csrf or not hmac.compare_digest(supplied_csrf,expected_csrf):
         abort(403,'Sitzung abgelaufen; bitte Seite neu laden.')
     try:
-        did=int(request.form.get('driver_id',''))
-        year=int(request.form.get('year',''))
-        month=int(request.form.get('month',''))
-    except (TypeError,ValueError): abort(400)
-    if did<=0 or not (2020<=year<=2100) or not (1<=month<=12):abort(400)
-    eid=str(request.form.get('timesheet_id','')).strip()
-    if not re.fullmatch(r'\d{1,20}',eid):abort(400,'Ungültige Schichtkennung.')
-    url_return=lambda:redirect(url_for('admin_shiftbase_pruefvorschau',year=year,month=month,driver_id=did))
+        did = int(form.get('driver_id',''))
+        year = int(form.get('year',''))
+        month = int(form.get('month',''))
+    except (ValueError,TypeError):
+        abort(400,'Ungültige Mitarbeiter- oder Monatsdaten.')
+    if did <= 0 or not 2020 <= year <= 2100 or not 1 <= month <= 12:
+        abort(400,'Ungültige Mitarbeiter- oder Monatsdaten.')
+    return did,year,month
+
+
+@app.post('/admin/shiftbase/direkt-senden')
+@admin_login_required
+def admin_shiftbase_direct_put():
+    did,year,month = _sb_verified_post_scope(request.form)
+    eid = str(request.form.get('timesheet_id','')).strip()
+    if not re.fullmatch(r'\d{1,20}',eid):
+        abort(400,'Ungültige Timesheet-ID.')
     try:
-        if os.environ.get('SHIFTBASE_VERIFIED_WRITE_ENABLED','').strip()!='1':
-            raise ShiftbaseIntegrationError('Der Schreibzugriff ist in Render noch nicht aktiviert.')
-        source=_sb_review_source(did,year,month)
-        if (source['uid']!=os.environ.get('SHIFTBASE_VERIFIED_WRITE_USER_ID','').strip()
-                or source['uid']!='1338173' or normalize(source['name'])!='kaan aysel'):
-            raise ShiftbaseIntegrationError('Schreiben ist in der Testphase nur für Kaan Aysel (1338173) freigegeben.')
-        if request.form.get('certified')!='yes':
-            raise ShiftbaseIntegrationError('Bestätigung des Originalnachweises fehlt.')
-        evidence=str(request.form.get('evidence','')).strip()[:400]
-        if len(evidence)<15:
-            raise ShiftbaseIntegrationError('Belegquelle und Korrekturgrund fehlen.')
-        row=next((r for r in source['rows'] if str(r['entry_id'])==eid),None)
-        if row is None: raise ShiftbaseIntegrationError('Schicht nicht gefunden.')
-        orig=_sb_review_row_obj(row)
-        expected_sig=_sb_direct_baseline_signature(did,source['uid'],year,month,eid,orig)
-        if not hmac.compare_digest(str(request.form.get('original_sig','')),expected_sig):
-            raise ShiftbaseIntegrationError('Die Schicht wurde inzwischen geändert. Seite neu laden.')
-        if row.get('absence') or row.get('deleted'):
-            raise ShiftbaseIntegrationError('Abwesenheit bzw. gelöschter Eintrag: erst klären.')
-        try:
-            sick_days = set(_expand_day_ranges(source.get('sick_ranges','')))
-        except ValueError as exc:
-            raise ShiftbaseIntegrationError('Cloud-Krankheitsdaten unklar: kein PUT.') from exc
-        if int(str(row['day'])[-2:]) in sick_days:
-            raise ShiftbaseIntegrationError('Der Tag ist in der Cloud als Krankheitstag erfasst; kein PUT.')
-        if source.get('vacation_count') not in ('','0') and request.form.get('vacation_ack')!='yes':
-            raise ShiftbaseIntegrationError('Cloud-Urlaubstage sind nicht datumsgenau hinterlegt. Bitte bestätigen, dass dieser Tag kein Urlaubstag ist.')
-        if str(row.get('status','')).lower() in {'approved','bestätigt','genehmigt'} and request.form.get('approved_ack')!='yes':
-            raise ShiftbaseIntegrationError('Genehmigten Eintrag ausdrücklich bestätigen.')
-        start=str(request.form.get('start','')).strip();end=str(request.form.get('end','')).strip();pause=str(request.form.get('pause','')).strip()
-        if start==orig['start'] and end==orig['end'] and pause==orig['break_minutes']:
-            raise ShiftbaseIntegrationError('Keine Änderung eingegeben.')
-        try:
-            net,span,pm=_sb_review_minutes(start,end,pause)
-        except ValueError as exc:
-            raise ShiftbaseIntegrationError('Uhrzeit oder Pause ungültig: '+str(exc)) from exc
-        if start<'06:00' or net>600 or (net>540 and pm<45) or (net>360 and pm<30):
-            raise ShiftbaseIntegrationError('Zeiten liegen außerhalb der eingestellten Prüfgrenzen.')
-        if str(row.get('status','')).lower() in {'declined','abgelehnt','rejected'}:
-            raise ShiftbaseIntegrationError('Abgelehnten Eintrag zunächst klären.')
-        ts=_sb_ts_detail(eid)
-        _sb_assert_timesheet_owner(ts,source['uid'],eid)
-        if any(_sb_get(ts,k) is not None for k in ('clocked_in','clocked_out')):
-            raise ShiftbaseIntegrationError('Gestempelte Schicht: Stempelkorrektur erforderlich.')
-        live=_sb_live_snapshot(ts)
-        if live!={k:str(v) for k,v in orig.items() if k in ('day','start','end','break_minutes')}:
-            raise ShiftbaseIntegrationError('Originaleintrag wurde bereits geändert; bitte neu laden.')
-        paid_pause=_sb_break_as_minutes(_sb_get(ts,'paid_break'))
-        if paid_pause is None or paid_pause != 0:
-            raise ShiftbaseIntegrationError('Bezahlte Pause unklar oder vorhanden: muss zuerst gesondert geprüft werden.')
-        after={'day':orig['day'],'start':start,'end':end,'break_minutes':str(pm),'hours':_sb_dayview_hm(Decimal(net)/Decimal(60))}
-        _sb_rest_check_before_write(source,eid,after)
-        payload=_sb_update_payload(ts,eid,after,expected_uid=source['uid'],
-                                   monthly_entry=source['raw_timesheets'].get(eid))
-        write_id=secrets.token_hex(16)
-        with db_conn() as conn:
-            _sb_put_audit_table(conn)
-            conn.execute('INSERT INTO shiftbase_verified_writes(id,driver_id,shiftbase_user_id,year,month,timesheet_id,before_json,after_json,proof_ref,reason,written_at,result) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-              (write_id,did,source['uid'],year,month,eid,json.dumps(orig,ensure_ascii=False),json.dumps(after,ensure_ascii=False),evidence,evidence,now_iso(),'VORBEREITET – noch nicht übertragen'))
-            conn.commit()
-        try:
-            status=_sb_put_timesheet(eid,payload)
-            after_detail=_sb_ts_detail(eid)
-            _sb_assert_timesheet_owner(after_detail,source['uid'],eid)
-            checked=_sb_live_snapshot(after_detail)
-            if checked!={k:str(v) for k,v in after.items() if k in ('day','start','end','break_minutes')}:
-                raise ShiftbaseIntegrationError('PUT gesendet, aber Rücklesen bestätigt die Änderungen nicht. Bitte direkt in Shiftbase prüfen.')
-        except ShiftbaseIntegrationError:
-            with db_conn() as conn:
-                conn.execute('UPDATE shiftbase_verified_writes SET result=? WHERE id=?',('Unbestätigt – vor erneutem Senden in Shiftbase prüfen',write_id))
-                conn.commit()
-            raise
-        with db_conn() as conn:
-            conn.execute('UPDATE shiftbase_verified_writes SET result=? WHERE id=?',('PUT '+str(status)+' – GET bestätigt',write_id))
-            conn.execute('DELETE FROM shiftbase_review_drafts WHERE driver_id=? AND year=? AND month=? AND timesheet_id=?',(did,year,month,eid))
-            conn.commit()
-        session['shiftbase_direct_result']='Erfolg: '+str(orig['day'])+' wurde in Shiftbase geändert und durch erneutes Auslesen bestätigt.'
+        source = _sb_review_source(did,year,month)
+        day = _sb_verified_write_one(request.form,source,did,year,month,eid)
+        session['shiftbase_direct_result'] = ('Erfolg: '+str(day)+
+             ' in Shiftbase korrigiert und durch erneuten GET bestätigt.')
     except ShiftbaseIntegrationError as exc:
-        session['shiftbase_direct_result']='Fehler: '+str(exc)
-    return url_return()
+        session['shiftbase_direct_result'] = 'Fehler: '+str(exc)
+    return redirect(url_for('admin_shiftbase_pruefvorschau',year=year,month=month,driver_id=did))
+
+
+@app.post('/admin/shiftbase/gepruefte-sammelkorrektur')
+@admin_login_required
+def admin_shiftbase_verified_batch():
+    """One click after explicit per-row verification. Never transmit suggestions.
+
+    Shiftbase has no atomic multi-timesheet PUT: on the first unclear result,
+    stop. Already confirmed records remain changed and are reported accurately.
+    """
+    did,year,month = _sb_verified_post_scope(request.form)
+    selected = [str(value).strip() for value in request.form.getlist('selected_id')]
+    if not selected or len(selected)>40 or len(set(selected))!=len(selected) or any(
+            not re.fullmatch(r'\d{1,20}',eid) for eid in selected):
+        abort(400,'Bitte 1 bis 40 einzeln geprüfte Schichten auswählen.')
+    sent=[]
+    try:
+        source=_sb_review_source(did,year,month)
+        _sb_write_access_checked(source)
+        allowed_ids={str(row['entry_id']) for row in source['rows']}
+        if not set(selected)<=allowed_ids:
+            raise ShiftbaseIntegrationError('Auswahl enthält eine fremde oder unbekannte Schicht.')
+        # Check all user attestations and source references BEFORE any HTTP PUT.
+        # This prevents accidental partial sending of an obviously incomplete form.
+        submissions=[]
+        for eid in selected:
+            values={name:str(request.form.get(name+'_'+eid,'')).strip() for name in (
+                'original_sig','certified','evidence','start','end','pause',
+                'vacation_ack','approved_ack')}
+            if values['certified']!='yes' or len(values['evidence'])<15:
+                raise ShiftbaseIntegrationError('Vor dem Senden für jeden Tag Talex-Beleg bestätigen und dokumentieren.')
+            row=next(row for row in source['rows'] if str(row['entry_id'])==eid)
+            original=_sb_review_row_obj(row)
+            if not hmac.compare_digest(values['original_sig'],
+                    _sb_direct_baseline_signature(did,source['uid'],year,month,eid,original)):
+                raise ShiftbaseIntegrationError('Schicht '+str(row['day'])+' inzwischen verändert – bitte neu laden.')
+            if ((values['start'],values['end'],values['pause']) ==
+                    (original['start'],original['end'],original['break_minutes'])):
+                raise ShiftbaseIntegrationError('Keine geänderten Istzeiten für '+str(row['day'])+'.')
+            # Reuse the existing full validation, live GET and audit for each PUT.
+            submissions.append((eid,values))
+        for eid,form in submissions:
+            day=_sb_verified_write_one(form,source,did,year,month,eid)
+            sent.append(str(day))
+        session['shiftbase_direct_result']=(
+            'Erfolg: '+str(len(sent))+' belegte Korrektur(en) einzeln geschrieben '
+            'und jeweils durch erneuten GET bestätigt.')
+    except ShiftbaseIntegrationError as exc:
+        session['shiftbase_direct_result']=(
+            'Fehler nach '+str(len(sent))+' bestätigten Korrektur(en): '+str(exc)+
+            ' Bereits bestätigte Tage: '+(', '.join(sent) if sent else 'keine')+
+            '. Rest NICHT übertragen. Vor erneutem Versuch Shiftbase prüfen.')
+    return redirect(url_for('admin_shiftbase_pruefvorschau',year=year,month=month,driver_id=did))
+
 # ---------------- Ende einfache Direktkorrektur ----------------
+
+
+@app.get('/admin/shiftbase/vorschlaege-pruefliste.csv')
+@admin_login_required
+def admin_shiftbase_vorschlaege_pruefliste_csv():
+    """Export the hypothetical comparison for reviewing directly in Shiftbase.
+
+    No POST or PUT, no persistence, and a clear label that all proposed times
+    are UNVERIFIED until checked against an original attendance record.
+    """
+    import csv as _csv
+    import io as _io
+    year,month=_sb_params()
+    raw=str(request.args.get('driver_id','')).strip()
+    if not re.fullmatch(r'\d{1,12}',raw):
+        abort(400,'Ungültige Fahrer-ID.')
+    did=int(raw)
+    try:
+        source=_sb_review_source(did,year,month)
+    except ShiftbaseIntegrationError as exc:
+        abort(422,'Shiftbase-Daten können nicht gelesen werden: '+str(exc))
+    source['preview_vacation_days']=str(request.args.get('urlaubs_tage','')).strip()[:100]
+    plan=_sb_hypothetical_preview(source)
+    buf=_io.StringIO(newline='')
+    writer=_csv.writer(buf,delimiter=';')
+    writer.writerow(['UNVERBINDLICHE PRÜFLISTE – KEIN ARBEITSZEITNACHWEIS – KEIN TIMESHEET-IMPORT'])
+    writer.writerow(['Fahrer',_sb_csv_guard(source['name']),'Shiftbase-Benutzer-ID',source['uid']])
+    writer.writerow(['Monat',f'{year}-{month:02d}'])
+    writer.writerow(['Tatsächliche Shiftbase-Monatsstunden',_sb_dayview_hm(source['actual'])])
+    writer.writerow(['Cloud-Abrechnungsstunden',_sb_dayview_hm(source['payroll']) if source['payroll'] is not None else 'nicht vorhanden'])
+    writer.writerow(['Nicht verteilte Rechendifferenz',_sb_signed_hm(plan['unallocated'])])
+    writer.writerow(['Hinweis','Rechnerische Zeiten NICHT ohne Talex-/Originalbeleg in Shiftbase übertragen.'])
+    writer.writerow([])
+    writer.writerow(['Datum','Timesheet-ID','Bisher Beginn','Bisher Ende','Bisher Pause (Min)',
+                     'Hypothetisch Beginn','Hypothetisch Ende','Hypothetisch Pause (Min)',
+                     'Hypothetische Differenz','Status','Talex-Beleg/Notiz (manuell ausfüllen)'])
+    for row in source['rows']:
+        eid=str(row['entry_id'])
+        orig=_sb_review_row_obj(row)
+        proposal=plan['days'].get(eid)
+        status='UNGEPRÜFTER RECHENVORSCHLAG' if proposal else 'Unverändert / nicht geeignet'
+        writer.writerow([_sb_csv_guard(x) for x in (
+            orig['day'],eid,orig['start'],orig['end'],orig['break_minutes'],
+            proposal['new_start'] if proposal else '',
+            proposal['new_end'] if proposal else '',
+            proposal['new_pause'] if proposal else '',
+            _sb_signed_hm(Decimal(proposal['delta_minutes'])/Decimal(60)) if proposal else '',
+            status,'')])
+    handle=_io.BytesIO(('\ufeff'+buf.getvalue()).encode('utf-8'))
+    handle.seek(0)
+    response=send_file(handle,mimetype='text/csv; charset=utf-8',as_attachment=True,
+                      download_name=f'shiftbase_unverbindliche_pruefliste_{did}_{year}_{month:02d}.csv')
+    response.headers['Cache-Control']='private, no-store, max-age=0'
+    response.headers['X-Robots-Tag']='noindex, nofollow'
+    return response
 
 
 @app.get('/admin/shiftbase/pruefvorschau.csv')
