@@ -3520,8 +3520,26 @@ def _shiftbase_read_json(kind, params=None):
     auth_header = os.environ.get('SHIFTBASE_AUTH_HEADER', 'Authorization').strip()
     if auth_header.lower() not in {'authorization','x-api-key','x-auth-token'}:
         raise ShiftbaseIntegrationError('Nicht unterstützter Authentifizierungsheader.')
-    auth_prefix = os.environ.get('SHIFTBASE_AUTH_PREFIX', 'Bearer ').replace('\\n','')
-    headers={'Accept':'application/json', 'User-Agent':'PlusMinusCloud-ShiftbaseAbgleich/1.0', auth_header: auth_prefix + cfg['token']}
+    # Shiftbase expects "Authorization: API <token>". Build the space ourselves
+    # because UI forms / environment stores may strip trailing spaces from prefixes.
+    # Only this account's real Shiftbase App Token can authenticate.
+    auth_prefix = os.environ.get('SHIFTBASE_AUTH_PREFIX', 'API').strip()
+    raw_token = cfg['token'].strip()
+    if auth_header.lower() == 'authorization':
+        if auth_prefix.upper() == 'API':
+            if raw_token.lower().startswith('api '):
+                raw_token = raw_token[4:].strip()
+            auth_value = 'API ' + raw_token
+        elif auth_prefix.lower() == 'bearer':
+            if raw_token.lower().startswith('bearer '):
+                raw_token = raw_token[7:].strip()
+            auth_value = 'Bearer ' + raw_token
+        else:
+            raise ShiftbaseIntegrationError('Ungültiges SHIFTBASE_AUTH_PREFIX. Für Shiftbase ist API vorgesehen.')
+    else:
+        # X-API-Key and X-Auth-Token headers take only the raw token.
+        auth_value = raw_token
+    headers={'Accept':'application/json', 'User-Agent':'PlusMinusCloud-ShiftbaseAbgleich/1.1', auth_header: auth_value}
     req=Request(url, headers=headers, method='GET')
     try:
         with build_opener(_ShiftbaseNoRedirect()).open(req, timeout=15) as r:
