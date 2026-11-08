@@ -41,9 +41,9 @@ ATTACHMENTS_DIR = DATA_ROOT / "attachments"
 EXPORT_DIR = DATA_ROOT / "exports"
 BACKUP_DIR = DATA_ROOT / "backups"
 DB_FILE = DATA_ROOT / "portal.sqlite3"
-SECRET_KEY = os.environ.get("PORTAL_SECRET_KEY", "dev-secret-change-me")
-ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "0341")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "0341")
+SECRET_KEY = os.environ.get("PORTAL_SECRET_KEY", "") or os.urandom(48).hex()
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024
 
 app = Flask(__name__)
@@ -2120,6 +2120,7 @@ def base_page(title: str, body: str, active: str = "dashboard") -> str:
     nav = [
         ("dashboard","Dashboard",url_for("admin_dashboard")), ("drivers","Fahrer",url_for("admin_drivers")),
         ("payroll_hours","Stunden für Lohnabrechnung",url_for("admin_months")),
+        ("shiftbase", "Shiftbase-Abgleich", url_for("admin_shiftbase_abgleich")),
         ("exports","Export/Backup",url_for("admin_exports")), ("cleanup","Aufräumen",url_for("admin_cleanup")), ("portal","Fahrerportal",url_for("driver_login")),
     ]
     flashes = "".join(f'<div class="flash {"ok" if c=="ok" else "err"}">{m}</div>' for c,m in get_flashed_messages(with_categories=True))
@@ -3458,6 +3459,434 @@ def api_upload_pdf():
             conn.execute("INSERT INTO documents(driver_id,year,month,filename,original_filename,relative_path,uploaded_at) VALUES(?,?,?,?,?,?,?)", (d["id"],year,month,safe_name,upload.filename,str(rel),ts))
         conn.commit()
     return jsonify({"ok":True,"stored_as":str(rel)})
+
+
+# =================== Shiftbase-Lohnabgleich: NUR LESEND ===================
+# API-Zugang wird ausschliesslich per Umgebungsvariablen konfiguriert.
+# Diese Erweiterung schreibt niemals in Shiftbase-Zeiterfassungen oder Pausen.
+# Herstellerdokumentation: https://developer.shiftbase.com/
+
+from collections import defaultdict
+from datetime import date as shiftbase_date, timedelta as shiftbase_timedelta
+from decimal import Decimal, InvalidOperation
+from html import escape as shiftbase_escape
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+import hmac
+import secrets
+
+class ShiftbaseIntegrationError(Exception):
+    pass
+
+class _ShiftbaseNoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ShiftbaseIntegrationError("Unerwartete Weiterleitung der Shiftbase-API abgebrochen.")
+
+
+def _shiftbase_config():
+    mock_dir = os.environ.get('SHIFTBASE_MOCK_DIR', '').strip()
+    base = os.environ.get('SHIFTBASE_API_BASE_URL', '').strip().rstrip('/')
+    token = os.environ.get('SHIFTBASE_API_TOKEN', '').strip()
+    if mock_dir:
+        return {'mock_dir': mock_dir, 'base': '', 'token': ''}
+    if not token or token.startswith('DEMO_'):
+        raise ShiftbaseIntegrationError('SHIFTBASE_API_TOKEN fehlt oder ist ein Demo-Schlüssel. Bitte nur bei Render als Environment Variable setzen.')
+    if not base or urlsplit(base).scheme != 'https' or not urlsplit(base).hostname:
+        raise ShiftbaseIntegrationError('SHIFTBASE_API_BASE_URL fehlt oder ist keine gültige HTTPS-Adresse. Den API-Basis-URL aus Shiftbase-Dokumentation übernehmen.')
+    if urlsplit(base).username or urlsplit(base).password or urlsplit(base).query or urlsplit(base).fragment:
+        raise ShiftbaseIntegrationError('SHIFTBASE_API_BASE_URL enthält unerlaubte Bestandteile.')
+    return {'mock_dir': '', 'base': base, 'token': token}
+
+
+def _shiftbase_read_json(kind, params=None):
+    cfg = _shiftbase_config()
+    if cfg['mock_dir']:
+        allowed = {'users':'users.json', 'timesheets':'timesheets.json', 'absentees':'absentees.json'}
+        f = Path(cfg['mock_dir']) / allowed[kind]
+        if not f.is_file():
+            raise ShiftbaseIntegrationError(f'Testdatei {f.name} fehlt.')
+        try:
+            return json.loads(f.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as exc:
+            raise ShiftbaseIntegrationError(f'Testdatei {f.name} kann nicht gelesen werden.') from exc
+    defaults = {'users':'/users', 'timesheets':'/timesheets', 'absentees':'/absentees'}
+    path = os.environ.get('SHIFTBASE_'+kind.upper()+'_PATH', defaults[kind]).strip()
+    if not path.startswith('/') or path.startswith('//') or '?' in path or '#' in path:
+        raise ShiftbaseIntegrationError(f'API-Pfad für {kind} ungültig.')
+    url = cfg['base'] + path
+    if params:
+        url += '?' + urlencode(params)
+    auth_header = os.environ.get('SHIFTBASE_AUTH_HEADER', 'Authorization').strip()
+    if auth_header.lower() not in {'authorization','x-api-key','x-auth-token'}:
+        raise ShiftbaseIntegrationError('Nicht unterstützter Authentifizierungsheader.')
+    auth_prefix = os.environ.get('SHIFTBASE_AUTH_PREFIX', 'Bearer ').replace('\\n','')
+    headers={'Accept':'application/json', 'User-Agent':'PlusMinusCloud-ShiftbaseAbgleich/1.0', auth_header: auth_prefix + cfg['token']}
+    req=Request(url, headers=headers, method='GET')
+    try:
+        with build_opener(_ShiftbaseNoRedirect()).open(req, timeout=15) as r:
+            raw=r.read(5_000_001)
+        if len(raw)>5_000_000:
+            raise ShiftbaseIntegrationError('Antwort der Shiftbase-API zu groß.')
+        return json.loads(raw.decode('utf-8'))
+    except HTTPError as exc:
+        # Antworttext nicht weitergeben, da personenbezogene Daten enthalten sein koennen.
+        raise ShiftbaseIntegrationError(f'Shiftbase-API HTTP {exc.code} bei {kind}. API-Adresse, Token und Berechtigung prüfen.') from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise ShiftbaseIntegrationError(f'Keine Verbindung zur Shiftbase-API ({kind}). Netzwerk/URL prüfen.') from exc
+    except (UnicodeError, ValueError) as exc:
+        raise ShiftbaseIntegrationError(f'Shiftbase antwortete bei {kind} nicht mit gültigem JSON.') from exc
+
+
+def _shiftbase_items(response, kind):
+    if isinstance(response, list):
+        return response, None
+    if not isinstance(response, dict):
+        raise ShiftbaseIntegrationError(f'Unerwartetes JSON-Format für {kind}: JSON-Objekt/Liste erwartet.')
+    for key in (kind, 'data', 'results', 'items', 'records'):
+        v=response.get(key)
+        if isinstance(v, list):
+            return v, response.get('next_offset')
+        if isinstance(v, dict):
+            for inner in (kind, 'items', 'results', 'data'):
+                if isinstance(v.get(inner), list):
+                    return v[inner], response.get('next_offset')
+    raise ShiftbaseIntegrationError(f'Kein bekannter Listenschlüssel für {kind}. API-Antwortstruktur prüfen.')
+
+
+def _shiftbase_get_all(kind, params=None):
+    result=[]
+    off=0
+    for _ in range(30):
+        q=dict(params or {})
+        q.update({'limit':200, 'offset':off})
+        response=_shiftbase_read_json(kind, q)
+        items,next_off=_shiftbase_items(response, kind)
+        if not all(isinstance(x,dict) for x in items):
+            raise ShiftbaseIntegrationError(f'Unerwartete Datensätze bei {kind}.')
+        result.extend(items)
+        if len(result)>5000:
+            raise ShiftbaseIntegrationError('Mehr als 5000 Shiftbase-Einträge. Bitte Zeitraum verkleinern.')
+        if os.environ.get('SHIFTBASE_MOCK_DIR','').strip() or not items:
+            return result
+        total=response.get('total') if isinstance(response,dict) else None
+        if next_off is not None:
+            new_off=int(next_off)
+            if new_off<=off:
+                raise ShiftbaseIntegrationError('Ungültige Seitenangabe in API-Antwort.')
+            off=new_off
+        elif isinstance(total,(int,float)) and len(result)<int(total):
+            off += len(items)
+        else:
+            return result
+    raise ShiftbaseIntegrationError('Zu viele API-Seiten. Bitte Support kontaktieren.')
+
+
+def _sb_id(row, *names):
+    for name in names:
+        value=row.get(name)
+        if isinstance(value,dict):
+            value=value.get('id')
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _sb_value(row, *names):
+    for name in names:
+        v=row.get(name)
+        if v is not None and v!='':
+            return v
+    return None
+
+
+def _sb_day(value):
+    if value is None:
+        return None
+    try:
+        return shiftbase_date.fromisoformat(str(value)[:10]).isoformat()
+    except ValueError:
+        return None
+
+
+def _sb_number(value):
+    try:
+        x=Decimal(str(value).replace(',','.'))
+        if not x.is_finite(): return None
+        return x
+    except (InvalidOperation,TypeError):
+        return None
+
+
+def _sb_hours(row):
+    # Ohne eindeutig deklarierte Einheit nicht raten: 'total': 480 koennte
+    # Minuten, Sekunden oder Dezimalstunden bedeuten.
+    for key in ('worked_hours','total_worked_hours','hours_worked','duration_hours','net_hours'):
+        if key in row and row[key] is not None:
+            value=row[key]
+            if isinstance(value,str) and ':' in value:
+                parts=value.split(':')
+                if len(parts)==2 and all(p.isdigit() for p in parts) and int(parts[1])<60:
+                    return Decimal(int(parts[0])) + Decimal(int(parts[1]))/60
+            return _sb_number(value)
+    for key,divisor in (('worked_minutes',60),('total_worked_minutes',60),('total_minutes',60),('duration_minutes',60),('worked_seconds',3600)):
+        if key in row and row[key] is not None:
+            n=_sb_number(row[key]); return n/Decimal(divisor) if n is not None else None
+    total=row.get('total')
+    if isinstance(total,str) and re.fullmatch(r'\d{1,3}:\d{2}',total):
+        h,m=map(int,total.split(':'))
+        if m<60: return Decimal(h)+Decimal(m)/60
+    return None
+
+
+def _sb_absence_name(row):
+    value=_sb_value(row,'absence_type','absentee_type','type','type_name','reason')
+    if isinstance(value,dict):
+        return str(_sb_value(value,'name','label','title') or 'Art unbekannt')
+    return str(value or 'Art unbekannt')
+
+
+def _sb_user_display(row):
+    name=_sb_value(row,'name','full_name','display_name')
+    if name: return str(name)
+    return ' '.join(filter(None,[str(row.get('first_name') or ''),str(row.get('last_name') or '')])).strip() or 'Ohne Name'
+
+
+def _sb_month_window(year, month):
+    start=shiftbase_date(year,month,1)
+    end=shiftbase_date(year+1,1,1)-shiftbase_timedelta(days=1) if month==12 else shiftbase_date(year,month+1,1)-shiftbase_timedelta(days=1)
+    return start.isoformat(),end.isoformat()
+
+
+def _sb_ensure_mapping_table(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS shiftbase_driver_map
+        (driver_id INTEGER PRIMARY KEY, shiftbase_user_id TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL)""")
+
+
+def _sb_mapping(conn):
+    _sb_ensure_mapping_table(conn)
+    return {int(r['driver_id']):str(r['shiftbase_user_id']) for r in conn.execute('SELECT driver_id,shiftbase_user_id FROM shiftbase_driver_map').fetchall()}
+
+
+def _sb_local_month(conn,year,month):
+    return [dict(r) for r in conn.execute("""
+       SELECT d.id AS driver_id, d.external_driver_id,d.name,d.employment_type,
+              m.payroll_hours,m.worked_hours,m.vacation_days,m.sick_days,
+              m.previous_balance,m.new_balance
+       FROM drivers d LEFT JOIN monthly_data m
+       ON m.driver_id=d.id AND m.year=? AND m.month=?
+       WHERE d.is_active=1 AND COALESCE(d.is_disposition,0)=0
+       ORDER BY COALESCE(NULLIF(d.display_order,0),d.id),d.name COLLATE NOCASE""",(year,month)).fetchall()]
+
+
+def _sb_fetch_snapshot(year,month):
+    start,end=_sb_month_window(year,month)
+    users=_shiftbase_get_all('users')
+    # These parameter names are from the publicly described Shiftbase resource model;
+    # adapt in env/API adapter if the account's official schema differs.
+    times=_shiftbase_get_all('timesheets',{'min_date':start,'max_date':end})
+    absences=_shiftbase_get_all('absentees',{'min_date':start,'max_date':end})
+    return users,times,absences
+
+
+def _sb_report(conn,year,month,users,times,absences):
+    local=_sb_local_month(conn,year,month)
+    mappings=_sb_mapping(conn)
+    known_users={}
+    for row in users:
+        uid=_sb_id(row,'id','user_id','employee_id')
+        if uid:known_users[uid]=row
+    entries=defaultdict(list)
+    ignored=[]
+    for entry in times:
+        uid=_sb_id(entry,'user_id','user','employee_id','employee')
+        day=_sb_day(_sb_value(entry,'date','work_date','start_date','start_time','start','clock_in'))
+        hours=_sb_hours(entry)
+        if not uid or not day:
+            ignored.append('Zeiteintrag ohne eindeutige Benutzer-ID/Datum')
+            continue
+        if (int(day[:4]),int(day[5:7]))!=(year,month):
+            continue
+        entries[uid].append({'date':day,'hours':hours,'entry_id':_sb_id(entry,'id','timesheet_id')})
+    absence_by_user=defaultdict(list)
+    start,end=_sb_month_window(year,month)
+    for a in absences:
+        uid=_sb_id(a,'user_id','user','employee_id','employee')
+        if not uid:
+            continue
+        astart=_sb_day(_sb_value(a,'start_date','min_date','start','date'))
+        aend=_sb_day(_sb_value(a,'end_date','max_date','end')) or astart
+        if astart and aend and astart<=end and aend>=start:
+            absence_by_user[uid].append({'von':max(astart,start),'bis':min(aend,end),'art':_sb_absence_name(a),'status':str(_sb_value(a,'status') or 'unbekannt')})
+    result=[]
+    for r in local:
+        uid=mappings.get(r['driver_id'])
+        selected=entries.get(uid,[]) if uid else []
+        complete=bool(uid and selected and all(x['hours'] is not None for x in selected))
+        tot=sum((x['hours'] for x in selected),Decimal(0)) if complete else None
+        payroll=Decimal(str(r['payroll_hours'])) if r['payroll_hours'] is not None else None
+        diff=payroll-tot if payroll is not None and tot is not None else None
+        notes=[]
+        if not uid: notes.append('Noch keine eindeutige Shiftbase-Zuordnung')
+        elif uid not in known_users: notes.append('Zugeordneter Shiftbase-Benutzer fehlt in der API-Antwort')
+        if not selected and uid: notes.append('Keine Zeiteinträge im ausgewählten Monat')
+        if selected and not complete: notes.append('Mindestens eine API-Zeitangabe besitzt eine unbekannte Einheit; Summe nicht berechnet')
+        if r['payroll_hours'] is None: notes.append('Kein Abrechnungswert in der Cloud für diesen Monat')
+        if r['vacation_days'] not in (None,'','0'): notes.append('Urlaub in Cloud nur als Tagesanzahl gespeichert, Shiftbase-Abwesenheitsdaten prüfen')
+        if r['sick_days'] not in (None,''): notes.append('Krankheit aus Cloud und Shiftbase getrennt abstimmen')
+        if diff is not None and abs(diff)>=Decimal('0.01'):
+            notes.append('Unterschied zum Lohnwert – Zeitkonto/Abwesenheit/Erfassungsfehler prüfen; Originalzeiten unverändert')
+        result.append({'driver_id':r['driver_id'],'external_driver_id':r['external_driver_id'],
+            'fahrer':r['name'],'shiftbase_user_id':uid,'shiftbase_name':_sb_user_display(known_users[uid]) if uid in known_users else None,
+            'payroll_hours':float(payroll) if payroll is not None else None,
+            'timesheet_hours':round(float(tot),2) if tot is not None else None,
+            'difference':round(float(diff),2) if diff is not None else None,
+            'worked_hours_cloud':r['worked_hours'],'vacation_days_cloud':r['vacation_days'] or '',
+            'sick_days_cloud':r['sick_days'] or '', 'absences':absence_by_user.get(uid,[]) if uid else [],
+            'timesheets':len(selected),'notes':notes,
+            'status':'ungeklärt' if diff is None else ('gleich' if abs(diff)<Decimal('0.01') else 'abweichung')})
+    return {'year':year,'month':month,'readonly':True,'results':result,
+            'api_users':len(users),'api_timesheets':len(times),'api_absences':len(absences),
+            'ignored_entries':len(ignored),'users':known_users}
+
+
+def _sb_report_for_month(year,month):
+    with db_conn() as conn:
+        _sb_ensure_mapping_table(conn)
+        users,times,absences=_sb_fetch_snapshot(year,month)
+        return _sb_report(conn,year,month,users,times,absences)
+
+
+def _sb_params():
+    tznow=datetime.now(ZoneInfo('Europe/Berlin')) if ZoneInfo else datetime.now()
+    try:
+        year=int(request.args.get('year',tznow.year)); month=int(request.args.get('month',tznow.month))
+        if year<2020 or year>2100 or month<1 or month>12:raise ValueError()
+        return year,month
+    except (ValueError,TypeError):
+        abort(400,'Ungültiges Jahr oder Monat')
+
+
+def _sb_csrf_token():
+    if not session.get('shiftbase_csrf'):
+        session['shiftbase_csrf']=secrets.token_urlsafe(24)
+    return session['shiftbase_csrf']
+
+
+@app.get('/admin/shiftbase')
+@admin_login_required
+def admin_shiftbase_abgleich():
+    year,month=_sb_params()
+    report=None; error=None
+    with db_conn() as conn:
+        local=_sb_local_month(conn,year,month)
+        mapped=_sb_mapping(conn)
+    sb_users={}
+    if request.args.get('laden')=='1':
+        try:
+            report=_sb_report_for_month(year,month)
+            sb_users=report.pop('users')
+        except ShiftbaseIntegrationError as exc:
+            error=str(exc)
+    h=[]
+    h.append('<div class="card"><h2>Shiftbase-Abgleich (nur lesen)</h2><p>Die echten Shiftbase-Zeiten bleiben unverändert. Die Spalte Abrechnung wird als gesonderter Lohnwert verglichen. Änderungen an Pausen oder Arbeitszeitnachweisen werden nicht automatisch vorgenommen.</p>')
+    h.append(f'<form method="get" class="actions" action="{url_for("admin_shiftbase_abgleich")}">')
+    h.append(f'<label>Jahr <input type="number" name="year" min="2020" max="2100" value="{year}" required style="width:110px"></label>')
+    h.append(f'<label>Monat <input type="number" name="month" min="1" max="12" value="{month}" required style="width:90px"></label>')
+    h.append('<input type="hidden" name="laden" value="1"><button class="primary" style="width:auto">Shiftbase auslesen & vergleichen</button></form>')
+    h.append('<p class="muted">Erforderliche Render-Variablen: SHIFTBASE_API_BASE_URL und SHIFTBASE_API_TOKEN. API-Pfad/Authentifizierung nach Shiftbase-Dokumentation prüfen. Für Demo lokal SHIFTBASE_MOCK_DIR setzen.</p>')
+    if error: h.append('<div class="flash err">'+shiftbase_escape(error)+'</div>')
+    h.append('</div>')
+    if report:
+        h.append('<div class="card"><h2>Monatsvergleich</h2>')
+        h.append(f'<p>Shiftbase: {report["api_users"]} Benutzer, {report["api_timesheets"]} Zeiteinträge, {report["api_absences"]} Abwesenheiten. Nicht zuordenbare Zeiteinträge: {report["ignored_entries"]}.</p>')
+        h.append('<div class="table-wrap"><table><thead><tr><th>Fahrer</th><th>Shiftbase-ID</th><th>Shiftbase Std.</th><th>Abrechnung Std.</th><th>Differenz</th><th>Abwesenheiten</th><th>Hinweise</th></tr></thead><tbody>')
+        for r in report['results']:
+            fmt=lambda v: '–' if v is None else f'{v:.2f}'.replace('.',',')
+            desc='; '.join(f'{a["art"]}: {a["von"]}–{a["bis"]} ({a["status"]})' for a in r['absences']) or '–'
+            h.append('<tr>'+''.join('<td>'+shiftbase_escape(str(v))+'</td>' for v in (r['fahrer'],r['shiftbase_user_id'] or 'nicht zugeordnet',fmt(r['timesheet_hours']),fmt(r['payroll_hours']),fmt(r['difference']),desc,'; '.join(r['notes']) or 'OK'))+'</tr>')
+        h.append('</tbody></table></div>')
+        h.append(f'<p><a class="btn small" href="{url_for("admin_shiftbase_abgleich_csv",year=year,month=month)}">CSV-Prüfbericht herunterladen</a></p></div>')
+    h.append('<div class="card"><h2>Fahrer einmalig zuordnen</h2><p>Die ID muss aus Shiftbase stammen. Es erfolgt bewusst keine automatische Zuordnung nur anhand ähnlicher Namen.</p>')
+    if sb_users:
+        options=''.join(f'<option value="{shiftbase_escape(uid,quote=True)}">{shiftbase_escape(_sb_user_display(x))} (ID {shiftbase_escape(uid)})</option>' for uid,x in sorted(sb_users.items(),key=lambda kv: _sb_user_display(kv[1]).lower()))
+        h.append('<div class="table-wrap"><table style="min-width:680px"><tr><th>Fahrer in Cloud</th><th>Shiftbase-Benutzer</th><th>Aktion</th></tr>')
+        for r in local:
+            selected=mapped.get(r['driver_id'])
+            select_options='<option value="">— keine Zuordnung —</option>'
+            for uid,u in sorted(sb_users.items(),key=lambda kv: _sb_user_display(kv[1]).lower()):
+                select_options+=f'<option value="{shiftbase_escape(uid,quote=True)}" {"selected" if uid==selected else ""}>{shiftbase_escape(_sb_user_display(u))} (ID {shiftbase_escape(uid)})</option>'
+            h.append('<tr><td>'+shiftbase_escape(r['name'])+'</td><td>'+f'<form id="map_{r["driver_id"]}" method="post" action="{url_for("admin_shiftbase_mapping")}"><input type="hidden" name="csrf_token" value="{_sb_csrf_token()}"><input type="hidden" name="driver_id" value="{r["driver_id"]}"><input type="hidden" name="year" value="{year}"><input type="hidden" name="month" value="{month}"><select name="shiftbase_user_id">{select_options}</select></form>'+'</td><td>'+f'<button form="map_{r["driver_id"]}" style="width:auto">Zuordnung speichern</button>'+'</td></tr>')
+        h.append('</table></div>')
+    else:
+        h.append('<p class="muted">Klicke zuerst oben auf „Shiftbase auslesen & vergleichen“. Danach werden die Benutzer zur eindeutigen Zuordnung angezeigt.</p>')
+    h.append('</div>')
+    return base_page('Shiftbase-Abgleich',''.join(h),'shiftbase')
+
+
+@app.post('/admin/shiftbase/mapping')
+@admin_login_required
+def admin_shiftbase_mapping():
+    csrf=session.get('shiftbase_csrf','')
+    if not csrf or not hmac.compare_digest(csrf,str(request.form.get('csrf_token',''))):
+        abort(403,'Sicherheitsprüfung fehlgeschlagen')
+    try:
+        did=int(request.form['driver_id'])
+        year=int(request.form['year']); month=int(request.form['month'])
+    except (KeyError,ValueError,TypeError):
+        abort(400)
+    uid=str(request.form.get('shiftbase_user_id','')).strip()
+    if uid and not re.fullmatch('[0-9]{1,18}',uid):
+        abort(400,'Ungültige Shiftbase-ID')
+    with db_conn() as conn:
+        _sb_ensure_mapping_table(conn)
+        if not conn.execute('SELECT id FROM drivers WHERE id=? AND is_active=1',(did,)).fetchone():
+            abort(400,'Fahrer nicht vorhanden')
+        conn.execute('DELETE FROM shiftbase_driver_map WHERE driver_id=?',(did,))
+        if uid:
+            try:
+                conn.execute('INSERT INTO shiftbase_driver_map(driver_id,shiftbase_user_id,updated_at) VALUES(?,?,?)',(did,uid,now_iso()))
+                conn.commit()
+            except Exception:
+                # In case a mapping already exists, do not silently assign one employee twice.
+                conn.raw_conn.rollback() if hasattr(conn,'raw_conn') else conn.rollback()
+                flash('Diese Shiftbase-ID ist bereits einem anderen Fahrer zugeordnet.','err')
+                return redirect(url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1))
+        else:
+            conn.commit()
+    flash('Zuordnung gespeichert.','ok')
+    return redirect(url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1))
+
+
+@app.get('/admin/shiftbase/export.csv')
+@admin_login_required
+def admin_shiftbase_abgleich_csv():
+    year,month=_sb_params()
+    try:
+        report=_sb_report_for_month(year,month)
+    except ShiftbaseIntegrationError as exc:
+        abort(503,str(exc))
+    out=io.StringIO()
+    writer=csv.writer(out,delimiter=';')
+    writer.writerow(['Fahrer','Cloud-ID','Shiftbase-ID','Monat','Shiftbase-Arbeitsstunden','Cloud-Abrechnung','Abrechnung minus Arbeitszeit','Cloud-Urlaubstage (Anzahl)','Cloud-Krankheitstage','Shiftbase-Abwesenheiten','Prüfhinweise'])
+    for r in report['results']:
+        writer.writerow([r['fahrer'],r['external_driver_id'],r['shiftbase_user_id'],f'{month:02d}/{year}',r['timesheet_hours'],r['payroll_hours'],r['difference'],r['vacation_days_cloud'],r['sick_days_cloud'],json.dumps(r['absences'],ensure_ascii=False),'; '.join(r['notes'])])
+    data=io.BytesIO(out.getvalue().encode('utf-8-sig'))
+    return send_file(data,mimetype='text/csv',as_attachment=True,download_name=f'shiftbase_abgleich_{year}-{month:02d}.csv')
+
+
+@app.get('/api/admin/shiftbase-abgleich')
+def api_shiftbase_abgleich_json():
+    admin_api_required()
+    year,month=_sb_params()
+    try:
+        report=_sb_report_for_month(year,month)
+        report.pop('users',None)
+        return jsonify(report)
+    except ShiftbaseIntegrationError as exc:
+        return jsonify({'ok':False,'error':str(exc)}),503
+
+# =================== ENDE: Shiftbase-Lohnabgleich ===================
 
 if __name__ == "__main__":
     ensure_paths()
