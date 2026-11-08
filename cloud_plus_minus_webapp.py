@@ -5121,97 +5121,306 @@ def _sb_rest_check_before_write(source, timesheet_id, after):
         raise ShiftbaseIntegrationError(conflict + ' Kein automatischer PUT.')
 
 
-def _sb_hypothetical_preview(source):
-    """Non-authoritative monthly allocation for DISPLAY ONLY; never a write input.
+def _sb_preview_minimum_break(net_minutes):
+    """Minimum theoretical break for a proposed net duration, in minutes.
 
-    Only amend end times of existing, intact, non-absent shifts. Preserve real
-    unpaid breaks (never invent pauses). Respect <=10h net, >=30/45 minute
-    recorded breaks, >=06:00 start and same-month rest. Cloud vacation is only
-    a count: if nonzero, do not allocate to unknown vacation dates.
+    This is a PLANNING ASSUMPTION, NEVER a statement about an actual break.
+    ArbZG §4 also governs placement, 15-minute segments and continuous work.
     """
-    result={'days':{},'net_after':source['actual'],'unallocated':None,
-            'blocked_reason':'','requested_difference':None}
+    return 45 if net_minutes > 540 else (30 if net_minutes > 360 else 0)
+
+
+def _sb_preview_neighbor_shifts(source, candidate_days):
+    """Read, but never modify, adjacent-month shifts for safe rest checks.
+
+    A read failure makes the entire hypothetical allocation unavailable.
+    API user_id filtering is backed by an additional local owner/date filter.
+    """
+    first, last = _sb_month_window(source['year'], source['month'])
+    checks = []
+    if first in candidate_days:
+        checks.append((shiftbase_date.fromisoformat(first) - shiftbase_timedelta(days=1)).isoformat())
+    if last in candidate_days:
+        checks.append((shiftbase_date.fromisoformat(last) + shiftbase_timedelta(days=1)).isoformat())
+    neighbors = []
+    for day in checks:
+        raw = _shiftbase_get_all('timesheets', {'min_date': day, 'max_date': day,
+                                                'user_id': source['uid']})
+        for row in _sb_dayview_entries(raw, source['uid'], int(day[:4]), int(day[5:7])):
+            # The interval must be known, even for an uneditable neighboring shift.
+            item = _sb_review_row_obj(row)
+            if not row.get('deleted'):
+                _sb_interval(item)
+            neighbors.append({**item, 'deleted': row.get('deleted', False)})
+    return neighbors
+
+
+def _sb_preview_proposed_shift(original, current, delta_minutes, rest_rows,
+                               original_day_sum, current_day_sum, seed):
+    """Return a locally viable proposal, or None. Never touches a database/API.
+
+    A pause increase is an expressly hypothetical planning value, not evidence
+    of a pause taken. The original date and same-day/overnight shape are fixed.
+    """
+    if not delta_minutes:
+        return None
+    net, _, pause = _sb_review_minutes(current['start'], current['end'], current['break_minutes'])
+    new_net = net + delta_minutes
+    if (new_net <= 0 or new_net > 600 or
+            current_day_sum + delta_minutes > 600 or current_day_sum + delta_minutes <= 0):
+        return None
+    before_start, before_end = _sb_interval(original)
+    current_start, _ = _sb_interval(current)
+    if before_start.date() != current_start.date():
+        return None
+    is_overnight = before_end.date() != before_start.date()
+    # Do not propose a change in next month's clock-hours via an overnight
+    # shift started on the last day of the selected month.
+    month_end = shiftbase_date.fromisoformat(_sb_month_window(
+        before_start.year, before_start.month)[1])
+    if is_overnight and before_start.date() == month_end:
+        return None
+    assumed_pause = max(pause, _sb_preview_minimum_break(new_net))
+    # Vary both boundaries where possible. A stable per-shift preference avoids
+    # a random, ever-changing display; the weights never assert real work.
+    fractions = (18, 38, 28, 48, 0, 55)
+    first_choice = seed % len(fractions)
+    options = fractions[first_choice:] + fractions[:first_choice]
+    for fraction in options:
+        # Five-minute steps keep the display plausible rather than 07:49 etc.
+        start_move = min(45, 5 * ((abs(delta_minutes) * fraction + 250) // 500))
+        if delta_minutes > 0:
+            new_start = current_start - _sb_timedelta(minutes=start_move)
+        else:
+            new_start = current_start + _sb_timedelta(minutes=start_move)
+        if (new_start.date() != before_start.date() or
+                new_start.hour * 60 + new_start.minute < 6 * 60):
+            continue
+        new_end = new_start + _sb_timedelta(minutes=new_net + assumed_pause)
+        if (new_end.date() != before_end.date() or
+                (new_end - new_start).total_seconds() > 24 * 3600):
+            continue
+        proposal = dict(current)
+        proposal.update({'start': new_start.strftime('%H:%M'),
+                         'end': new_end.strftime('%H:%M'),
+                         'break_minutes': str(assumed_pause)})
+        if delta_minutes > 0 and proposal['start'] < '06:00':
+            continue
+        # Enforce rest between days AND detect overlaps with split shifts.
+        # The unchanged entries from both boundary months are read-only.
+        if _sb_rest_violation([proposal if str(r.get('_preview_id')) == str(current.get('_preview_id'))
+                               else r for r in rest_rows]) is None:
+            return proposal
+    return None
+
+
+def _sb_preview_allocate_amount(original, current, max_abs_delta, direction,
+                                rest_rows, original_day_sum, current_day_sum, seed):
+    """Find a feasible quantity <= budget (monotone-enough binary search).
+
+    Every accepted result is individually validated after the search; an
+    infeasible amount is never included in the displayed month total.
+    """
+    # Do not fabricate precise minute-level timings to force an exact salary
+    # total. Gaps below five minutes remain explicitly unallocated.
+    lo, hi = 1, max_abs_delta // 5
+    best = None
+    best_minutes = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        minutes = 5 * mid
+        suggestion = _sb_preview_proposed_shift(original, current, direction * minutes,
+                        rest_rows, original_day_sum, current_day_sum, seed)
+        if suggestion is not None:
+            best, best_minutes = suggestion, minutes
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best_minutes, best
+
+
+def _sb_hypothetical_preview(source):
+    """Deterministic, hypothetical monthly gap allocation. DISPLAY ONLY.
+
+    This function has no write path; it never changes payroll, real Shiftbase
+    timesheets, persisted drafts, or the verified-correction form defaults.
+    Calculated suggestions must never be interpreted as observed working time.
+    """
+    from hashlib import sha256 as _sha256
+    result = {'days': {}, 'net_after': source['actual'], 'unallocated': None,
+              'blocked_reason': '', 'requested_difference': None,
+              'eligible_count': 0, 'excluded_count': 0}
     if source['payroll'] is None:
-        result['blocked_reason']='Keine Cloud-Abrechnungsstunden gespeichert.'
+        result['blocked_reason'] = 'Keine Cloud-Abrechnungsstunden gespeichert.'
         return result
-    difference = source['payroll']-source['actual']
-    result['requested_difference']=difference
-    result['unallocated']=difference
+    difference = source['payroll'] - source['actual']
+    result['requested_difference'] = difference
+    result['unallocated'] = difference
     if difference == 0:
         return result
-    if source.get('vacation_count') not in ('','0'):
-        result['blocked_reason']='Cloud-Urlaub ist nur als Anzahl gespeichert. Ohne datumsgenaue Zuordnung wird keine Verteilung vorgeschlagen.'
-        return result
-    try:
-        sick_days=set(_expand_day_ranges(source.get('sick_ranges','')))
-    except ValueError:
-        result['blocked_reason']='Cloud-Krankheitstage lassen sich nicht datumsgenau auswerten.'
-        return result
-    entries={}; candidate_ids=[]
-    for row in source['rows']:
-        eid=str(row['entry_id'])
-        original=_sb_review_row_obj(row)
-        entries[eid]={**original,'deleted':row.get('deleted',False)}
-        if row.get('absence') or row.get('deleted') or int(row['day'][-2:]) in sick_days:
-            continue
-        if row.get('paid_break') not in ('–','0 Min.','0','0.0 Min.'):
-            continue
+
+    # The Cloud stores only a vacation COUNT, never exact vacation dates.
+    # Allow human-supplied dates only for this transient, local calculation.
+    # No inferred or persisted vacation dates, no mapping into PUT inputs.
+    vacation_days = set()
+    raw_count = str(source.get('vacation_count') or '').strip()
+    if raw_count not in ('', '0'):
+        raw_dates = str(source.get('preview_vacation_days') or '').strip()
+        if not raw_dates:
+            result['blocked_reason'] = ('Cloud-Urlaub liegt nur als Anzahl (' + raw_count +
+                ') vor. Bitte die konkreten Urlaubstage aus dem Originalnachweis '
+                'in das optionale Feld eintragen und „Monat abgleichen“ klicken. '
+                'Solange sie unbekannt sind, bleibt die Verteilung gesperrt.')
+            return result
         try:
-            net,span,pause=_sb_review_minutes(original['start'],original['end'],original['break_minutes'])
-            recorded_minutes=int((Decimal(str(row['hours']))*60).quantize(Decimal('1')))
-        except (ValueError,TypeError):
-            continue
-        if (net != recorded_minutes or original['start'] < '06:00' or net > 600 or
-            (net > 540 and pause < 45) or (net > 360 and pause < 30)):
-            continue
-        candidate_ids.append(eid)
-    if not candidate_ids:
-        result['blocked_reason']='Keine eindeutig planbaren vorhandenen Schichten gefunden.'
+            count = int(raw_count)
+            if not 1 <= count <= 31:
+                raise ValueError('Ungültige Urlaubstage-Anzahl')
+            vacation_days = set(_expand_day_ranges(raw_dates))
+            if len(vacation_days) != count:
+                raise ValueError(f'Erwartet: {count} unterschiedliche Urlaubstage')
+            for day in vacation_days:
+                shiftbase_date(source['year'], source['month'], day)
+        except (TypeError, ValueError) as exc:
+            result['blocked_reason'] = 'Urlaubstage für die Vorschau ungültig: ' + str(exc)
+            return result
+    try:
+        sick_days = set(_expand_day_ranges(source.get('sick_ranges', '')))
+    except ValueError:
+        result['blocked_reason'] = 'Cloud-Krankheitstage sind nicht eindeutig datiert.'
         return result
-    requested=int((difference*60).quantize(Decimal('1')))
-    remaining=requested
-    direction=1 if remaining>0 else -1
-    for _round in range(5000):
-        if not remaining:
-            break
-        progressed=False
-        for eid in candidate_ids:
-            if not remaining:
-                break
-            entry=entries[eid]
-            net,span,pause=_sb_review_minutes(entry['start'],entry['end'],entry['break_minutes'])
-            move=direction*min(15,abs(remaining))
-            next_net=net+move
-            if next_net<1 or next_net>600 or (next_net>540 and pause<45) or (next_net>360 and pause<30):
-                continue
-            first,_=_sb_interval(entry)
-            new_end=first+_sb_timedelta(minutes=int(next_net+pause))
-            if new_end-first>_sb_timedelta(hours=24):
-                continue
-            after={**entry,'end':new_end.strftime('%H:%M')}
-            # The exact boundary of a shift isn't moved outside of its day;
-            # an overnight end remains an overnight end.
-            if _sb_rest_violation([after if k==eid else v for k,v in entries.items()]):
-                continue
-            entries[eid]=after
-            remaining-=move
-            progressed=True
-        if not progressed:
-            break
+
+    originals = {}
+    entries = {}
+    daily_net = {}
+    incomplete_days = set()
+    eligible = []
     for row in source['rows']:
-        eid=str(row['entry_id'])
-        original=_sb_review_row_obj(row)
-        after=entries[eid]
-        if original['end']!=after['end']:
-            net_before,_,_=_sb_review_minutes(original['start'], original['end'], original['break_minutes'])
-            net_after,_,_=_sb_review_minutes(after['start'], after['end'],after['break_minutes'])
-            result['days'][eid]={'new_start':after['start'],'new_end':after['end'],
-                  'new_pause':after['break_minutes'],'delta_minutes':net_after-net_before}
-    allocated_minutes=requested-remaining
-    result['net_after']=source['actual']+Decimal(allocated_minutes)/Decimal(60)
-    result['unallocated']=source['payroll']-result['net_after']
+        eid = str(row['entry_id'])
+        original = _sb_review_row_obj(row)
+        originals[eid] = original
+        entries[eid] = {**original, '_preview_id': eid, 'deleted': row.get('deleted', False)}
+        try:
+            net, _, pause = _sb_review_minutes(original['start'], original['end'], original['break_minutes'])
+            recorded = Decimal(str(row['hours'])) * Decimal(60)
+            if not recorded.is_finite() or abs(recorded - Decimal(net)) > Decimal('0.51'):
+                # Shiftbase 'total' and time fields disagree: the proposal
+                # must not make up a missing paid break or rounding policy.
+                raise ValueError('Summe passt nicht zu den Uhrzeiten')
+            daily_net[row['day']] = daily_net.get(row['day'], 0) + net
+        except (ValueError, InvalidOperation, TypeError):
+            incomplete_days.add(str(row['day']))
+            continue
+        if (row.get('absence') or row.get('deleted') or
+                int(str(row['day'])[-2:]) in sick_days or
+                int(str(row['day'])[-2:]) in vacation_days or
+                row.get('paid_break') not in ('–', '0 Min.', '0', '0.0 Min.') or
+                original['start'] < '06:00' or net > 600):
+            continue
+        eligible.append(eid)
+    # For safety, group daily work across ALL existing shifts, not only those
+    # selected for editing. A split shift cannot exceed ten hours in total.
+    eligible = [eid for eid in eligible
+                if (originals[eid]['day'] not in incomplete_days and
+                    daily_net.get(originals[eid]['day'], 601) <= 600)]
+    result['eligible_count'] = len(eligible)
+    result['excluded_count'] = len(source['rows']) - len(eligible)
+    if not eligible:
+        result['blocked_reason'] = 'Keine eindeutig planbaren vorhandenen Schichten gefunden.'
+        return result
+
+    # Time data for other shifts must be readable: otherwise the 11-hour rest
+    # check is incomplete, so no speculative changes are shown.
+    try:
+        for entry in entries.values():
+            if not entry.get('deleted'):
+                _sb_interval(entry)
+        boundary_rows = _sb_preview_neighbor_shifts(source,
+                                    {originals[eid]['day'] for eid in eligible})
+        rest_rows = list(entries.values()) + boundary_rows
+        original_conflict = _sb_rest_violation(rest_rows)
+    except (ShiftbaseIntegrationError, ValueError) as exc:
+        result['blocked_reason'] = ('Ruhezeiten können nicht zuverlässig geprüft werden: '
+                                    + str(exc))
+        return result
+    if original_conflict:
+        result['blocked_reason'] = ('Bereits im Ausgangsmonat besteht ein Zeit-/Ruhezeitkonflikt ('
+                                    + original_conflict + '). Keine automatische Verteilung.')
+        return result
+
+    requested_minutes = int((abs(difference) * Decimal(60)).quantize(Decimal('1')))
+    direction = 1 if difference > 0 else -1
+    if requested_minutes <= 0:
+        result['blocked_reason'] = 'Abweichung ist kleiner als eine Minute.'
+        return result
+    current_day_sum = dict(daily_net)
+    weights = {}
+    seeds = {}
+    for eid in eligible:
+        raw = (str(source['uid']) + '|' + str(source['year']) + '|' +
+               str(source['month']) + '|' + originals[eid]['day'] + '|' + eid)
+        seed = int.from_bytes(_sha256(raw.encode('utf-8')).digest()[:4], 'big')
+        seeds[eid] = seed
+        weights[eid] = 75 + seed % 71  # stable 75..145; no rigid equal distribution
+    # In each round, distribute the remaining gap proportionally to differing
+    # per-shift weights. Any rule that prevents a movement leaves a remainder.
+    remaining = requested_minutes
+    for _ in range(12):
+        if remaining == 0:
+            break
+        progress = False
+        order = sorted(eligible, key=lambda eid: (-weights[eid], originals[eid]['day'], eid))
+        weight_left = sum(weights[eid] for eid in order)
+        for eid in order:
+            if remaining <= 0:
+                break
+            weight = weights[eid]
+            budget = max(5, 5 * ((remaining * weight + weight_left // 2) // weight_left // 5))
+            budget = min(remaining, budget)
+            weight_left -= weight
+            original, current = originals[eid], entries[eid]
+            count, changed = _sb_preview_allocate_amount(
+                    original, current, budget, direction, rest_rows,
+                    daily_net.get(original['day'], 0),
+                    current_day_sum.get(original['day'], 0), seeds[eid])
+            if not count or changed is None:
+                continue
+            remaining -= count
+            progress = True
+            current_day_sum[original['day']] += direction * count
+            entries[eid] = {**changed, '_preview_id': eid}
+            rest_rows = [entries[eid] if r.get('_preview_id') == eid else r
+                         for r in rest_rows]
+        if not progress:
+            break
+
+    allocated = 0
+    for eid, original in originals.items():
+        current = entries[eid]
+        if (current['start'], current['end'], current['break_minutes']) == (
+                original['start'], original['end'], original['break_minutes']):
+            continue
+        old_minutes, _, old_pause = _sb_review_minutes(original['start'], original['end'],
+                                                     original['break_minutes'])
+        new_minutes, _, new_pause = _sb_review_minutes(current['start'], current['end'],
+                                                     current['break_minutes'])
+        delta = new_minutes - old_minutes
+        if not delta:
+            continue
+        allocated += delta
+        result['days'][eid] = {
+            'new_start': current['start'], 'new_end': current['end'],
+            'new_pause': current['break_minutes'],
+            'new_hours': _sb_dayview_hm(Decimal(new_minutes) / Decimal(60)),
+            'delta_minutes': delta,
+            'assumed_break_change': new_pause != old_pause,
+        }
+    result['net_after'] = source['actual'] + Decimal(allocated) / Decimal(60)
+    result['unallocated'] = source['payroll'] - result['net_after']
     if remaining:
-        result['blocked_reason']='Ein Teil der Differenz bleibt wegen Zeit-/Pausen-/Ruhezeitgrenzen unverplant.'
+        result['blocked_reason'] = ('Ein Teil der Differenz bleibt unverplant: '
+                                    'Arbeitszeiten, Pausen, Tagesgrenzen oder 11 Stunden '
+                                    'Ruhezeit lassen keinen weiteren plausiblen Vorschlag zu.')
     return result
 
 
@@ -5235,6 +5444,9 @@ def admin_shiftbase_pruefvorschau():
     correct_user=(os.environ.get('SHIFTBASE_VERIFIED_WRITE_USER_ID','').strip()==source['uid']
                   and source['uid']=='1338173' and normalize(source['name'])=='kaan aysel')
     writable=enable and correct_user
+    # Preview-only data are read from this GET. They are NEVER saved, and
+    # not included in any timesheet correction POST or Shiftbase payload.
+    source['preview_vacation_days'] = str(request.args.get('urlaubs_tage','')).strip()[:100]
     plan=_sb_hypothetical_preview(source)
     with db_conn() as conn:
         choices=[r for r in _sb_local_month(conn,year,month) if r['driver_id'] in _sb_mapping(conn)]
@@ -5273,16 +5485,19 @@ def admin_shiftbase_pruefvorschau():
        '<label>Fahrer<select name="driver_id" required>'+form_options+'</select></label>',
        '<label>Monat<select name="month" required>'+month_options+'</select></label>',
        '<label>Jahr<input type="number" name="year" min="2020" max="2100" value="'+str(year)+'" required></label>',
+       ('<label style="grid-column:1/-1">Urlaubstage konkret (nur Vorschau, Cloud: '+esc(source['vacation_count'])+' Tage)<input type="text" name="urlaubs_tage" placeholder="z. B. 5-7, 14" value="'+esc(source['preview_vacation_days'])+'"><small class="sb-muted">Nur eingeben, wenn durch Unterlagen bekannt. Werden weder gespeichert noch an Shiftbase gesendet.</small></label>' if source.get('vacation_count') not in ('','0') else ''),
        '<div style="grid-column:1/-1"><button type="submit" class="primary" style="width:auto">Monat abgleichen</button></div></form>',
        '<div class="sb-cards"><div class="sb-value">Shiftbase – Iststunden<strong>'+_sb_dayview_hm(source['actual'])+'</strong></div>',
        '<div class="sb-value">Cloud – Abrechnung<strong>'+(_sb_dayview_hm(source['payroll']) if source['payroll'] is not None else 'nicht hinterlegt')+'</strong></div>',
        '<div class="sb-value">Abrechnung minus Iststunden<strong>'+_sb_signed_hm((source['payroll']-source['actual']) if source['payroll'] is not None else None)+'</strong></div></div>',
-       '<div class="sb-hint"><b>Rechnerischer Planungsvorschlag – kein Arbeitszeitnachweis.</b> Die Vorschläge unten sind ausdrücklich keine bestätigten Istzeiten und werden niemals automatisch übertragen. Für eine tatsächliche Korrektur müssen die Uhrzeiten aus Talex bzw. einem anderen Originalnachweis neu eingetragen und bestätigt werden.</div>',
+       '<div class="sb-hint"><b>Unverbindlicher rechnerischer Prüf-Vorschlag – kein Arbeitszeitnachweis.</b> Die Berechnung verteilt nur eine Abrechnungsdifferenz. Uhrzeiten und automatisch ergänzte Pausen (*) sind reine Annahmen und keine festgestellten Istzeiten. Nichts davon wird gespeichert oder automatisch an Shiftbase übertragen. Echte Korrekturen müssen anhand von Talex/Originalbelegen neu eingetragen und einzeln bestätigt werden. Die Vorschau prüft nicht die tatsächliche Pausenlage, die Arbeitszeit über längere Ausgleichszeiträume oder arbeitsrechtliche Sonderfälle.</div>',
        '<div class="sb-cards"><div class="sb-value">Hypothetische Monatssumme<strong>'+_sb_dayview_hm(plan['net_after'])+'</strong></div>',
        '<div class="sb-value">Rechnerisch noch offen<strong>'+_sb_signed_hm(plan['unallocated'])+'</strong></div>',
-       '<div class="sb-value">Vorgeschlagene Tage<strong>'+str(len(plan['days']))+'</strong></div></div>']
+       '<div class="sb-value">Vorgeschlagene Schichten<strong>'+str(len(plan['days']))+'</strong></div></div>']
     if plan['blocked_reason']:
         h.append('<p class="sb-muted">Hinweis zur Planung: '+esc(plan['blocked_reason'])+'</p>')
+    if plan.get('excluded_count'):
+        h.append('<p class="sb-muted">Nicht für Vorschläge geeignete Schichten: '+str(plan['excluded_count'])+' (z. B. Krankheit, Urlaub, unbekannte Zeiten, bezahlte Pausen oder unklare Zeitberechnung). Sie werden nicht verändert.</p>')
     if source.get('sick_ranges'):
         h.append('<p class="sb-muted">Cloud-Krankheitstage: '+esc(source['sick_ranges'])+' (für hypothetische Änderungen ausgeschlossen).</p>')
     if reply:
@@ -5290,7 +5505,7 @@ def admin_shiftbase_pruefvorschau():
         h.append('<div class="flash '+color+'">'+esc(reply)+'</div>')
     if not writable:
         h.append('<div class="flash err">Direktes Senden noch gesperrt. Auf Render müssen SHIFTBASE_VERIFIED_WRITE_ENABLED=1 und SHIFTBASE_VERIFIED_WRITE_USER_ID='+esc(source['uid'])+' gesetzt sein.</div>')
-    h.append('<h3>Tagesliste und geprüfte Korrekturen</h3><p class="sb-muted">Einzelne Tage aufklappen. Die Felder enthalten bewusst die ursprünglichen Shiftbase-Werte, nicht die hypothetischen Vorschläge. Nur belegte Istzeiten dürfen korrigiert werden.</p>')
+    h.append('<h3>Tagesliste und geprüfte Korrekturen</h3><p class="sb-muted">Tage aufklappen und Talex-Protokolle prüfen. Die Bearbeitungsfelder enthalten bewusst die ursprünglichen Shiftbase-Werte (nicht den Vorschlag). Eine mit * gekennzeichnete Pause ist nur für das Rechenmodell ergänzt und niemals als genommen bestätigt. Nur belegte Istzeiten dürfen übertragen werden.</p>')
     h.append('<div class="sb-column-head"><span>Datum</span><span>Bisher</span><span>Rechnerischer Vorschlag</span><span>Differenz</span><span>Status</span></div>')
     h.append('<div aria-label="Tageskorrekturen">')
     for r in source['rows']:
@@ -5303,7 +5518,7 @@ def admin_shiftbase_pruefvorschau():
         suggestion=plan['days'].get(eid)
         before_summary=orig['start']+'–'+orig['end']+' · '+orig['hours']+' Std.'
         if suggestion:
-            proposed_summary=suggestion['new_start']+'–'+suggestion['new_end']+' · Pause '+suggestion['new_pause']+' Min.'
+            proposed_summary=(suggestion['new_start']+'–'+suggestion['new_end']+' · '+suggestion['new_hours']+' Std. · Pause '+suggestion['new_pause']+' Min.'+ ('*' if suggestion['assumed_break_change'] else ''))
             delta_summary=_sb_signed_hm(Decimal(suggestion['delta_minutes'])/Decimal(60))
             status_summary='Zu prüfen · hypothetisch'
         else:
