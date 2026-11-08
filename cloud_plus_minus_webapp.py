@@ -3600,11 +3600,27 @@ def _shiftbase_get_all(kind, params=None):
     raise ShiftbaseIntegrationError('Zu viele API-Seiten. Bitte Support kontaktieren.')
 
 
+def _sb_get(row, name):
+    """Return a JSON member ignoring casing and underscores (Shiftbase nested API)."""
+    if not isinstance(row, dict):
+        return None
+    if name in row:
+        return row[name]
+    norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
+    want = norm(name)
+    for key, value in row.items():
+        if norm(key) == want:
+            return value
+    return None
+
+
 def _sb_id(row, *names):
+    if not isinstance(row, dict):
+        return None
     for name in names:
-        value=row.get(name)
-        if isinstance(value,dict):
-            value=value.get('id')
+        value = _sb_get(row, name)
+        if isinstance(value, dict):
+            value = _sb_get(value, 'id') or _sb_get(value, 'user_id')
         if value is not None and str(value).strip():
             return str(value).strip()
     return None
@@ -3612,14 +3628,14 @@ def _sb_id(row, *names):
 
 def _sb_value(row, *names):
     for name in names:
-        v=row.get(name)
-        if v is not None and v!='':
+        v = _sb_get(row, name)
+        if v is not None and v != '':
             return v
     return None
 
 
 def _sb_day(value):
-    if value is None:
+    if value is None or isinstance(value, (dict, list)):
         return None
     try:
         return shiftbase_date.fromisoformat(str(value)[:10]).isoformat()
@@ -3629,32 +3645,62 @@ def _sb_day(value):
 
 def _sb_number(value):
     try:
-        x=Decimal(str(value).replace(',','.'))
-        if not x.is_finite(): return None
+        if isinstance(value,(dict,list,bool)):
+            return None
+        x = Decimal(str(value).replace(',', '.'))
+        if not x.is_finite():
+            return None
         return x
-    except (InvalidOperation,TypeError):
+    except (InvalidOperation, TypeError):
         return None
 
 
+def _sb_hhmm(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{1,4}:\d{2}', value.strip()):
+        return None
+    h, m = map(int, value.strip().split(':'))
+    return Decimal(h)+Decimal(m)/60 if m < 60 else None
+
+
 def _sb_hours(row):
-    # Ohne eindeutig deklarierte Einheit nicht raten: 'total': 480 koennte
-    # Minuten, Sekunden oder Dezimalstunden bedeuten.
-    for key in ('worked_hours','total_worked_hours','hours_worked','duration_hours','net_hours'):
-        if key in row and row[key] is not None:
-            value=row[key]
-            if isinstance(value,str) and ':' in value:
-                parts=value.split(':')
-                if len(parts)==2 and all(p.isdigit() for p in parts) and int(parts[1])<60:
-                    return Decimal(int(parts[0])) + Decimal(int(parts[1]))/60
-            return _sb_number(value)
-    for key,divisor in (('worked_minutes',60),('total_worked_minutes',60),('total_minutes',60),('duration_minutes',60),('worked_seconds',3600)):
-        if key in row and row[key] is not None:
-            n=_sb_number(row[key]); return n/Decimal(divisor) if n is not None else None
-    total=row.get('total')
-    if isinstance(total,str) and re.fullmatch(r'\d{1,3}:\d{2}',total):
-        h,m=map(int,total.split(':'))
-        if m<60: return Decimal(h)+Decimal(m)/60
+    """Read explicit working-hours fields, never guess unlabeled numeric units."""
+    if not isinstance(row, dict):
+        return None
+    for key in ('worked_hours','total_worked_hours','hours_worked','duration_hours','net_hours','total_hours'):
+        v = _sb_get(row,key)
+        if v is not None:
+            return _sb_hhmm(v) if isinstance(v,str) and ':' in v else _sb_number(v)
+    for key, div in (('worked_minutes',60),('total_worked_minutes',60),('total_minutes',60),('duration_minutes',60),('worked_seconds',3600),('duration_seconds',3600)):
+        v = _sb_get(row,key)
+        if v is not None:
+            n=_sb_number(v)
+            return n/Decimal(div) if n is not None else None
+    # Ambiguous fields may only be read if explicitly written as HH:MM.
+    for key in ('total','worked','hours','duration'):
+        result = _sb_hhmm(_sb_get(row,key))
+        if result is not None:
+            return result
     return None
+
+
+def _sb_timesheet_parts(entry):
+    """Shiftbase GET /timesheets can return joined records: {Timesheet:{...}, User:{...}}."""
+    ts=_sb_get(entry,'Timesheet')
+    if not isinstance(ts,dict):
+        ts=entry
+    usr=_sb_get(entry,'User')
+    if not isinstance(usr,dict):
+        usr={}
+    uid=(_sb_id(usr,'id','user_id')
+         or _sb_id(ts,'user_id','user','employee_id','employee')
+         or _sb_id(entry,'user_id','user','employee_id','employee'))
+    day=(_sb_day(_sb_value(ts,'date','work_date','start_date','start_time','start','clock_in'))
+         or _sb_day(_sb_value(entry,'date','work_date','start_date','start_time','start','clock_in')))
+    hours=_sb_hours(ts)
+    if hours is None:
+        hours=_sb_hours(entry)
+    entry_id=_sb_id(ts,'id','timesheet_id') or _sb_id(entry,'id','timesheet_id')
+    return uid,day,hours,entry_id
 
 
 def _sb_absence_name(row):
@@ -3712,8 +3758,8 @@ def _sb_report(conn,year,month,users,times,absences):
     mappings=_sb_mapping(conn)
     known_users={}
     for row in users:
-        uid=_sb_id(row,'id','user_id','employee_id')
-        if uid:known_users[uid]=row
+        uid=_sb_id(row,'id','user_id','employee_id') or _sb_id(_sb_get(row,'User'),'id','user_id')
+        if uid: known_users[uid]=(_sb_get(row,'User') if isinstance(_sb_get(row,'User'),dict) else row)
     entries=defaultdict(list)
     ignored=[]
     missing_user_ids=0
@@ -3722,9 +3768,15 @@ def _sb_report(conn,year,month,users,times,absences):
     example_fields=[]
     nested_example_fields={}
     for entry in times:
-        uid=_sb_id(entry,'user_id','user','employee_id','employee')
-        day=_sb_day(_sb_value(entry,'date','work_date','start_date','start_time','start','clock_in'))
-        hours=_sb_hours(entry)
+        if not example_fields and isinstance(entry,dict):
+            # Only structural field names, never private employee/payroll values.
+            example_fields=sorted(str(k)[:70] for k in entry.keys())[:45]
+            nested_example_fields={
+                str(k):sorted(str(child)[:70] for child in v.keys())[:35]
+                for k,v in entry.items()
+                if isinstance(v,dict) and str(k).lower() in {'user','employee','timesheet','shift','roster'}
+            }
+        uid, day, hours, entry_id = _sb_timesheet_parts(entry)
         if not uid or not day:
             missing_user_ids += int(not bool(uid))
             missing_dates += int(not bool(day))
@@ -3734,7 +3786,7 @@ def _sb_report(conn,year,month,users,times,absences):
                 nested_example_fields={
                     str(k):sorted(str(child)[:70] for child in v.keys())[:20]
                     for k,v in entry.items()
-                    if isinstance(v,dict) and str(k) in {'user','employee','timesheet','shift','roster'}
+                    if isinstance(v,dict) and str(k).lower() in {'user','employee','timesheet','shift','roster'}
                 }
             ignored.append('Zeiteintrag ohne eindeutige Benutzer-ID/Datum')
             continue
@@ -3742,17 +3794,20 @@ def _sb_report(conn,year,month,users,times,absences):
             missing_hour_units += 1
         if (int(day[:4]),int(day[5:7]))!=(year,month):
             continue
-        entries[uid].append({'date':day,'hours':hours,'entry_id':_sb_id(entry,'id','timesheet_id')})
+        entries[uid].append({'date':day,'hours':hours,'entry_id':entry_id})
     absence_by_user=defaultdict(list)
     start,end=_sb_month_window(year,month)
     for a in absences:
-        uid=_sb_id(a,'user_id','user','employee_id','employee')
+        ab=_sb_get(a,'Absentee')
+        if not isinstance(ab,dict): ab=a
+        au=_sb_get(a,'User')
+        uid=(_sb_id(au,'id','user_id') or _sb_id(ab,'user_id','user','employee_id','employee') or _sb_id(a,'user_id','user','employee_id','employee'))
         if not uid:
             continue
-        astart=_sb_day(_sb_value(a,'start_date','min_date','start','date'))
-        aend=_sb_day(_sb_value(a,'end_date','max_date','end')) or astart
+        astart=_sb_day(_sb_value(ab,'start_date','min_date','start','date'))
+        aend=_sb_day(_sb_value(ab,'end_date','max_date','end')) or astart
         if astart and aend and astart<=end and aend>=start:
-            absence_by_user[uid].append({'von':max(astart,start),'bis':min(aend,end),'art':_sb_absence_name(a),'status':str(_sb_value(a,'status') or 'unbekannt')})
+            absence_by_user[uid].append({'von':max(astart,start),'bis':min(aend,end),'art':_sb_absence_name(ab),'status':str(_sb_value(ab,'status') or 'unbekannt')})
     result=[]
     for r in local:
         uid=mappings.get(r['driver_id'])
@@ -3849,7 +3904,7 @@ def admin_shiftbase_abgleich():
                 h.append(' Unterfelder: <code>' + shiftbase_escape(json.dumps(diag['nested_field_names'],ensure_ascii=False)) + '</code>.')
             h.append('</div>')
         if report['diagnostic']['missing_hour_units']:
-            h.append('<div class="flash err">Bei '+str(report['diagnostic']['missing_hour_units'])+' Zeiteinträgen ist die Stundeneinheit noch nicht erkannt. Die API-Stunden müssen vor einem Vergleich zuverlässig interpretiert werden.</div>')
+            h.append('<div class="flash err">Bei '+str(report['diagnostic']['missing_hour_units'])+' Zeiteinträgen ist die Stundeneinheit noch nicht erkannt. Die API-Stunden müssen vor einem Vergleich zuverlässig interpretiert werden. Feldnamen aus Timesheet: <code>'+shiftbase_escape(', '.join(report['diagnostic']['nested_field_names'].get('Timesheet',[])))+'</code>.</div>')
         h.append('<div class="table-wrap"><table><thead><tr><th>Fahrer</th><th>Shiftbase-ID</th><th>Shiftbase Std.</th><th>Abrechnung Std.</th><th>Differenz</th><th>Abwesenheiten</th><th>Hinweise</th></tr></thead><tbody>')
         for r in report['results']:
             fmt=lambda v: '–' if v is None else f'{v:.2f}'.replace('.',',')
