@@ -4297,6 +4297,8 @@ def admin_shiftbase_abgleich():
     h.append(f'<label>Monat <input type="number" name="month" min="1" max="12" value="{month}" required style="width:90px"></label>')
     h.append('<input type="hidden" name="laden" value="1"><button class="primary" style="width:auto">Shiftbase auslesen & vergleichen</button></form>')
     h.append('<p class="muted">Erforderliche Render-Variablen: SHIFTBASE_API_BASE_URL und SHIFTBASE_API_TOKEN. API-Pfad/Authentifizierung nach Shiftbase-Dokumentation prüfen. Für Demo lokal SHIFTBASE_MOCK_DIR setzen.</p>')
+    h.append('<p><a class="btn primary" style="width:auto" href="'+url_for('admin_shiftbase_kaan_diagnose',year=year,month=month)+'">Kaan Aysel: 1 echten API-Schichtdatensatz prüfen</a></p>')
+
     if error: h.append('<div class="flash err">'+shiftbase_escape(error)+'</div>')
     h.append('</div>')
     # CSV fallback: official Shiftbase report already includes calculated net hours.
@@ -4423,6 +4425,113 @@ def api_shiftbase_abgleich_json():
         return jsonify(report)
     except ShiftbaseIntegrationError as exc:
         return jsonify({'ok':False,'error':str(exc)}),503
+
+
+# Einmalige, lesende Shiftbase-API-Formatdiagnose. Nur Kaan Aysel.
+# Keine Änderungen an Shiftbase, keine Schlüssel oder fremde Mitarbeiterdaten im Bericht.
+_SB_DIAG_TIMING_FIELDS = (
+    'date', 'datetime', 'starttime', 'start_time', 'start_datetime',
+    'endtime', 'end_time', 'end_datetime', 'break', 'clocked_break',
+    'active_clock', 'clock', 'clocked_in', 'clocked_out',
+    'worked_hours', 'total_worked_hours', 'hours_worked', 'duration_hours',
+    'net_hours', 'total_hours', 'worked_minutes', 'duration_minutes',
+    'worked_seconds', 'duration_seconds', 'hours', 'worked', 'duration', 'total',
+)
+
+def _sb_diag_safe_value(value, depth=0):
+    """Only show whitelisted time values; never pass through names, GPS, IP or notes."""
+    if value is None: return None
+    if isinstance(value, bool): return value
+    if isinstance(value, (int, float)):
+        return value if abs(value) < 10**15 else 'Zahl zu groß (ausgeblendet)'
+    if isinstance(value, str):
+        return value[:90] if len(value) < 90 else 'Langer Text (ausgeblendet)'
+    if isinstance(value, dict):
+        if depth > 2: return 'Verschachteltes Objekt'
+        out={}
+        for k, v in list(value.items())[:30]:
+            label=str(k)
+            if label.casefold() in {'date','datetime','time','timezone','timezone_type','timestamp','value',
+                                     'clocked_in','clocked_out','start','end','start_time','end_time','break',
+                                     'hours','minutes','seconds','duration','worked_hours','total_hours'}:
+                out[label]=_sb_diag_safe_value(v, depth+1)
+            else:
+                out[label]='[Wert ausgeblendet: '+type(v).__name__+']'
+        return out
+    if isinstance(value, list):
+        return '[Liste, '+str(len(value))+' Elemente; Werte ausgeblendet]'
+    return '[Typ: '+type(value).__name__+']'
+
+
+def _sb_diag_time_fields(ts):
+    if not isinstance(ts, dict):
+        return {'fehler':'Kein Timesheet-Objekt'}
+    fields={}
+    for name in _SB_DIAG_TIMING_FIELDS:
+        v=_sb_get(ts,name)
+        if v is not None:
+            fields[name]=_sb_diag_safe_value(v)
+    return {
+        'alle_timesheet_feldtypen': {str(k):type(v).__name__ for k,v in list(ts.items())[:100]},
+        'zeitfelder_mit_werten': fields,
+        'berechnete_stunden_der_bisherigen_software': (str(_sb_hours(ts)) if _sb_hours(ts) is not None else 'NICHT BERECHENBAR'),
+    }
+
+
+@app.get('/admin/shiftbase/diagnose-kaan')
+@admin_login_required
+def admin_shiftbase_kaan_diagnose():
+    year,month=_sb_params()
+    with db_conn() as conn:
+        matches=conn.execute('SELECT id FROM drivers WHERE lower(name)=lower(?) AND is_active=1',('Kaan Aysel',)).fetchall()
+        if len(matches)!=1:
+            return base_page('Shiftbase – Diagnose Kaan', '<div class="card"><h2>Kein eindeutiger Cloud-Eintrag für Kaan Aysel</h2><p>Bitte zunächst den Fahrer eindeutig anlegen.</p></div>', 'shiftbase'), 422
+        uid=_sb_mapping(conn).get(int(matches[0]['id']))
+    if not uid:
+        return base_page('Shiftbase – Diagnose Kaan', '<div class="card"><h2>Kaan Aysel ist noch nicht zugeordnet</h2><p>Bitte auf der Seite Shiftbase-Abgleich zuerst den Shiftbase-Benutzer zuordnen.</p></div>', 'shiftbase'), 422
+    start,end=_sb_month_window(year,month)
+    try:
+        items=_shiftbase_get_all('timesheets',{'min_date':start,'max_date':end,'user_id':uid})
+        selected=[(r,_sb_timesheet_parts(r)) for r in items if _sb_timesheet_parts(r)[0]==uid and _sb_timesheet_parts(r)[1] and start<=_sb_timesheet_parts(r)[1]<=end]
+        selected.sort(key=lambda t:t[1][1])
+        if not selected:
+            diagnostic={'status':'Keine Zeiteinträge für Kaan Aysel im ausgewählten Monat gefunden.','api_zeilen_gesamt':len(items),'monat':f'{year}-{month:02d}'}
+        else:
+            sample,parts=selected[0]
+            ts=_sb_get(sample,'Timesheet')
+            if not isinstance(ts,dict): ts=sample
+            diagnostic={
+              'status':'Nur-Lese-Diagnose abgeschlossen',
+              'monat':f'{year}-{month:02d}',
+              'fuer_kaan_gefundene_schichten':len(selected),
+              'ein_beispiel_aus_der_monatsliste':_sb_diag_time_fields(ts),
+              'einzelabruf_desselben_schichtdatensatzes':'nicht versucht',
+            }
+            ident=parts[3]
+            if ident:
+                try:
+                    single=_shiftbase_read_json('timesheet_detail',{'_detail_id':ident})
+                    detail=_sb_get(single,'Timesheet')
+                    if not isinstance(detail,dict):
+                        detail=_sb_get(single,'data')
+                    if not isinstance(detail,dict): detail=single
+                    diagnostic['einzelabruf_desselben_schichtdatensatzes']=_sb_diag_time_fields(detail)
+                except ShiftbaseIntegrationError as e:
+                    diagnostic['einzelabruf_desselben_schichtdatensatzes']='Nicht verfügbar: '+str(e)
+    except ShiftbaseIntegrationError as e:
+        diagnostic={'status':'API-Abruf fehlgeschlagen', 'hinweis':str(e)}
+    dumped=json.dumps(diagnostic,ensure_ascii=False,indent=2)
+    back=url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1)
+    page=('<div class="card"><h2>Kaan Aysel – Shiftbase-API-Feldprüfung</h2>'
+          '<p>Nur Oktober bzw. gewählter Monat, nur Kaan, nur Lesen. Dies zeigt ausschließlich technische Zeitfelder und deren Typen, keine IP-Adressen, GPS, Namen anderer Mitarbeiter oder API-Schlüssel.</p>'
+          '<p><b>Bitte einen Screenshot von diesem Bericht schicken.</b> Die Arbeitszeit wird nicht verändert.</p>'
+          '<div style="overflow:auto"><pre style="white-space:pre-wrap;word-break:break-word;padding:12px;border-radius:12px;background:#f3f6fb">'+shiftbase_escape(dumped)+'</pre></div>'
+          '<a class="btn small" href="'+shiftbase_escape(back,quote=True)+'">Zurück zum Monatsvergleich</a></div>')
+    response=make_response(base_page('Kaan Aysel – Shiftbase-Feldprüfung',page,'shiftbase'))
+    response.headers['Cache-Control']='no-store'
+    response.headers['X-Robots-Tag']='noindex, nofollow'
+    return response
+
 
 # =================== ENDE: Shiftbase-Lohnabgleich ===================
 
