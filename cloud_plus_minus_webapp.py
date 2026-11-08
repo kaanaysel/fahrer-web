@@ -3664,35 +3664,77 @@ def _sb_hhmm(value):
 
 
 def _sb_timepoint(value, date_value):
-    """Parse a real ISO timestamp or time-of-day; don't guess arbitrary numeric units.
+    """Parse documented clock values and PHP-style DateTime JSON objects.
 
+    Shiftbase may return Timesheet.datetime as e.g.
+      {"date":"2026-10-01 06:00:00.000000", "timezone_type":3,
+       "timezone":"Europe/Amsterdam"}.
+    Never use a bare date as midnight or invent a missing hour.
     Returns (datetime, was_only_clock_time) or (None, False).
     """
-    if value is None or isinstance(value,(bool,dict,list)):
+    if value is None or isinstance(value, bool):
         return None, False
-    # Unix seconds/milliseconds are identifiable by their realistic magnitude.
-    if isinstance(value,(int,float)) and 1_260_000_000 <= float(value) <= 4_200_000_000:
-        return _sb_datetime.fromtimestamp(float(value), _sb_timezone.utc), False
-    if isinstance(value,(int,float)) and 1_260_000_000_000 <= float(value) <= 4_200_000_000_000:
-        return _sb_datetime.fromtimestamp(float(value)/1000, _sb_timezone.utc), False
-    text = str(value).strip()
+    if isinstance(value, dict):
+        # PHP's serialized DateTime object, or an explicitly separated date/time.
+        # The timezone is metadata for the wall time. Compare start/end in the
+        # same timesheet's wall-time domain; don't infer a break from these fields.
+        d=_sb_get(value,'date')
+        t=_sb_get(value,'time')
+        if isinstance(d,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',d.strip()) and isinstance(t,str):
+            return _sb_timepoint(d.strip()+' '+t.strip(),date_value)
+        for field in ('date','datetime','timestamp','value'):
+            child=_sb_get(value,field)
+            if child is not None and child is not value:
+                got, only_clock=_sb_timepoint(child,date_value)
+                if got is not None:
+                    return got,only_clock
+        return None, False
+    if isinstance(value,list):
+        return None, False
+    if isinstance(value,(int,float)):
+        # Magnitude allows unambiguous Unix seconds or milliseconds only.
+        if 1_260_000_000 <= float(value) <= 4_200_000_000:
+            return _sb_datetime.fromtimestamp(float(value),_sb_timezone.utc),False
+        if 1_260_000_000_000 <= float(value) <= 4_200_000_000_000:
+            return _sb_datetime.fromtimestamp(float(value)/1000,_sb_timezone.utc),False
+        return None,False
+    text=str(value).strip()
     if not text:
-        return None, False
-    # A time alone is attached to Timesheet.date, never to today's date.
-    if re.fullmatch(r'\d{1,2}:\d{2}(?::\d{2})?', text):
+        return None,False
+    if re.fullmatch(r'\d{1,2}:\d{2}(?::\d{2})?',text):
+        if not isinstance(date_value,str):
+            return None,False
         try:
-            base = _sb_datetime.strptime(str(date_value)[:10], '%Y-%m-%d')
-            clock = _sb_datetime.strptime(text, '%H:%M:%S' if text.count(':')==2 else '%H:%M')
-            return base.replace(hour=clock.hour,minute=clock.minute,second=clock.second), True
-        except (ValueError,TypeError):
-            return None, False
-    # Timestamp string must carry date and time.
+            base=_sb_datetime.strptime(date_value[:10],'%Y-%m-%d')
+            clock=_sb_datetime.strptime(text,'%H:%M:%S' if text.count(':')==2 else '%H:%M')
+            return base.replace(hour=clock.hour,minute=clock.minute,second=clock.second),True
+        except ValueError:
+            return None,False
     if not re.match(r'^\d{4}-\d{2}-\d{2}[ T]',text):
-        return None, False
+        return None,False
     try:
-        return _sb_datetime.fromisoformat(text.replace('Z','+00:00')), False
+        return _sb_datetime.fromisoformat(text.replace('Z','+00:00')),False
     except ValueError:
-        return None, False
+        return None,False
+
+
+def _sb_time_shape(value):
+    """Only safe structural hints, not any employee's timestamps or values."""
+    if value is None:
+        return 'fehlend'
+    if isinstance(value,dict):
+        fields=','.join(sorted(str(k)[:32] for k in value)[:12])
+        datechild=_sb_get(value,'date')
+        shape=_sb_time_shape(datechild) if datechild is not None else '-'
+        return 'Objekt-Felder('+fields+'), date-Muster='+shape
+    if isinstance(value,str):
+        val=value.strip()
+        if re.fullmatch(r'\d{1,2}:\d{2}(?::\d{2})?',val): return 'Uhrzeit'
+        if re.match(r'^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}',val): return 'Datum+Uhrzeit'
+        if re.fullmatch(r'\d+(?:[,.]\d+)?',val): return 'Zahlen-Text'
+        if not val: return 'leer'
+        return 'anderer Text'
+    return type(value).__name__
 
 
 def _sb_break_as_minutes(value):
@@ -3888,7 +3930,7 @@ def _sb_report(conn,year,month,users,times,absences):
                 if not isinstance(ts_debug,dict): ts_debug=entry
                 for k in ('datetime','endtime','break','date','clocked_in','clocked_out'):
                     v=_sb_get(ts_debug,k)
-                    unknown_time_field_types[k] = 'fehlend' if v is None else type(v).__name__
+                    unknown_time_field_types[k] = _sb_time_shape(v)
         if (int(day[:4]),int(day[5:7]))!=(year,month):
             continue
         entries[uid].append({'date':day,'hours':hours,'entry_id':entry_id})
