@@ -3716,13 +3716,30 @@ def _sb_report(conn,year,month,users,times,absences):
         if uid:known_users[uid]=row
     entries=defaultdict(list)
     ignored=[]
+    missing_user_ids=0
+    missing_dates=0
+    missing_hour_units=0
+    example_fields=[]
+    nested_example_fields={}
     for entry in times:
         uid=_sb_id(entry,'user_id','user','employee_id','employee')
         day=_sb_day(_sb_value(entry,'date','work_date','start_date','start_time','start','clock_in'))
         hours=_sb_hours(entry)
         if not uid or not day:
+            missing_user_ids += int(not bool(uid))
+            missing_dates += int(not bool(day))
+            if not example_fields:
+                # Only JSON FIELD NAMES, never employee information, work times or token values.
+                example_fields=sorted(str(k)[:70] for k in entry.keys())[:45]
+                nested_example_fields={
+                    str(k):sorted(str(child)[:70] for child in v.keys())[:20]
+                    for k,v in entry.items()
+                    if isinstance(v,dict) and str(k) in {'user','employee','timesheet','shift','roster'}
+                }
             ignored.append('Zeiteintrag ohne eindeutige Benutzer-ID/Datum')
             continue
+        if hours is None:
+            missing_hour_units += 1
         if (int(day[:4]),int(day[5:7]))!=(year,month):
             continue
         entries[uid].append({'date':day,'hours':hours,'entry_id':_sb_id(entry,'id','timesheet_id')})
@@ -3765,7 +3782,10 @@ def _sb_report(conn,year,month,users,times,absences):
             'status':'ungeklärt' if diff is None else ('gleich' if abs(diff)<Decimal('0.01') else 'abweichung')})
     return {'year':year,'month':month,'readonly':True,'results':result,
             'api_users':len(users),'api_timesheets':len(times),'api_absences':len(absences),
-            'ignored_entries':len(ignored),'users':known_users}
+            'ignored_entries':len(ignored),'users':known_users,
+            'diagnostic':{'missing_user_ids':missing_user_ids,'missing_dates':missing_dates,
+                          'missing_hour_units':missing_hour_units,
+                          'example_field_names':example_fields,'nested_field_names':nested_example_fields}}
 
 
 def _sb_report_for_month(year,month):
@@ -3818,6 +3838,18 @@ def admin_shiftbase_abgleich():
     if report:
         h.append('<div class="card"><h2>Monatsvergleich</h2>')
         h.append(f'<p>Shiftbase: {report["api_users"]} Benutzer, {report["api_timesheets"]} Zeiteinträge, {report["api_absences"]} Abwesenheiten. Nicht zuordenbare Zeiteinträge: {report["ignored_entries"]}.</p>')
+        if report['ignored_entries']:
+            diag=report['diagnostic']
+            h.append('<div class="flash err"><b>Technische Diagnose der Shiftbase-Daten (ohne Personendaten):</b> '
+                     + f'Einträge ohne erkannte Mitarbeiter-ID: {diag["missing_user_ids"]}; ohne erkanntes Datum: {diag["missing_dates"]}. '
+                     + 'Die fehlenden API-Felder müssen im Code zugeordnet werden. '
+                     + 'Sichtbare Feldnamen (keine Werte): <code>'
+                     + shiftbase_escape(', '.join(diag['example_field_names']))+'</code>.')
+            if diag['nested_field_names']:
+                h.append(' Unterfelder: <code>' + shiftbase_escape(json.dumps(diag['nested_field_names'],ensure_ascii=False)) + '</code>.')
+            h.append('</div>')
+        if report['diagnostic']['missing_hour_units']:
+            h.append('<div class="flash err">Bei '+str(report['diagnostic']['missing_hour_units'])+' Zeiteinträgen ist die Stundeneinheit noch nicht erkannt. Die API-Stunden müssen vor einem Vergleich zuverlässig interpretiert werden.</div>')
         h.append('<div class="table-wrap"><table><thead><tr><th>Fahrer</th><th>Shiftbase-ID</th><th>Shiftbase Std.</th><th>Abrechnung Std.</th><th>Differenz</th><th>Abwesenheiten</th><th>Hinweise</th></tr></thead><tbody>')
         for r in report['results']:
             fmt=lambda v: '–' if v is None else f'{v:.2f}'.replace('.',',')
