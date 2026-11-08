@@ -3468,6 +3468,7 @@ def api_upload_pdf():
 
 from collections import defaultdict
 from datetime import date as shiftbase_date, timedelta as shiftbase_timedelta
+from datetime import datetime as _sb_datetime, timedelta as _sb_timedelta, timezone as _sb_timezone
 from decimal import Decimal, InvalidOperation
 from html import escape as shiftbase_escape
 from urllib.error import HTTPError, URLError
@@ -3662,8 +3663,98 @@ def _sb_hhmm(value):
     return Decimal(h)+Decimal(m)/60 if m < 60 else None
 
 
+def _sb_timepoint(value, date_value):
+    """Parse a real ISO timestamp or time-of-day; don't guess arbitrary numeric units.
+
+    Returns (datetime, was_only_clock_time) or (None, False).
+    """
+    if value is None or isinstance(value,(bool,dict,list)):
+        return None, False
+    # Unix seconds/milliseconds are identifiable by their realistic magnitude.
+    if isinstance(value,(int,float)) and 1_260_000_000 <= float(value) <= 4_200_000_000:
+        return _sb_datetime.fromtimestamp(float(value), _sb_timezone.utc), False
+    if isinstance(value,(int,float)) and 1_260_000_000_000 <= float(value) <= 4_200_000_000_000:
+        return _sb_datetime.fromtimestamp(float(value)/1000, _sb_timezone.utc), False
+    text = str(value).strip()
+    if not text:
+        return None, False
+    # A time alone is attached to Timesheet.date, never to today's date.
+    if re.fullmatch(r'\d{1,2}:\d{2}(?::\d{2})?', text):
+        try:
+            base = _sb_datetime.strptime(str(date_value)[:10], '%Y-%m-%d')
+            clock = _sb_datetime.strptime(text, '%H:%M:%S' if text.count(':')==2 else '%H:%M')
+            return base.replace(hour=clock.hour,minute=clock.minute,second=clock.second), True
+        except (ValueError,TypeError):
+            return None, False
+    # Timestamp string must carry date and time.
+    if not re.match(r'^\d{4}-\d{2}-\d{2}[ T]',text):
+        return None, False
+    try:
+        return _sb_datetime.fromisoformat(text.replace('Z','+00:00')), False
+    except ValueError:
+        return None, False
+
+
+def _sb_break_as_minutes(value):
+    """Shiftbase Timesheet.break is break minutes, including a possible HH:MM format.
+
+    Do not guess the meaning of fractional numbers or nested structures.
+    """
+    if value is None or value == '':
+        return Decimal(0)
+    if isinstance(value,(dict,list,bool)):
+        return None
+    if isinstance(value,str) and ':' in value:
+        parts = value.strip().split(':')
+        if len(parts) not in (2,3) or not all(x.isdigit() for x in parts):
+            return None
+        h,m=int(parts[0]),int(parts[1]);sec=int(parts[2]) if len(parts)==3 else 0
+        if m>=60 or sec>=60: return None
+        minutes=Decimal(h)*60+Decimal(m)+Decimal(sec)/60
+    else:
+        minutes=_sb_number(value)
+        if minutes is None or minutes != minutes.to_integral_value():
+            return None
+    if minutes < 0 or minutes > 600:
+        return None
+    return minutes
+
+
+def _sb_hours_from_clock(row):
+    """Calculate NET timesheet hours from start/end and recorded break.
+
+    Only use timestamps belonging to the recorded timesheet (not hypothetical breaks).
+    """
+    day = _sb_value(row,'date','work_date')
+    start_raw=_sb_value(row,'datetime','start_datetime','start_time','start','clocked_in')
+    end_raw=_sb_value(row,'endtime','end_datetime','end_time','end','clocked_out')
+    begin, begin_clock = _sb_timepoint(start_raw, day)
+    finish, finish_clock = _sb_timepoint(end_raw, day)
+    if begin is None or finish is None:
+        return None
+    # Reject mixed timezone-aware and naive timestamps.
+    if (begin.tzinfo is None)!=(finish.tzinfo is None):
+        return None
+    if finish < begin:
+        # An overnight shift may have only time-of-day for its end value.
+        if begin_clock or finish_clock:
+            finish += _sb_timedelta(days=1)
+        else:
+            return None
+    duration_minutes = Decimal(str((finish-begin).total_seconds()))/Decimal(60)
+    if not (Decimal(0) < duration_minutes <= Decimal(24*60)):
+        return None
+    pause = _sb_break_as_minutes(_sb_value(row,'break','break_minutes','unpaid_break_minutes'))
+    if pause is None or pause > duration_minutes:
+        return None
+    return (duration_minutes-pause)/Decimal(60)
+
+
 def _sb_hours(row):
-    """Read explicit working-hours fields, never guess unlabeled numeric units."""
+    """Read known units or derive net hours from Timesheet.datetime/endtime/break.
+
+    No rounding, made-up breaks, or alteration of original Shiftbase records.
+    """
     if not isinstance(row, dict):
         return None
     for key in ('worked_hours','total_worked_hours','hours_worked','duration_hours','net_hours','total_hours'):
@@ -3675,12 +3766,11 @@ def _sb_hours(row):
         if v is not None:
             n=_sb_number(v)
             return n/Decimal(div) if n is not None else None
-    # Ambiguous fields may only be read if explicitly written as HH:MM.
     for key in ('total','worked','hours','duration'):
         result = _sb_hhmm(_sb_get(row,key))
         if result is not None:
             return result
-    return None
+    return _sb_hours_from_clock(row)
 
 
 def _sb_timesheet_parts(entry):
@@ -3767,6 +3857,7 @@ def _sb_report(conn,year,month,users,times,absences):
     missing_hour_units=0
     example_fields=[]
     nested_example_fields={}
+    unknown_time_field_types={}
     for entry in times:
         if not example_fields and isinstance(entry,dict):
             # Only structural field names, never private employee/payroll values.
@@ -3792,6 +3883,12 @@ def _sb_report(conn,year,month,users,times,absences):
             continue
         if hours is None:
             missing_hour_units += 1
+            if not unknown_time_field_types:
+                ts_debug=_sb_get(entry,'Timesheet')
+                if not isinstance(ts_debug,dict): ts_debug=entry
+                for k in ('datetime','endtime','break','date','clocked_in','clocked_out'):
+                    v=_sb_get(ts_debug,k)
+                    unknown_time_field_types[k] = 'fehlend' if v is None else type(v).__name__
         if (int(day[:4]),int(day[5:7]))!=(year,month):
             continue
         entries[uid].append({'date':day,'hours':hours,'entry_id':entry_id})
@@ -3840,7 +3937,8 @@ def _sb_report(conn,year,month,users,times,absences):
             'ignored_entries':len(ignored),'users':known_users,
             'diagnostic':{'missing_user_ids':missing_user_ids,'missing_dates':missing_dates,
                           'missing_hour_units':missing_hour_units,
-                          'example_field_names':example_fields,'nested_field_names':nested_example_fields}}
+                          'example_field_names':example_fields,'nested_field_names':nested_example_fields,
+                          'unknown_time_field_types':unknown_time_field_types}}
 
 
 def _sb_report_for_month(year,month):
@@ -3904,12 +4002,16 @@ def admin_shiftbase_abgleich():
                 h.append(' Unterfelder: <code>' + shiftbase_escape(json.dumps(diag['nested_field_names'],ensure_ascii=False)) + '</code>.')
             h.append('</div>')
         if report['diagnostic']['missing_hour_units']:
-            h.append('<div class="flash err">Bei '+str(report['diagnostic']['missing_hour_units'])+' Zeiteinträgen ist die Stundeneinheit noch nicht erkannt. Die API-Stunden müssen vor einem Vergleich zuverlässig interpretiert werden. Feldnamen aus Timesheet: <code>'+shiftbase_escape(', '.join(report['diagnostic']['nested_field_names'].get('Timesheet',[])))+'</code>.</div>')
+            h.append('<div class="flash err">Bei '+str(report['diagnostic']['missing_hour_units'])+' Zeiteinträgen fehlen weiterhin verlässlich auswertbare Stunden. Die vorhandenen Beginn-/Ende-/Pausenformate werden nicht geraten. Feldtypen eines Beispiel-Eintrags (keine Werte): <code>'+shiftbase_escape(json.dumps(report['diagnostic']['unknown_time_field_types'],ensure_ascii=False))+'</code>.</div>')
         h.append('<div class="table-wrap"><table><thead><tr><th>Fahrer</th><th>Shiftbase-ID</th><th>Shiftbase Std.</th><th>Abrechnung Std.</th><th>Differenz</th><th>Abwesenheiten</th><th>Hinweise</th></tr></thead><tbody>')
         for r in report['results']:
             fmt=lambda v: '–' if v is None else f'{v:.2f}'.replace('.',',')
+            def fmt_work(v):
+                if v is None: return '–'
+                mins = round(v*60)
+                return f'{fmt(v)} ({mins//60}:{mins%60:02d})' 
             desc='; '.join(f'{a["art"]}: {a["von"]}–{a["bis"]} ({a["status"]})' for a in r['absences']) or '–'
-            h.append('<tr>'+''.join('<td>'+shiftbase_escape(str(v))+'</td>' for v in (r['fahrer'],r['shiftbase_user_id'] or 'nicht zugeordnet',fmt(r['timesheet_hours']),fmt(r['payroll_hours']),fmt(r['difference']),desc,'; '.join(r['notes']) or 'OK'))+'</tr>')
+            h.append('<tr>'+''.join('<td>'+shiftbase_escape(str(v))+'</td>' for v in (r['fahrer'],r['shiftbase_user_id'] or 'nicht zugeordnet',fmt_work(r['timesheet_hours']),fmt(r['payroll_hours']),fmt(r['difference']),desc,'; '.join(r['notes']) or 'OK'))+'</tr>')
         h.append('</tbody></table></div>')
         h.append(f'<p><a class="btn small" href="{url_for("admin_shiftbase_abgleich_csv",year=year,month=month)}">CSV-Prüfbericht herunterladen</a></p></div>')
     h.append('<div class="card"><h2>Fahrer einmalig zuordnen</h2><p>Die ID muss aus Shiftbase stammen. Es erfolgt bewusst keine automatische Zuordnung nur anhand ähnlicher Namen.</p>')
