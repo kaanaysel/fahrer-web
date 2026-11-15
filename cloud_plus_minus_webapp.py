@@ -5382,27 +5382,32 @@ def _sb_preview_proposed_shift(original, current, delta_minutes, rest_rows,
 
 def _sb_preview_allocate_amount(original, current, max_abs_delta, direction,
                                 rest_rows, original_day_sum, current_day_sum, seed):
-    """Find a feasible quantity <= budget (monotone-enough binary search).
+    """Find a feasible change with a 15-minute NET duration, never fake minutes.
 
-    Every accepted result is individually validated after the search; an
-    infeasible amount is never included in the displayed month total.
+    Existing real Shiftbase durations may be irregular (e.g. 7:40). In that
+    case a +5 minute change to 7:45 or a -10 minute change to 7:30 is possible;
+    requiring a delta divisible by 15 would incorrectly exclude both. Only
+    the resulting proposed duration is constrained to a quarter-hour grid.
     """
-    # Do not fabricate precise minute-level timings to force an exact salary
-    # total. Gaps below five minutes remain explicitly unallocated.
-    lo, hi = 1, max_abs_delta // 5
-    best = None
-    best_minutes = 0
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        minutes = 5 * mid
-        suggestion = _sb_preview_proposed_shift(original, current, direction * minutes,
-                        rest_rows, original_day_sum, current_day_sum, seed)
+    old_net, _, _ = _sb_review_minutes(current['start'], current['end'],
+                                       current['break_minutes'])
+    if max_abs_delta < 1:
+        return 0, None
+    low = max(15, old_net - max_abs_delta) if direction < 0 else old_net + 1
+    high = min(480, old_net + max_abs_delta) if direction > 0 else old_net - 1
+    if high < low:
+        return 0, None
+    # At most six plausible options for the usual 90-minute per-round budget.
+    candidates = [net for net in range(((low + 14) // 15) * 15, high + 1, 15)
+                  if (net - old_net) * direction > 0]
+    for new_net in reversed(candidates) if direction > 0 else candidates:
+        amount = abs(new_net - old_net)
+        suggestion = _sb_preview_proposed_shift(
+            original, current, direction * amount, rest_rows,
+            original_day_sum, current_day_sum, seed)
         if suggestion is not None:
-            best, best_minutes = suggestion, minutes
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return best_minutes, best
+            return amount, suggestion
+    return 0, None
 
 
 def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net,
@@ -5415,7 +5420,8 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
     """
     result = {'kind': '', 'required_days': 0, 'candidates': [], 'note': ''}
     remaining_minutes = int(remaining_minutes)
-    if abs(remaining_minutes) < 5:
+    if abs(remaining_minutes) < 15:
+        result['note'] = ('Weniger als 15 Minuten offen – keine künstlichen Arbeitstage oder ' 'Minute-für-Minute-Anpassung. Beleg prüfen.')
         return result
     if remaining_minutes < 0:
         # These are existing, actually recorded days to AUDIT, not deletions.
@@ -5467,8 +5473,8 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
     candidates.sort(key=lambda d: (0 if d.weekday() in recorded_weekdays else 1,
                                    1 if d.weekday() == 5 else 0, d.day))
 
-    # Only whole, reasonably even days of 6 to 8 net hours can be suggested
-    # for *checking*. Never create an artificial two-hour leftover shift.
+    # Only quarter-hour, reasonably even days of 6 to 8 net hours can be
+    # suggested for *checking*. Never create an artificial two-hour shift.
     count = max((remaining_minutes + 479)//480, round(remaining_minutes/450))
     result['kind'] = 'check_missing'
     result['required_days'] = count
@@ -5483,10 +5489,11 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
                           'Arbeitstage anlegen.')
         return result
 
-    # Five-minute rounded visual checks; any rounding residual stays open.
-    step_total = remaining_minutes // 5
+    # Pure examination hint: quarter-hour hypothetical durations only.
+    # A remainder under 15 minutes is left open, never silently adjusted.
+    step_total = remaining_minutes // 15
     base, extra = divmod(step_total, count)
-    durations = [(base + (1 if i < extra else 0))*5 for i in range(count)]
+    durations = [(base + (1 if i < extra else 0))*15 for i in range(count)]
     if min(durations) < 360 or max(durations) > 480:
         result['note'] = 'Keine gleichmäßigen 6–8-Stunden-Tage für diesen Rest möglich.'
         return result
@@ -5504,6 +5511,15 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
                      + _sb_timedelta(minutes=minutes + pause)).strftime('%H:%M')
         tentative = {'day': day.isoformat(), 'start': '08:00', 'end': end_clock,
                      'deleted': False}
+        # Conservative 48-hour cap within the available calendar-week window.
+        # Adjacent months / other employers are NOT fully covered here.
+        week_key = day.isocalendar()[:2]
+        weekly = sum(known_daily_net.get(d, 0) for d in known_daily_net
+                     if shiftbase_date.fromisoformat(d).isocalendar()[:2] == week_key)
+        weekly += sum(x['minutes'] for x in nominated
+                      if shiftbase_date.fromisoformat(x['day']).isocalendar()[:2] == week_key)
+        if weekly + minutes > 48 * 60:
+            continue
         if _sb_rest_violation(projected + [tentative]) is not None:
             continue
         projected.append(tentative)
@@ -5653,48 +5669,78 @@ def _sb_hypothetical_preview(source):
     if eligible_days:
         desired = (sum(daily_net[d] for d in eligible_days) +
                    direction * requested_minutes) / len(eligible_days)
-        target_minutes = max(360, min(480, 5*round(desired/5)))
-        result['balance_note'] = ('Gleichmäßige Planung: kürzere Tage werden bei '
-            'Mehrstunden zuerst berücksichtigt, längere bei Minderstunden. '
-            'Richtwert für neue Vorschläge: 6–8 Netto-Stunden je Arbeitstag. '
-            'Vorhandene Istzeiten bleiben bis zur nachgewiesenen Korrektur gültig.')
+        # Round the shared target in the SAME direction as the correction.
+        # Rounding to nearest could wrongly stop, e.g. 20 x 8:00 at a 158h
+        # payroll target (7:54 average) would snap back to 8:00 and leave hours open.
+        quarters = int(desired // 15)
+        if direction > 0 and desired % 15 > 1e-9:
+            quarters += 1
+        target_minutes = max(360, min(480, 15*quarters))
+        result['balance_note'] = ('Rechenvorschläge: Netto-Dauern nur in 15-Minuten-Schritten, '
+            'mit moderater, gleichmäßiger Tagesvariation und bevorzugt 6–8 Netto-Stunden. '
+            'Der Monatsrest bleibt sichtbar. Für mehr als 8 Stunden fehlt der Nachweis '
+            'des gesetzlichen Ausgleichszeitraums. Keine Uhrzeit und keine Pause '
+            'wird durch diese Berechnung zu einer nachgewiesenen Istzeit.')
+    # Alternating 15-minute targets avoid the same synthetic duration on each
+    # day without introducing unrealistic 3-hour or 9-hour outliers. A target
+    # below an already recorded shift cannot trigger a reduction when the
+    # payroll gap requires an increase (and vice versa).
+    stable_offset = int.from_bytes(_sha256(
+        (str(source['uid'])+'|'+str(source['year'])+'|'+str(source['month']))
+        .encode('utf-8')).digest()[:2], 'big') % 8
+    offsets = (-15, 0, 15, 0, 15, -15, 0, 0)
+    day_targets = {day: max(360, min(480,
+        target_minutes + offsets[(i+stable_offset)%len(offsets)]))
+        for i, day in enumerate(eligible_days)}
+    # Existing shifts can already exceed the conservative 8h planning range;
+    # they are not shortened or extended merely for aesthetic variation.
 
-    # 16 bounded rounds, max 90 minutes adjustment per shift and round.
+    # Two passes: stable varied quarter-hour targets, then exact-target balancing.
+    # Conservatively avoid any automatic 8h+ proposals with unverified long-term compensatory averages.
     # Existing day totals and all overlapping entries participate in every
     # rest-time check. Never override a failed feasibility check.
-    for _ in range(16):
-        if remaining < 5:
-            break
-        progress = False
-        order = sorted(eligible,
-            key=lambda eid: ((current_day_sum[originals[eid]['day']]
-                              if direction > 0 else
-                              -current_day_sum[originals[eid]['day']]),
-                             originals[eid]['day'], eid))
-        for eid in order:
-            if remaining < 5:
+    for pass_no in range(2):
+        for _ in range(16):
+            if remaining < 1:
                 break
-            day = originals[eid]['day']
-            day_total = current_day_sum[day]
-            room = (target_minutes - day_total if direction > 0
-                    else day_total - target_minutes)
-            if room < 5:
-                continue
-            budget = min(remaining, 5*(room//5), 90)
-            original, current = originals[eid], entries[eid]
-            amount, changed = _sb_preview_allocate_amount(
-                original, current, budget, direction, rest_rows,
-                daily_net[day], day_total, seeds[eid])
-            if not amount or changed is None:
-                continue
-            remaining -= amount
-            progress = True
-            current_day_sum[day] += direction * amount
-            entries[eid] = {**changed, '_preview_id': eid}
-            rest_rows = [entries[eid] if r.get('_preview_id') == eid else r
-                         for r in rest_rows]
-        if not progress:
-            break
+            progress = False
+            order = sorted(eligible,
+                key=lambda eid: ((current_day_sum[originals[eid]['day']]
+                                  if direction > 0 else
+                                  -current_day_sum[originals[eid]['day']]),
+                                 originals[eid]['day'], eid))
+            for eid in order:
+                if remaining < 1:
+                    break
+                day = originals[eid]['day']
+                day_total = current_day_sum[day]
+                limit = day_targets[day] if pass_no == 0 else target_minutes
+                room = (limit - day_total if direction > 0
+                        else day_total - limit)
+                if room <= 0:
+                    continue
+                if direction > 0:
+                    week = shiftbase_date.fromisoformat(day).isocalendar()[:2]
+                    weekly = sum(minutes for d, minutes in current_day_sum.items()
+                                 if shiftbase_date.fromisoformat(d).isocalendar()[:2] == week)
+                    room = min(room, 48 * 60 - weekly)
+                if room <= 0:
+                    continue
+                budget = min(remaining, room, 90)
+                original, current = originals[eid], entries[eid]
+                amount, changed = _sb_preview_allocate_amount(
+                    original, current, budget, direction, rest_rows,
+                    daily_net[day], day_total, seeds[eid])
+                if not amount or changed is None:
+                    continue
+                remaining -= amount
+                progress = True
+                current_day_sum[day] += direction * amount
+                entries[eid] = {**changed, '_preview_id': eid}
+                rest_rows = [entries[eid] if r.get('_preview_id') == eid else r
+                             for r in rest_rows]
+            if not progress:
+                break
 
     allocated = 0
     for eid, original in originals.items():
@@ -5709,6 +5755,10 @@ def _sb_hypothetical_preview(source):
         delta = new_minutes - old_minutes
         if not delta:
             continue
+        # Only the generated proposals are quarter-hour aligned; unchanged
+        # original Shiftbase punches remain untouched, even if non-rounded.
+        if new_minutes % 15:
+            raise ShiftbaseIntegrationError('Interner Fehler: Vorschlag ist nicht im 15-Minuten-Takt.')
         allocated += delta
         result['days'][eid] = {
             'new_start': current['start'], 'new_end': current['end'],
@@ -5722,8 +5772,10 @@ def _sb_hypothetical_preview(source):
     if remaining:
         if not result['blocked_reason']:
             result['blocked_reason'] = ('Ein Teil der Differenz bleibt unverplant: '
-                'gleichmäßige Tageslängen, Ruhezeiten und die vorgeschriebenen '
-                'Pausen erlauben keinen weiteren vorsichtigen Vorschlag.')
+                '15-Minuten-Dauern, gleichmäßige Tageslängen, die konservative '
+                '48-Stunden-Wochengrenze (soweit Monatsdaten vorliegen), '
+                'Ruhezeiten und vorgeschriebene Pausen erlauben keinen weiteren '
+                'vorsichtigen Vorschlag. Das ist kein Nachweis fehlender Arbeit.')
         result['day_review'] = _sb_preview_day_review(
             source, direction*remaining, rest_rows, daily_net,
             sick_days | vacation_days)
@@ -5906,7 +5958,6 @@ def admin_shiftbase_pruefvorschau():
         h.append('<span class="sb-day-diff">'+esc(delta_summary)+'</span><span class="sb-day-status">'+esc(status_summary)+'</span></div>')
     h.append('<input type="hidden" name="confirmed_batch" value="actual_work_verified_using_records">')
     h.append('<div class="sb-batch-actions"><button class="primary" type="submit" name="mode" value="start"'+('' if writable else ' disabled')+'>Geprüfte Istzeiten senden · mit Fortschrittsanzeige</button>')
-    h.append('<button type="submit" name="mode" value="queue" style="margin-top:8px;background:#edf4ff;color:#143c76"'+('' if writable else ' disabled')+'>Für gemeinsamen Monatsversand vormerken</button>')
     h.append('<p class="sb-muted"><span id="sb-changed-count">Änderungen werden gezählt …</span> Nur die nach Talex überprüften Istzeiten bestätigen. Nicht geänderte Schichten und reine Lohnabweichungen werden niemals gesendet.</p></div>')
     h.append('</form>')
     h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_transfer_dashboard',year=year,month=month)+'">Alle Fahrer / Gesamtversand</a></p>')
@@ -6856,28 +6907,73 @@ def _sb_queue_form_certified(source, form, did, year, month):
     return corrections
 
 
+def _sb_create_transfer_run_direct(prepared, year, month):
+    """Atomic, immediate transfer-run creation from freshly checked records.
+
+    The discontinued 'Vormerken' workflow is NOT used. Durable transfer
+    tasks and sources remain essential for progress and safe interruption
+    recovery; no API PUT is performed in this function.
+    """
+    if not prepared or len(prepared) > 150:
+        raise ShiftbaseIntegrationError('Keine geprüften Änderungen ausgewählt.')
+    ids = [int(did) for did, _, _ in prepared]
+    if len(set(ids)) != len(ids):
+        raise ShiftbaseIntegrationError('Fahrer wurde doppelt ausgewählt.')
+    run_id = secrets.token_hex(16)
+    with db_conn() as conn:
+        _sb_queue_schema(conn)
+        ordinal = 0
+        # Preflight all tasks BEFORE creating any part of the transfer run.
+        for did, source, updates in prepared:
+            if (int(source['driver_id']) != did or
+                    int(source['year']) != year or int(source['month']) != month):
+                raise ShiftbaseIntegrationError('Falscher Mitarbeiter oder Monat.')
+            _sb_write_access_checked(source)
+            if not 1 <= len(updates) <= 40:
+                raise ShiftbaseIntegrationError('Ungültige Anzahl geprüfter Änderungen.')
+            if len({str(u['timesheet_id']) for u in updates}) != len(updates):
+                raise ShiftbaseIntegrationError('Doppelte Timesheet-ID.')
+            for u in updates:
+                if not re.fullmatch(r'[0-9]{1,20}',str(u['timesheet_id'])):
+                    raise ShiftbaseIntegrationError('Ungültige Timesheet-ID.')
+            active = conn.execute(
+                'SELECT t.id FROM shiftbase_transfer_tasks t '
+                'JOIN shiftbase_transfer_runs r ON t.run_id=r.id '
+                'WHERE t.driver_id=? AND r.year=? AND r.month=? '
+                'AND t.state NOT IN (?,?,?) LIMIT 1',
+                (did,year,month,'confirmed','uncertain','error')).fetchone()
+            if active:
+                raise ShiftbaseIntegrationError('Für '+str(source['name'])+
+                    ' läuft bereits eine Übertragung. Vorhandene Fortschrittsseite öffnen.')
+        conn.execute('INSERT INTO shiftbase_transfer_runs(id,year,month,created_at,state,message) '
+                     'VALUES(?,?,?,?,?,?)',
+                     (run_id,year,month,now_iso(),'ready','Wartet auf sichere Übertragung'))
+        for did, source, updates in prepared:
+            conn.execute('INSERT INTO shiftbase_transfer_sources(run_id,driver_id,source_json) '
+                         'VALUES(?,?,?)',
+                         (run_id,did,json.dumps(source,default=str,ensure_ascii=False)))
+            for item in updates:
+                ordinal += 1
+                conn.execute('INSERT INTO shiftbase_transfer_tasks '
+                    '(id,run_id,ordinal,driver_id,shiftbase_user_id,timesheet_id,baseline_json,target_json,'
+                    'signature,state,message,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (secrets.token_hex(16),run_id,ordinal,did,str(source['uid']),
+                     str(item['timesheet_id']),
+                     json.dumps(item['before'],ensure_ascii=False),
+                     json.dumps(item['after'],ensure_ascii=False),
+                     item['signature'],'pending','Wartet auf Einzelprüfung',now_iso()))
+        conn.commit()
+    return run_id
+
+
 def _sb_stage_review_impl():
     did,year,month = _sb_verified_post_scope(request.form)
-    mode = str(request.form.get('mode','start'))
-    if mode not in ('start','queue'):
-        abort(400)
     try:
+        if request.form.get('mode','start') != 'start':
+            raise ShiftbaseIntegrationError('Die Vormerkfunktion ist abgeschaltet. Bitte direkt senden.')
         source = _sb_review_source(did,year,month)
         corrections = _sb_queue_form_certified(source,request.form,did,year,month)
-        with db_conn() as conn:
-            _sb_queue_schema(conn)
-            # Staged records are durable, specific to the reviewed user/month.
-            conn.execute('DELETE FROM shiftbase_review_queue WHERE driver_id=? AND year=? AND month=?',
-                         (did,year,month))
-            conn.execute('INSERT INTO shiftbase_review_queue '
-                         '(driver_id,year,month,shiftbase_user_id,source_json,corrections_json,created_at) '
-                         'VALUES(?,?,?,?,?,?,?)',
-                         (did,year,month,source['uid'],json.dumps(source,default=str,ensure_ascii=False),
-                          json.dumps(corrections,ensure_ascii=False),now_iso()))
-            conn.commit()
-        if mode == 'queue':
-            return redirect(url_for('admin_shiftbase_transfer_dashboard',year=year,month=month))
-        run_id = _sb_create_transfer_run([did],year,month)
+        run_id = _sb_create_transfer_run_direct([(did,source,corrections)],year,month)
         return redirect(url_for('admin_shiftbase_transfer_view',run_id=run_id,autostart=1))
     except (ShiftbaseIntegrationError,ValueError,TypeError) as exc:
         session['shiftbase_direct_result'] = 'Keine Übertragung: '+str(exc)
@@ -6891,61 +6987,6 @@ def admin_shiftbase_stage_review():
     return _sb_stage_review_impl()
 
 
-def _sb_create_transfer_run(driver_ids, year, month):
-    # Everything in one transaction: never dispatch tasks from unconfirmed data.
-    ordered = list(dict.fromkeys(int(x) for x in driver_ids))
-    if not ordered or len(ordered) > 150:
-        raise ShiftbaseIntegrationError('Bitte zwischen 1 und 150 Fahrer auswählen.')
-    run_id=secrets.token_hex(16)
-    with db_conn() as conn:
-        _sb_queue_schema(conn)
-        stage_rows=[]
-        for did in ordered:
-            active = conn.execute('SELECT t.id FROM shiftbase_transfer_tasks t '
-                                  'JOIN shiftbase_transfer_runs r ON r.id=t.run_id '
-                                  'WHERE t.driver_id=? AND r.year=? AND r.month=? '
-                                  'AND t.state NOT IN (?,?,?) LIMIT 1',
-                                  (did,year,month,'confirmed','uncertain','error')).fetchone()
-            if active:
-                raise ShiftbaseIntegrationError('Für Fahrer '+str(did)+' läuft bereits eine Übertragung. Bitte vorhandene Fortschrittsseite fortsetzen.')
-            record = conn.execute('SELECT * FROM shiftbase_review_queue '
-                                  'WHERE driver_id=? AND year=? AND month=?',(did,year,month)).fetchone()
-            if not record:
-                raise ShiftbaseIntegrationError('Für Fahrer '+str(did)+' gibt es keine zuvor bestätigten Istzeit-Korrekturen.')
-            src=json.loads(record['source_json'])
-            if int(src['driver_id'])!=did or int(src['year'])!=year or int(src['month'])!=month or str(src['uid'])!=str(record['shiftbase_user_id']):
-                raise ShiftbaseIntegrationError('Ungültiger vorbereiteter Prüfdatensatz.')
-            _sb_write_access_checked(src)
-            try:
-                created=datetime.fromisoformat(str(record['created_at']))
-                if (datetime.now(timezone.utc)-created).total_seconds()>86400:
-                    raise ShiftbaseIntegrationError('Eine geprüfte Vormerkung ist älter als 24 Stunden. Bitte neu prüfen.')
-            except (ValueError,TypeError) as exc:
-                raise ShiftbaseIntegrationError('Ungültige Prüfzeit der Vormerkung.') from exc
-            updates=json.loads(record['corrections_json'])
-            if not updates or len(updates)>200:
-                raise ShiftbaseIntegrationError('Keine gültigen geprüften Änderungen für '+str(did)+'.')
-            stage_rows.append((did,src,updates))
-        conn.execute('INSERT INTO shiftbase_transfer_runs(id,year,month,created_at,state,message) '
-                     'VALUES(?,?,?,?,?,?)',(run_id,year,month,now_iso(),'ready','Wartet auf Übertragung'))
-        ordinal=0
-        for did,src,updates in stage_rows:
-            conn.execute('INSERT INTO shiftbase_transfer_sources(run_id,driver_id,source_json) VALUES(?,?,?)',
-                         (run_id,did,json.dumps(src,default=str,ensure_ascii=False)))
-            for item in updates:
-                eid=str(item['timesheet_id'])
-                if not re.fullmatch(r'[0-9]{1,20}',eid):
-                    raise ShiftbaseIntegrationError('Ungültige Timesheet-ID in der Vormerkung.')
-                ordinal+=1
-                conn.execute('INSERT INTO shiftbase_transfer_tasks '
-                             '(id,run_id,ordinal,driver_id,shiftbase_user_id,timesheet_id,baseline_json,target_json,'
-                             'signature,state,message,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                             (secrets.token_hex(16),run_id,ordinal,did,str(src['uid']),eid,
-                              json.dumps(item['before'],ensure_ascii=False),
-                              json.dumps(item['after'],ensure_ascii=False),item['signature'],
-                              'pending','Wartet auf Einzelprüfung',now_iso()))
-        conn.commit()
-    return run_id
 
 
 @app.get('/admin/shiftbase/transfer/overview')
@@ -6956,9 +6997,6 @@ def admin_shiftbase_transfer_dashboard():
         _sb_queue_schema(conn)
         local=_sb_local_month(conn,year,month)
         mapping=_sb_mapping(conn)
-        stages={int(r['driver_id']):r for r in conn.execute(
-            'SELECT driver_id,created_at,corrections_json FROM shiftbase_review_queue WHERE year=? AND month=?',
-            (year,month)).fetchall()}
         recent_runs=[dict(r) for r in conn.execute(
             'SELECT id,year,month,created_at,state FROM shiftbase_transfer_runs '
             'WHERE year=? AND month=? ORDER BY created_at DESC LIMIT 8',(year,month)).fetchall()]
@@ -6968,11 +7006,24 @@ def admin_shiftbase_transfer_dashboard():
 .sb-overview{max-width:1140px;margin:auto}.sb-overview .sb-toolbar{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin:12px 0}
 .sb-overview .sb-toolbar button,.sb-overview .sb-toolbar a{width:auto}.sb-overview table{min-width:690px}
 .sb-overview .sb-fine{font-size:12px;color:#667085}.sb-overview .sb-ok{color:#067647;font-weight:800}
-.sb-overview .sb-pending{color:#b54708;font-weight:750}.sb-overview input[type=checkbox]{width:18px;height:18px}
+.sb-overview input[type=checkbox]{width:18px;height:18px}
 .sb-overview .sb-cell{max-width:350px;overflow-wrap:break-word}
+.sb-overview tr.sb-match td,.sb-overview tr.sb-match:hover td{background:#eaf8ef!important}
+.sb-overview tr.sb-mismatch td,.sb-overview tr.sb-mismatch:hover td{background:#fff0f0!important}
+.sb-overview tr.sb-unknown td,.sb-overview tr.sb-unknown:hover td{background:#fff9e9!important}
 </style>''',
        '<div class="sb-overview"><div class="card"><h2>Shiftbase – Monatsübersicht für alle Fahrer</h2>',
-       '<p>Du kannst einzelne oder alle zugeordneten Fahrer auswählen. Der Monatsdatenabruf wird für die ausgewählten Fahrer zusammengefasst; die Vorschläge werden danach je Fahrer separat berechnet. <b>An Shiftbase sollen ausschließlich mit Arbeitszeitnachweisen abgeglichene Zeitkorrekturen gehen; Vorschläge allein sind kein Nachweis.</b></p>',
+       '<p>Du kannst einzelne oder alle zugeordneten Fahrer auswählen. Der Monatsdatenabruf wird für die ausgewählten Fahrer zusammengefasst; die Vorschläge werden danach je Fahrer separat berechnet. <b>Rechenvorschläge sind keine nachgewiesenen Istzeiten.</b></p>',
+       '<details class="sb-hint"><summary><b>Arbeitszeitregeln und Grenzen der automatischen Planung anzeigen</b></summary>'
+       '<p><b>ArbZG §§ 3–5:</b> regulär bis 8 Netto-Stunden je Werktag; bis 10 nur mit gesetzlichem Ausgleich, den eine einzelne Monatsansicht nicht vollständig nachweist. '
+       'Mehr als 6 Netto-Stunden: mindestens 30 Minuten echte Pause; mehr als 9 Stunden: mindestens 45 Minuten, in Abschnitten von mindestens 15 Minuten. '
+       'Nicht länger als 6 Stunden ohne echte Pause. Zwischen Schichten grundsätzlich 11 Stunden ununterbrochene Ruhe. '
+       'Die Cloud plant neue Netto-Dauern nur in 15-Minuten-Schritten und konservativ höchstens 8 Stunden pro Tag bzw. 48 Stunden je im Monat sichtbarer Kalenderwoche.</p>'
+       '<p>Die Lage echter Pausen, Ausgleichszeiträume, andere Arbeitsverhältnisse und arbeitsfreie Sonntage/Feiertage '
+       'kann die Cloud aus einem Monat nicht vollständig nachweisen. Für Verkehrsbetriebe gibt es Ausnahmen, einschließlich '
+       'Ersatzruhetagen, die nicht automatisch vorausgesetzt werden. '
+       '<a href="https://www.gesetze-im-internet.de/arbzg/" target="_blank" rel="noopener noreferrer">Gesetzestext (ArbZG)</a>. '
+       'Unveränderte Originalschichten werden nicht auf Viertelstunden umgeschrieben.</p></details>',
        '<form action="'+url_for('admin_shiftbase_transfer_dashboard')+'" method="get" class="actions" id="sb-month-filter">',
        '<label>Jahr<input name="year" type="number" min="2020" max="2100" value="'+str(year)+'" style="width:110px"></label>',
        '<label>Monat<select name="month" style="width:155px">'+''.join('<option value="'+str(m)+'"'+(' selected' if m==month else '')+'>'+MONATE[m]+'</option>' for m in range(1,13))+'</select></label>',
@@ -6980,28 +7031,20 @@ def admin_shiftbase_transfer_dashboard():
        '<p>'+str(len(eligible))+' aktive, eindeutig zugeordnete Fahrer in dieser Übersicht. Alle übrigen Mitarbeiter bleiben ausgeschlossen, bis sie korrekt zugeordnet sind.</p>',
        '<label>Fahrer suchen<input type="search" id="sb-search" placeholder="Name eingeben …" style="max-width:380px"></label>',
        '<div class="sb-toolbar"><button type="button" id="sb-all" class="primary">Alle auswählen</button>',
-       '<button type="button" id="sb-confirmed">Alle vorgemerkten auswählen</button>',
        '<button type="button" id="sb-none">Auswahl aufheben</button>',
        '<button type="button" id="sb-preview-all" class="primary">Vorschläge für ALLE Fahrer erstellen</button>',
        '<button type="button" id="sb-preview">Vorschläge für Auswahl erstellen</button></div>',
        '<div id="sb-read-progress" role="status" class="sb-fine">Noch keine Vorschau geladen.</div>',
-       '<form id="sb-run-form" method="post" action="'+url_for('admin_shiftbase_transfer_start')+'">',
-       '<input type="hidden" name="csrf_token" value="'+esc(_sb_csrf_token())+'">',
-       '<input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">',
-       '<div class="table-wrap"><table><thead><tr><th>Auswahl</th><th>Fahrer</th><th>Abrechnung</th><th>Vorschau / Differenz</th><th>Vorgemerkte Korrekturen</th><th>Aktion</th></tr></thead><tbody>']
+       '<div class="table-wrap"><table><thead><tr><th>Auswahl</th><th>Fahrer</th><th>Abrechnung</th><th>Shiftbase / Differenz</th><th>Aktion</th></tr></thead><tbody>']
     for driver in eligible:
-        did=int(driver['driver_id']); stage=stages.get(did)
-        try:count=len(json.loads(stage['corrections_json'])) if stage else 0
-        except (ValueError,TypeError):count=0
+        did=int(driver['driver_id'])
         preview=url_for('admin_shiftbase_pruefvorschau',year=year,month=month,driver_id=did)
-        h.append('<tr data-driver="'+str(did)+'"><td><input type="checkbox" name="driver_id" value="'+str(did)+'" data-ready="'+('1' if count else '0')+'" aria-label="'+esc(driver['name'])+' wählen"></td>'
+        h.append('<tr data-driver="'+str(did)+'"><td><input type="checkbox" name="driver_id" value="'+str(did)+'" aria-label="'+esc(driver['name'])+' wählen"></td>'
                  '<td><b>'+esc(driver['name'])+'</b><div class="sb-fine">Shiftbase-ID '+esc(mapping[did])+'</div></td>'
                  '<td>'+esc(_sb_dayview_hm(driver['payroll_hours']) if driver['payroll_hours'] is not None else '–')+'</td>'
                  '<td class="sb-cell" data-preview="'+str(did)+'">Noch nicht berechnet</td>'
-                 '<td>'+('<span class="sb-ok">'+str(count)+' geprüft / vorgemerkt</span>' if count else '<span class="sb-pending">Noch nicht vorgemerkt</span>')+'</td>'
                  '<td><a href="'+esc(preview)+'">Zeiten prüfen</a></td></tr>')
-    h.append('</tbody></table></div><p class="sb-fine">Bereits einzeln geprüfte und vorgemerkte Änderungen können hier erneut ausgewählt und gesendet werden.</p>'
-             '<button class="primary" id="sb-launch" type="submit" style="max-width:520px">Bereits vorgemerkte Istzeiten senden</button></form>')
+    h.append('</tbody></table></div><p class="sb-fine">Grün: Abrechnung und Shiftbase-Ist stimmen überein. Rot: Abweichung. Gelb: Daten nicht eindeutig abrufbar. Die Ampel erscheint nach dem Berechnen der Vorschau.</p>')
     h.append('<form id="sb-bulk-review-form" action="'+url_for('admin_shiftbase_bulk_review')+'" method="post" style="margin-top:20px">'
              '<input type="hidden" name="csrf_token" value="'+esc(_sb_csrf_token())+'">'
              '<input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">'
@@ -7016,7 +7059,6 @@ def admin_shiftbase_transfer_dashboard():
              '<div id="sb-bulk-review-count" class="sb-fine"></div>'
              '<div class="actions" style="margin-top:14px">'
              '<button type="submit" name="mode" value="start" class="primary" style="width:auto">Geprüfte Istzeiten direkt senden · Fortschrittsanzeige</button>'
-             '<button type="submit" name="mode" value="queue" style="width:auto">Änderungen gemeinsam vormerken</button>'
              '</div></div></form>')
     h.append(r'''<script>
 (function(){
@@ -7038,8 +7080,28 @@ const checks=()=>Array.from(root.querySelectorAll('input[name="driver_id"]:check
 const boxes=()=>Array.from(root.querySelectorAll('tr[data-driver] input[name="driver_id"]'));
 root.querySelector('#sb-all').onclick=()=>boxes().forEach(x=>x.checked=true);
 root.querySelector('#sb-none').onclick=()=>boxes().forEach(x=>x.checked=false);
-root.querySelector('#sb-confirmed').onclick=()=>boxes().forEach(x=>x.checked=x.dataset.ready==='1');
 const progress=root.querySelector('#sb-read-progress');
+function paintDiff(did,minutes){
+ const row=root.querySelector('tr[data-driver="'+did+'"]');
+ if(!row)return;
+ row.classList.remove('sb-match','sb-mismatch','sb-unknown');
+ row.classList.add(minutes===null||minutes===undefined?'sb-unknown':
+   Math.abs(minutes)<1?'sb-match':'sb-mismatch');
+}
+async function readTrafficLights(){
+ try{
+  const params=new URLSearchParams({csrf_token:'CSRF',year:'YYYY',month:'MM'});
+  const res=await fetch('MONTHSTATUS',{method:'POST',body:params,credentials:'same-origin',cache:'no-store'});
+  const data=await res.json();if(!res.ok)throw Error(data.error||'Stundenabruf fehlgeschlagen');
+  for(const driver of data.drivers){
+   const cell=root.querySelector('[data-preview="'+driver.driver_id+'"]');
+   if(cell&&cell.textContent==='Noch nicht berechnet') cell.textContent=driver.summary;
+   paintDiff(driver.driver_id,driver.difference_minutes);
+  }
+  if(!loaded)progress.textContent='Monatsstunden aktualisiert. Du kannst jetzt Vorschläge für alle oder ausgewählte Fahrer erstellen.';
+ }catch(e){if(!loaded)progress.textContent='Stundenstatus konnte nicht geladen werden: '+e.message;}
+}
+
 const result=document.getElementById('sb-bulk-review-results');
 const reviewForm=document.getElementById('sb-bulk-review-form');
 const counter=document.getElementById('sb-bulk-review-count');
@@ -7085,6 +7147,7 @@ async function load(all){
   const data=await response.json();if(!response.ok)throw Error(data.error||'Abruf fehlgeschlagen');
   for(const item of data.drivers){
    const cell=root.querySelector('[data-preview="'+item.driver_id+'"]');if(cell)cell.textContent=item.summary||item.error||'Nicht verfügbar';
+   paintDiff(item.driver_id,item.error?null:item.difference_minutes);
    if(item.error){result.insertAdjacentHTML('beforeend','<p class="flash err">'+esc(item.name)+': '+esc(item.error)+'</p>');continue;}
    const panel=document.createElement('details');panel.className='sb-driver-review';panel.dataset.did=item.driver_id;panel.dataset.blocked=item.blocked?'1':'0';
    panel.style.cssText='border:1px solid #d9dee8;border-radius:12px;padding:12px;margin:10px 0;background:#fff';
@@ -7118,11 +7181,11 @@ async function load(all){
  }catch(e){progress.textContent='Vorschau fehlgeschlagen: '+e.message;result.innerHTML='';}
  finally{buttons.forEach(x=>x.disabled=false);}
 }
+readTrafficLights();
 root.querySelector('#sb-preview').onclick=()=>load(false);
 root.querySelector('#sb-preview-all').onclick=()=>load(true);
 root.querySelector('#sb-expand-proposals').onclick=()=>result.querySelectorAll('.sb-driver-review').forEach(x=>x.open=true);
 root.querySelector('#sb-collapse-proposals').onclick=()=>result.querySelectorAll('.sb-driver-review').forEach(x=>x.open=false);
-root.querySelector('#sb-run-form').addEventListener('submit',e=>{if(!checks().length){e.preventDefault();progress.textContent='Bitte zuerst mindestens einen vorgemerkten Fahrer auswählen.';}});
 reviewForm.addEventListener('submit',e=>{
  recalc();const targets=Array.from(result.querySelectorAll('input.sb-driver-send:not(:disabled)'));
  if(!loaded||!targets.length){
@@ -7137,11 +7200,11 @@ reviewForm.addEventListener('submit',e=>{
   }
  }
  reviewForm.querySelectorAll('button[type=submit]').forEach(x=>x.disabled=true);
- const submit=document.createElement('input');submit.type='hidden';submit.name='mode';submit.value=e.submitter&&e.submitter.value==='queue'?'queue':'start';reviewForm.appendChild(submit);
+ const submit=document.createElement('input');submit.type='hidden';submit.name='mode';submit.value='start';reviewForm.appendChild(submit);
  const userAction=document.createElement('input');userAction.type='hidden';userAction.name='reviewed_send_action';userAction.value='administrator_clicked_reviewed_times';reviewForm.appendChild(userAction);
 });
 })();
-</script>'''.replace('CSRF',esc(_sb_csrf_token())).replace('YYYY',str(year)).replace('MM',str(month)).replace('BULKPREVIEW',url_for('admin_shiftbase_bulk_preview')))
+</script>'''.replace('CSRF',esc(_sb_csrf_token())).replace('YYYY',str(year)).replace('MM',str(month)).replace('BULKPREVIEW',url_for('admin_shiftbase_bulk_preview')).replace('MONTHSTATUS',url_for('admin_shiftbase_month_status')))
     if recent_runs:
         h.append('<h3>Letzte Übertragungen wieder öffnen</h3><p class="sb-fine">Bei Browserabbruch die bisherige Übertragung über ihren Link fortsetzen. Es werden keine PUTs automatisch wiederholt.</p>')
         for r in recent_runs:
@@ -7177,6 +7240,52 @@ def _sb_bulk_driver_ids(form):
     if not set(ids).issubset(eligible):
         raise ShiftbaseIntegrationError('Nur aktive, eindeutig zugeordnete Fahrer sind erlaubt.')
     return ids
+
+
+@app.post('/admin/shiftbase/transfer/month-status')
+@admin_login_required
+def admin_shiftbase_month_status():
+    """Lightweight READ-ONLY color status for every mapped driver this month.
+
+    One combined Shiftbase GET, no hypothetical time allocation, no PUT.
+    Unknown/unreadable months are explicitly neutral, never shown as matching.
+    """
+    _sb_verified_post_csrf(request.form)
+    try:
+        year=int(request.form.get('year',0)); month=int(request.form.get('month',0))
+        if not 2020 <= year <= 2100 or not 1 <= month <= 12:
+            raise ValueError('Ungültiger Monat')
+        with db_conn() as conn:
+            local=_sb_local_month(conn,year,month)
+            mapping=_sb_mapping(conn)
+        start,end=_sb_month_window(year,month)
+        times=_shiftbase_get_all('timesheets',{'min_date':start,'max_date':end})
+        result=[]
+        for driver in local:
+            did=int(driver['driver_id'])
+            if did not in mapping:
+                continue
+            payroll=driver['payroll_hours']
+            record={'driver_id':did,'difference_minutes':None,'summary':'Keine vollständigen Stundenangaben'}
+            try:
+                rows=_sb_dayview_entries(times,str(mapping[did]),year,month)
+                if payroll is None or any(r['hours'] is None for r in rows):
+                    record['summary']='Abrechnungs- oder Schichtstunden fehlen – bitte prüfen'
+                else:
+                    total=sum((Decimal(str(r['hours'])) for r in rows),Decimal('0'))
+                    delta=Decimal(str(payroll))-total
+                    if not total.is_finite() or total<0 or not delta.is_finite():
+                        raise ValueError('Ungültige Stunden')
+                    record['difference_minutes']=int((delta*Decimal(60)).quantize(Decimal('1')))
+                    record['summary']='Ist '+_sb_dayview_hm(total)+' · Lohn '+_sb_dayview_hm(payroll)+' · Abweichung '+_sb_signed_hm(delta)
+            except (ValueError,InvalidOperation,TypeError):
+                record['summary']='Shiftbase-Stunden unvollständig – bitte prüfen'
+            result.append(record)
+        response=make_response(jsonify({'drivers':result,'year':year,'month':month}))
+        response.headers['Cache-Control']='private, no-store'
+        return response
+    except (ValueError,TypeError,ShiftbaseIntegrationError) as exc:
+        return jsonify({'error':str(exc)}),422
 
 
 @app.post('/admin/shiftbase/transfer/bulk-preview')
@@ -7222,7 +7331,9 @@ def admin_shiftbase_bulk_preview():
                 if plan.get('day_review') and plan['day_review'].get('kind'):
                     summary += (' · '+str(plan['day_review']['required_days'])+
                                 ' mögliche Tage nur zur Belegprüfung')
+                delta_minutes = int(((source['payroll']-source['actual'])*Decimal(60)).quantize(Decimal('1'))) if source['payroll'] is not None else None
                 results.append({'driver_id':did,'name':source['name'],'summary':summary,
+                                'difference_minutes':delta_minutes,
                                 'blocked':blocked,'rows':rows,
                                 'balance_note':plan.get('balance_note',''),
                                 'day_review':plan.get('day_review')})
@@ -7257,7 +7368,8 @@ def admin_shiftbase_bulk_review():
             raise ShiftbaseIntegrationError('Bitte die geprüften Zeiten über die Schaltfläche der gemeinsamen Prüfansicht senden.')
         ids=_sb_bulk_driver_ids(request.form)
         mode=str(request.form.get('mode','start'))
-        if mode not in ('start','queue'): raise ValueError('Ungültiger Versandmodus')
+        if mode!='start':
+            raise ShiftbaseIntegrationError('Die Vormerkfunktion ist abgeschaltet. Bitte direkt senden.')
         snapshot=_sb_bulk_month_snapshot(year,month)
         prepared=[]
         for did in ids:
@@ -7267,28 +7379,7 @@ def admin_shiftbase_bulk_review():
             source=_sb_review_source(did,year,month,month_snapshot=snapshot)
             corrections=_sb_queue_form_certified(source,subform,did,year,month)
             prepared.append((did,source,corrections))
-        with db_conn() as conn:
-            _sb_queue_schema(conn)
-            for did,source,corrections in prepared:
-                active=conn.execute('SELECT t.id FROM shiftbase_transfer_tasks t '
-                         'JOIN shiftbase_transfer_runs r ON t.run_id=r.id '
-                         'WHERE t.driver_id=? AND r.year=? AND r.month=? '
-                         'AND t.state NOT IN (?,?,?) LIMIT 1',
-                         (did,year,month,'confirmed','uncertain','error')).fetchone()
-                if active:
-                    raise ShiftbaseIntegrationError('Für '+source['name']+' läuft bereits ein Versand.')
-                conn.execute('DELETE FROM shiftbase_review_queue WHERE driver_id=? AND year=? AND month=?',
-                             (did,year,month))
-                conn.execute('INSERT INTO shiftbase_review_queue '
-                     '(driver_id,year,month,shiftbase_user_id,source_json,corrections_json,created_at) '
-                     'VALUES(?,?,?,?,?,?,?)',
-                     (did,year,month,source['uid'],json.dumps(source,default=str,ensure_ascii=False),
-                      json.dumps(corrections,ensure_ascii=False),now_iso()))
-            conn.commit()
-        if mode=='queue':
-            flash(str(len(prepared))+' Fahrer gemeinsam mit geprüften Istzeiten vorgemerkt.','ok')
-            return redirect(url_for('admin_shiftbase_transfer_dashboard',year=year,month=month))
-        run_id=_sb_create_transfer_run(ids,year,month)
+        run_id=_sb_create_transfer_run_direct(prepared,year,month)
         return redirect(url_for('admin_shiftbase_transfer_view',run_id=run_id,autostart=1))
     except (ShiftbaseIntegrationError,ValueError,TypeError,KeyError) as exc:
         return base_page('Shiftbase – gemeinsame Prüfung fehlgeschlagen',
@@ -7320,19 +7411,14 @@ def admin_shiftbase_transfer_preview():
 @app.post('/admin/shiftbase/transfer/start')
 @admin_login_required
 def admin_shiftbase_transfer_start():
+    # Legacy bookmarked endpoint: the separate Vormerken queue was removed.
     _sb_verified_post_csrf(request.form)
-    try:
-        year=int(request.form.get('year',0));month=int(request.form.get('month',0))
-        if not 2020<=year<=2100 or not 1<=month<=12: raise ValueError()
-        raw=request.form.getlist('driver_id')
-        if not raw or len(raw)>150 or any(not re.fullmatch(r'[0-9]{1,12}',x) for x in raw):raise ValueError()
-        run_id=_sb_create_transfer_run([int(x) for x in raw],year,month)
-        return redirect(url_for('admin_shiftbase_transfer_view',run_id=run_id,autostart=1))
-    except (ShiftbaseIntegrationError,ValueError,TypeError) as exc:
-        return base_page('Shiftbase – Versand gesperrt',
-            '<div class="card"><h2>Kein Versand gestartet</h2><p>'+shiftbase_escape(str(exc))+
-            '</p><p>Nur zuvor geprüfte und vorgemerkte Istzeiten können in den Gesamtversand aufgenommen werden.</p>'
-            '<a href="'+url_for('admin_shiftbase_abgleich')+'">Zurück zur Übersicht</a></div>','shiftbase'),422
+    return base_page('Shiftbase – Direktversand',
+        '<div class="card"><h2>Bitte die direkte Monatsprüfung verwenden</h2>'
+        '<p>Die frühere Vormerkfunktion wurde entfernt. Neue Aufträge werden '
+        'nach der Arbeitszeitprüfung direkt mit Fortschrittsanzeige angelegt.</p>'
+        '<a href="'+url_for('admin_shiftbase_transfer_dashboard')+'">Zur Monatsübersicht</a></div>',
+        'shiftbase'),410
 
 
 def _sb_verified_post_csrf(form):
@@ -7648,13 +7734,6 @@ def _sb_task_dispatch_one(task):
                             break
                     conn.execute('UPDATE shiftbase_transfer_sources SET source_json=? WHERE run_id=? AND driver_id=?',
                                  (json.dumps(source,default=str,ensure_ascii=False),task['run_id'],task['driver_id']))
-                    # Remove the staged item only when ALL its tasks are confirmed.
-                    remaining=conn.execute('SELECT id FROM shiftbase_transfer_tasks '
-                                           'WHERE run_id=? AND driver_id=? AND state<>? LIMIT 1',
-                                           (task['run_id'],task['driver_id'],'confirmed')).fetchone()
-                    if not remaining:
-                        conn.execute('DELETE FROM shiftbase_review_queue WHERE driver_id=? AND year=? AND month=?',
-                                     (source['driver_id'],source['year'],source['month']))
                     conn.commit()
         except ShiftbaseIntegrationError as exc:
             _sb_task_transition(tid,'checking','uncertain',str(exc))
