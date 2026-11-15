@@ -7972,6 +7972,14 @@ def _sb_day_ops_table(conn):
     # Serialises simultaneous browser submissions across Render workers.
     conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS uq_shiftbase_day_ops_intent
                     ON shiftbase_day_operations(driver_id, day, action, timesheet_id)''')
+    # Atomic one-shot ticket across Render workers and PostgreSQL connections.
+    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_day_ops_test_slots (
+        shiftbase_user_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (shiftbase_user_id, action)
+    )''')
 
 
 def _sb_day_ops_enabled(action):
@@ -7989,6 +7997,44 @@ def _sb_day_ops_enabled(action):
             'SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED=1 setzen.')
     if os.environ.get('SHIFTBASE_MOCK_DIR', '').strip():
         raise ShiftbaseIntegrationError('Keine API-Schreiboperation im Demo-Modus.')
+
+
+def _sb_day_ops_experimental_available(source):
+    """Test one mapped Shiftbase user only, never the full employee population."""
+    return (os.environ.get('SHIFTBASE_DAY_OPS_EXPERIMENTAL_LIVE', '').strip() == '1'
+            and os.environ.get('SHIFTBASE_VERIFIED_WRITE_ENABLED', '').strip() == '1'
+            and re.fullmatch(r'[0-9]{1,20}', str(source.get('uid') or '')) is not None
+            and str(source.get('uid')) == os.environ.get('SHIFTBASE_DAY_OPS_TEST_USER_ID', '').strip()
+            and not os.environ.get('SHIFTBASE_MOCK_DIR', '').strip())
+
+
+def _sb_day_ops_execution(form, source, action):
+    """Check-only works out of the box. Live writes need explicit one-user opt-in."""
+    choice = str(form.get('day_submit_mode', '')).strip()
+    if choice not in ('check', 'live'):
+        raise ShiftbaseIntegrationError('Bitte zuerst „Nur prüfen“ oder „Echten Einzeltest“ wählen.')
+    did = int(source.get('driver_id') or 0)
+    uid = str(source.get('uid') or '')
+    if did < 1 or not re.fullmatch(r'[0-9]{1,20}', uid):
+        raise ShiftbaseIntegrationError('Keine eindeutige Shiftbase-Mitarbeiter-ID.')
+    with db_conn() as conn:
+        employee = conn.execute('SELECT id,is_active,is_disposition FROM drivers WHERE id=?', (did,)).fetchone()
+        mapping = _sb_mapping(conn)
+    if not employee or int(employee['is_active']) != 1 or int(employee['is_disposition'] or 0) != 0 \
+            or mapping.get(did) != uid or len(set(mapping.values())) != len(mapping):
+        raise ShiftbaseIntegrationError('Fahrer nicht eindeutig aktiv mit Shiftbase verknüpft.')
+    if choice == 'check':
+        return 'check'
+    if str(form.get('one_live_write', '')) != 'yes':
+        raise ShiftbaseIntegrationError('Für den einmaligen Live-Test zuerst das Kästchen am Formular setzen.')
+    # Preserve the same global user mapping/write guard as verified timesheet PUT.
+    _sb_write_access_checked(source)
+    if _sb_day_ops_experimental_available(source):
+        return 'experimental'
+    # The existing production flags still work if the account API format was
+    # actually verified. Never pretend this is true just to make a trial pass.
+    _sb_day_ops_enabled(action)
+    return 'verified'
 
 
 def _sb_day_ops_validate_date(source, raw):
@@ -8101,9 +8147,17 @@ def _sb_day_ops_write_native(method, path, payload):
         status, body=_sb_http_request(method, cfg['base']+path, headers, 20,
                                       payload=data, max_bytes=1_000_000)
     except HTTPError as exc:
+        # Show only JSON field names, NEVER error text or raw values (may contain PII).
+        keys=''
+        try:
+            parsed=json.loads(exc.read(4096).decode('utf-8'))
+            if isinstance(parsed,dict):
+                keys='; Antwortfelder: '+', '.join(sorted(str(k)[:32] for k in parsed.keys())[:8])
+        except (ValueError, UnicodeError, OSError):
+            pass
         raise ShiftbaseIntegrationError(
-            'Shiftbase '+method+' HTTP '+str(exc.code)+'. Keine automatische Wiederholung; '
-            'API-Felder prüfen, bevor eine weitere Aktion erfolgt.') from exc
+            'Shiftbase '+method+' HTTP '+str(exc.code)+keys+'. API-Schreibschema oder '
+            'Berechtigung prüfen; keine automatische Wiederholung.') from exc
     except (URLError,OSError,TimeoutError) as exc:
         raise ShiftbaseIntegrationError(
             'Verbindung beim '+method+' unklar. Vor einem neuen Schreibversuch direkt in Shiftbase prüfen.') from exc
@@ -8119,7 +8173,7 @@ def _sb_day_ops_write_native(method, path, payload):
     return status,result
 
 
-def _sb_day_ops_audit_start(source, day, action, proposed, proof, timesheet_id=''):
+def _sb_day_ops_audit_start(source, day, action, proposed, proof, timesheet_id='', experimental=False):
     with db_conn() as conn:
         _sb_day_ops_table(conn)
         rows=conn.execute('''SELECT id,state FROM shiftbase_day_operations
@@ -8132,6 +8186,27 @@ def _sb_day_ops_audit_start(source, day, action, proposed, proof, timesheet_id='
                 'Für diesen Tag und diese Aktion existiert bereits ein Übertragungsversuch. '
                 'Zuerst Shiftbase und das Prüfprotokoll kontrollieren; keine unbemerkte Doppelübertragung.')
         ident=secrets.token_hex(16)
+        if experimental:
+            # Both SQLite and PostgreSQL enforce this unique one-shot slot
+            # atomically, even across simultaneous Render requests/workers.
+            conn.execute('''INSERT INTO shiftbase_day_ops_test_slots
+                (shiftbase_user_id,action,operation_id,created_at)
+                VALUES(?,?,?,?) ON CONFLICT(shiftbase_user_id,action) DO NOTHING''',
+                (source['uid'],action,ident,now_iso()))
+            slot=conn.execute('''SELECT operation_id FROM shiftbase_day_ops_test_slots
+                                 WHERE shiftbase_user_id=? AND action=?''',
+                              (source['uid'],action)).fetchone()
+            if slot is None or str(slot['operation_id'])!=ident:
+                raise ShiftbaseIntegrationError(
+                    'Für diese Aktion wurde für die Test-Mitarbeiter-ID bereits ein Live-Test reserviert. '
+                    'Vor erneutem Test zuerst Ergebnis und API-Schema auswerten.')
+            # Keep previous non-experimental attempts visible as an additional
+            # reason to stop rather than blindly repeat an uncertain PUT/POST.
+            past=conn.execute('''SELECT id FROM shiftbase_day_operations
+                                  WHERE shiftbase_user_id=? AND action=? LIMIT 1''',
+                              (source['uid'],action)).fetchone()
+            if past:
+                raise ShiftbaseIntegrationError('Für diesen Fahrer ist bereits ein Schreibversuch protokolliert.')
         conn.execute('''INSERT INTO shiftbase_day_operations
             (id,driver_id,shiftbase_user_id,year,month,day,action,timesheet_id,
              proposed_json,proof_ref,state,message,created_at,updated_at)
@@ -8151,8 +8226,7 @@ def _sb_day_ops_audit_finish(ident, state, message):
 
 
 def _sb_day_ops_create(form, source):
-    _sb_write_access_checked(source)
-    _sb_day_ops_enabled('create')
+    execution=_sb_day_ops_execution(form,source,'create')
     day=_sb_day_ops_validate_date(source,form.get('work_day',''))
     _sb_day_ops_absence_guard(source,day)
     if day.weekday()==6:
@@ -8184,12 +8258,20 @@ def _sb_day_ops_create(form, source):
         metadata[field]=int(value)
     item={'day':day.isoformat(),'start':start,'end':end,'break_minutes':str(pm),'deleted':False}
     _sb_day_ops_neighbor_checks(source,item,net)
+    if execution=='check':
+        return ('Vorprüfung bestanden für '+item['day']+' ('+start+'–'+end+
+                ', '+str(pm)+' Minuten Pause, '+_sb_dayview_hm(Decimal(net)/Decimal(60))+
+                ' netto). Kein POST gesendet und nichts gespeichert. '
+                'Das API-Schreibschema selbst wird erst beim ausdrücklich aktivierten Live-Einzeltest geprüft.')
+    # Experimental live tests use the unconfirmed candidate request shape;
+    # never claim this is an authenticated official schema without a readback.
     # Only the official flat-field Timesheet resource is targeted. This is an
     # opt-in adapter until the account's authenticated Stoplight schema is checked.
     payload={'user_id':int(source['uid']),'date':item['day'],
              'starttime':start+':00','endtime':end+':00','break':str(pm),
              'paid_break':'0','note':evidence[:200],**metadata}
-    ident=_sb_day_ops_audit_start(source,item['day'],'create',payload,evidence)
+    ident=_sb_day_ops_audit_start(source,item['day'],'create',payload,evidence,
+                                  experimental=(execution=='experimental'))
     try:
         _sb_day_ops_write_native('POST','/timesheets',payload)
         # Never resend POST if the acknowledgement/readback is missing.
@@ -8215,8 +8297,7 @@ def _sb_day_ops_create(form, source):
 
 
 def _sb_day_ops_decline(form,source):
-    _sb_write_access_checked(source)
-    _sb_day_ops_enabled('decline')
+    execution=_sb_day_ops_execution(form,source,'decline')
     eid=str(form.get('decline_id','')).strip()
     if not re.fullmatch(r'[0-9]{1,20}',eid):
         raise ShiftbaseIntegrationError('Timesheet-ID für Ablehnung ungültig.')
@@ -8244,7 +8325,12 @@ def _sb_day_ops_decline(form,source):
     payload=_sb_update_payload(ts,eid,original,expected_uid=source['uid'],
                               monthly_entry=source.get('raw_timesheets',{}).get(eid))
     payload['status']='Declined'
-    ident=_sb_day_ops_audit_start(source,original['day'],'decline',payload,evidence,eid)
+    if execution=='check':
+        return ('Vorprüfung bestanden für Timesheet '+eid+' vom '+original['day']+
+                '. Eintrag gehört zum richtigen Fahrer und hat einen geeigneten Status. '
+                'Kein PUT gesendet; der Eintrag bleibt unverändert.')
+    ident=_sb_day_ops_audit_start(source,original['day'],'decline',payload,evidence,eid,
+                                  experimental=(execution=='experimental'))
     try:
         _sb_day_ops_write_native('PUT','/timesheets/'+eid,payload)
         checked=_sb_ts_detail(eid)
@@ -8284,7 +8370,8 @@ def admin_shiftbase_day_operation():
             message=_sb_day_ops_create(request.form,source)
         else:
             message=_sb_day_ops_decline(request.form,source)
-        session['shiftbase_direct_result']='Erfolg: '+message
+        session['shiftbase_direct_result']=('Testprüfung: ' if str(request.form.get('day_submit_mode',''))=='check'
+                                            else 'Erfolg: ')+message
     except ShiftbaseIntegrationError as exc:
         session['shiftbase_direct_result']='Fehler: '+str(exc)
     return redirect(url_for('admin_shiftbase_pruefvorschau',driver_id=did,year=year,month=month),code=303)
@@ -8298,6 +8385,19 @@ def _sb_day_ops_html(source,csrf):
     action=url_for('admin_shiftbase_day_operation')
     csrf_fields=(''.join('<input type="hidden" name="'+k+'" value="'+escape(v)+'">'
                   for k,v in (('csrf_token',csrf),('driver_id',did),('year',year),('month',month))))
+    can_test_live=_sb_day_ops_experimental_available(source)
+    # The older full production opt-in remains independent of experimental testing.
+    verified_live=(os.environ.get('SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED','')=='1'
+                   and not os.environ.get('SHIFTBASE_MOCK_DIR','')
+                   and os.environ.get('SHIFTBASE_VERIFIED_WRITE_ENABLED','')=='1')
+    show_live=can_test_live or verified_live
+    test_buttons=('<button type="submit" name="day_submit_mode" value="check" '
+                  'style="width:auto">Nur prüfen (kein Schreiben)</button>')
+    live_buttons=('<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px">'
+                  '<input type="checkbox" name="one_live_write" value="yes" style="width:auto">'
+                  'Dieser einzelne Eintrag ist anhand eines Originalbelegs geprüft; ein echter Shiftbase-Schreibversuch ist gewollt.</label>'
+                  '<button type="submit" name="day_submit_mode" value="live" '
+                  'class="primary" style="width:auto">Echten Einzeltest an Shiftbase senden</button>') if show_live else ''
     metadata_defaults={}
     # Prefill IDs only when every known value in THIS employee/month agrees.
     # The operator still needs to verify the actual department and shift.
@@ -8314,7 +8414,18 @@ def _sb_day_ops_html(source,csrf):
           '<div style="padding:15px">',
           '<p class="sb-muted"><b>Keine automatische Anpassung an Lohnstunden:</b> Neue Tage nur mit tatsächlich belegten Start-/Endzeiten, Pausen, Abteilung, Team und Schichtart. '
           'Bei bestehenden Fehl-/Doppelerfassungen wird ein Eintrag abgelehnt, nicht gelöscht. '
-          'Die API-Anlage/Ablehnung ist separat freizuschalten und wird immer erneut gelesen.</p>']
+          '„Nur prüfen“ macht keine API-Schreibanfrage. Für genau einen echten Testfahrer ist eine separate '
+          'experimentelle Render-Freigabe möglich; POST/PUT sind bis zum erfolgreichen Test nicht als API-kompatibel bestätigt.</p>']
+    if can_test_live:
+        html.append('<p style="padding:10px;background:#fff4e7;border-radius:9px"><b>Experimenteller Live-Test freigeschaltet '
+                    'für Shiftbase-ID '+escape(source['uid'])+'</b>. Nur einen nachgewiesenen Eintrag testen. '
+                    'Ein 2xx ist kein Erfolgsbeleg; danach folgt eine GET-Kontrolle.</p>')
+    elif not show_live:
+        html.append('<p style="padding:10px;background:#eff6ff;border-radius:9px"><b>Sicherer Vorprüfungsmodus:</b> '
+                    'Beide Funktionen können ohne Änderung in Shiftbase getestet werden. '
+                    'Für einen echten Einzeltest in Render SHIFTBASE_DAY_OPS_EXPERIMENTAL_LIVE=1 '
+                    'und SHIFTBASE_DAY_OPS_TEST_USER_ID auf die Shiftbase-ID des gewünschten Testfahrers setzen. '
+                    'Der vorhandene globale Schreibschutz bleibt erforderlich.</p>')
     html.append('<h3>Arbeitszeit nachtragen (nur nach Originalbeleg)</h3>')
     html.append('<form method="post" action="'+escape(action)+'" class="grid grid-3" style="align-items:end">'+csrf_fields+
                 '<input type="hidden" name="operation" value="create">'+
@@ -8326,7 +8437,8 @@ def _sb_day_ops_html(source,csrf):
                 '<label>Shiftbase-Team-ID<input type="number" name="work_team_id" value="'+escape(metadata_defaults['team_id'])+'" min="1" step="1" required></label>'+ 
                 '<label>Shiftbase-Schichtart-ID<input type="number" name="work_shift_id" value="'+escape(metadata_defaults['shift_id'])+'" min="1" step="1" required></label>'+ 
                 '<label style="grid-column:span 2">Originalnachweis und Begründung<input type="text" name="work_proof" minlength="15" maxlength="500" placeholder="z.B. Talex-Bericht 14.10., Fahrtendienst tatsächlich geleistet" required></label>'+ 
-                '<div style="grid-column:1/-1"><button type="submit" class="primary" style="max-width:500px">Nachgewiesenen Arbeitstag in Shiftbase anlegen</button></div></form>')
+                '<div style="grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+test_buttons+'</div>'+ 
+                ('<div style="grid-column:1/-1">'+live_buttons+'</div>' if show_live else '')+'</form>')
     html.append('<h3 style="margin-top:25px">Falsche / doppelte Schicht ablehnen</h3>')
     html.append('<p class="sb-muted">Nur bei belegter Fehl- oder Doppelerfassung; bereits genehmigte oder gestempelte Istzeiten nicht ohne vorherige Klärung ablehnen.</p>')
     for row in source['rows']:
@@ -8338,7 +8450,8 @@ def _sb_day_ops_html(source,csrf):
                     csrf_fields+'<input type="hidden" name="operation" value="decline"><input type="hidden" name="decline_id" value="'+escape(eid)+'">'+
                     '<strong>'+escape(row['day'])+'</strong><span>'+escape(row.get('begin',''))+'–'+escape(row.get('end',''))+' · ID '+escape(eid)+'</span>'+ 
                     '<input type="text" style="min-width:250px;flex:1" name="decline_proof" minlength="15" maxlength="500" placeholder="Fehlernachweis / Ablehnungsgrund (mind. 15 Zeichen)" required>'+ 
-                    '<button type="submit" style="width:auto">Fehlerhaften Eintrag ablehnen</button></form>')
+                    '<div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">'+test_buttons+'</div>'+ 
+                    ('<div style="width:100%">'+live_buttons+'</div>' if show_live else '')+'</form>')
     with db_conn() as conn:
         _sb_day_ops_table(conn)
         history=conn.execute('''SELECT day, action, state, message, updated_at FROM shiftbase_day_operations
@@ -8350,9 +8463,11 @@ def _sb_day_ops_html(source,csrf):
             html.append('<li>'+escape(operation['day'])+' · '+escape(operation['action'])+' · <b>'+
                         escape(operation['state'])+'</b> · '+escape(operation['message'])+'</li>')
         html.append('</ul></details>')
-    html.append('<p class="sb-muted">API-Freigabe über Render: SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED, '
-                'SHIFTBASE_TIMESHEET_MANUAL_CREATE_ENABLED bzw. SHIFTBASE_TIMESHEET_MANUAL_DECLINE_ENABLED. '
-                'Bestehende Schichtkorrekturen bleiben unabhängig davon verfügbar.</p></div></details>')
+    html.append('<p class="sb-muted">Experimenteller Test (ein Fahrer): '
+                'SHIFTBASE_DAY_OPS_EXPERIMENTAL_LIVE=1 und SHIFTBASE_DAY_OPS_TEST_USER_ID=&lt;Shiftbase-ID&gt;. '
+                'Die vorhandene SHIFTBASE_VERIFIED_WRITE_ENABLED- und Benutzerfreigabe bleiben Pflicht. '
+                'SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED muss für den experimentellen Test NICHT auf 1 gesetzt werden. '
+                'Einmalversuch ohne automatischen Retry und mit GET-Nachkontrolle; bestehende Korrekturen unverändert.</p></div></details>')
     return ''.join(html)
 
 # ========== Ende Erweiterung Arbeitstage ==========
