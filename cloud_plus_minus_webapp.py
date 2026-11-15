@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from functools import wraps
 from contextvars import ContextVar
@@ -1099,6 +1100,14 @@ def _init_postgres_schema(conn) -> None:
     conn.commit()
 
 
+# Avoid executing the complete PostgreSQL CREATE/ALTER migration list on
+# every transfer state change. Every process and every database URL still run
+# the original schema/migration code once, under a lock; never mark success
+# until the full schema transaction has committed.
+_PG_SCHEMA_LOCK = threading.Lock()
+_PG_SCHEMA_READY_FOR = set()
+
+
 def db_conn():
     ensure_paths()
     database_url = os.environ.get("DATABASE_URL", "").strip()
@@ -1110,7 +1119,16 @@ def db_conn():
         raw = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
         raw.autocommit = False
         conn = _PostgresCompatConnection(raw)
-        _init_postgres_schema(conn)
+        if database_url not in _PG_SCHEMA_READY_FOR:
+            with _PG_SCHEMA_LOCK:
+                if database_url not in _PG_SCHEMA_READY_FOR:
+                    try:
+                        _init_postgres_schema(conn)
+                    except Exception:
+                        raw.rollback()
+                        raw.close()
+                        raise
+                    _PG_SCHEMA_READY_FOR.add(database_url)
         return conn
 
     conn = sqlite3.connect(DB_FILE)
@@ -3491,6 +3509,7 @@ except ImportError:
 import threading as _sb_threading
 _SB_HTTP_POOL = None
 _SB_HTTP_POOL_LOCK = _sb_threading.Lock()
+_SB_PREVIEW_NEIGHBORS = ContextVar('sb_preview_neighbors', default=None)
 
 
 def _sb_http_request(method, url, headers, timeout, payload=None, max_bytes=5_000_000):
@@ -4475,14 +4494,29 @@ def admin_shiftbase_abgleich():
     h.append('<div class="card"><h2>Fahrer einmalig zuordnen</h2><p>Die ID muss aus Shiftbase stammen. Es erfolgt bewusst keine automatische Zuordnung nur anhand ähnlicher Namen.</p>')
     if sb_users:
         options=''.join(f'<option value="{shiftbase_escape(uid,quote=True)}">{shiftbase_escape(_sb_user_display(x))} (ID {shiftbase_escape(uid)})</option>' for uid,x in sorted(sb_users.items(),key=lambda kv: _sb_user_display(kv[1]).lower()))
-        h.append('<div class="table-wrap"><table style="min-width:680px"><tr><th>Fahrer in Cloud</th><th>Shiftbase-Benutzer</th><th>Aktion</th></tr>')
+        h.append('<p><b>Alle Zuordnungen in einem Schritt speichern:</b> Beliebig viele Fahrer auswählen, anschließend unten einmal „Alle Änderungen speichern“ anklicken. Bereits gespeicherte Einträge bleiben erhalten, sofern sie nicht geändert werden.</p>')
+        h.append('<form id="sb-mapping-bulk" method="post" action="'+url_for('admin_shiftbase_mapping_bulk')+'">'
+                 '<input type="hidden" name="csrf_token" value="'+shiftbase_escape(_sb_csrf_token(),quote=True)+'">'
+                 '<input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">')
+        h.append('<div class="table-wrap"><table style="min-width:680px"><tr><th>Fahrer in Cloud</th><th>Shiftbase-Benutzer</th></tr>')
         for r in local:
             selected=mapped.get(r['driver_id'])
             select_options='<option value="">— keine Zuordnung —</option>'
             for uid,u in sorted(sb_users.items(),key=lambda kv: _sb_user_display(kv[1]).lower()):
                 select_options+=f'<option value="{shiftbase_escape(uid,quote=True)}" {"selected" if uid==selected else ""}>{shiftbase_escape(_sb_user_display(u))} (ID {shiftbase_escape(uid)})</option>'
-            h.append('<tr><td>'+shiftbase_escape(r['name'])+'</td><td>'+f'<form id="map_{r["driver_id"]}" method="post" action="{url_for("admin_shiftbase_mapping")}"><input type="hidden" name="csrf_token" value="{_sb_csrf_token()}"><input type="hidden" name="driver_id" value="{r["driver_id"]}"><input type="hidden" name="year" value="{year}"><input type="hidden" name="month" value="{month}"><select name="shiftbase_user_id">{select_options}</select></form>'+'</td><td>'+f'<button form="map_{r["driver_id"]}" style="width:auto">Zuordnung speichern</button>'+'</td></tr>')
-        h.append('</table></div>')
+            h.append('<tr><td>'+shiftbase_escape(r['name'])+'</td><td><select class="sb-map-select" '
+                     'name="map_'+str(r['driver_id'])+'" data-original="'+shiftbase_escape(selected or '',quote=True)+'">'
+                     +select_options+'</select></td></tr>')
+        h.append('</table></div><div class="actions" style="margin-top:14px">'
+                 '<button class="primary" type="submit" id="sb-map-save" style="width:auto">Alle Änderungen speichern</button>'
+                 '<span id="sb-map-changed" class="muted" role="status">Noch keine Änderungen</span></div></form>')
+        h.append(r"""<script>(function(){const form=document.getElementById('sb-mapping-bulk');if(!form)return;
+const fields=Array.from(form.querySelectorAll('.sb-map-select'));
+function refresh(){const num=fields.filter(x=>x.value!==x.dataset.original).length;
+document.getElementById('sb-map-changed').textContent=num?num+' geänderte Zuordnung(en)':'Noch keine Änderungen';
+form.querySelector('#sb-map-save').disabled=!num;}
+fields.forEach(x=>x.addEventListener('change',refresh));
+form.addEventListener('submit',function(e){refresh();if(form.querySelector('#sb-map-save').disabled)e.preventDefault();});refresh();})();</script>""")
     else:
         h.append('<p class="muted">Klicke zuerst oben auf „Shiftbase auslesen & vergleichen“. Danach werden die Benutzer zur eindeutigen Zuordnung angezeigt.</p>')
     h.append('</div>')
@@ -4521,6 +4555,64 @@ def admin_shiftbase_mapping():
             conn.commit()
     flash('Zuordnung gespeichert.','ok')
     return redirect(url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1))
+
+
+@app.post('/admin/shiftbase/mapping/bulk')
+@admin_login_required
+def admin_shiftbase_mapping_bulk():
+    """Atomically save only changed Cloud↔Shiftbase mappings.
+
+    Validate the entire resulting set before any DELETE/INSERT. Existing
+    mappings survive invalid or duplicate choices, including ID swaps.
+    """
+    _sb_verified_post_csrf(request.form)
+    try:
+        year = int(request.form.get('year', 0))
+        month = int(request.form.get('month', 0))
+        if not 2020 <= year <= 2100 or not 1 <= month <= 12:
+            raise ValueError('Ungültiger Monat.')
+        received = {int(k[4:]): str(v).strip() for k, v in request.form.items()
+                    if re.fullmatch(r'map_[0-9]{1,12}', k)}
+        if not received or len(received) > 500:
+            raise ValueError('Es wurden keine gültigen Fahrer übermittelt.')
+        if any(uid and not re.fullmatch(r'[0-9]{1,18}', uid)
+               for uid in received.values()):
+            raise ValueError('Ungültige Shiftbase-ID.')
+        with db_conn() as conn:
+            _sb_ensure_mapping_table(conn)
+            active = {int(r['id']) for r in conn.execute(
+                'SELECT id FROM drivers WHERE is_active=1 AND COALESCE(is_disposition,0)=0'
+            ).fetchall()}
+            if not set(received).issubset(active):
+                raise ValueError('Unbekannter oder inaktiver Fahrer in der Auswahl.')
+            existing = _sb_mapping(conn)
+            result = dict(existing)
+            changed = {did: uid for did, uid in received.items()
+                       if existing.get(did, '') != uid}
+            for did, uid in changed.items():
+                if uid:
+                    result[did] = uid
+                else:
+                    result.pop(did, None)
+            if len(set(result.values())) != len(result):
+                raise ValueError('Eine Shiftbase-ID ist mehrfach ausgewählt. Nichts wurde gespeichert.')
+            if changed:
+                # Delete all changed rows first to support legitimate swaps.
+                for did in changed:
+                    conn.execute('DELETE FROM shiftbase_driver_map WHERE driver_id=?', (did,))
+                for did, uid in changed.items():
+                    if uid:
+                        conn.execute('INSERT INTO shiftbase_driver_map '
+                                     '(driver_id,shiftbase_user_id,updated_at) VALUES(?,?,?)',
+                                     (did, uid, now_iso()))
+                conn.commit()
+        flash(str(len(changed))+' Zuordnung(en) gemeinsam gespeichert.' if changed
+              else 'Keine Zuordnungen verändert.', 'ok')
+    except (ValueError, TypeError) as exc:
+        flash('Keine Zuordnung gespeichert: '+str(exc), 'err')
+    return redirect(url_for('admin_shiftbase_abgleich', year=year if 'year' in locals() and 2020<=year<=2100 else 2026,
+                            month=month if 'month' in locals() and 1<=month<=12 else 11,
+                            laden=1, erweitert=1))
 
 
 @app.get('/admin/shiftbase/export.csv')
@@ -5018,7 +5110,7 @@ def _sb_review_absence_ranges(raw_absences, uid):
     return result
 
 
-def _sb_review_source(driver_id, year, month):
+def _sb_review_source(driver_id, year, month, month_snapshot=None):
     if not isinstance(driver_id,int) or driver_id<=0: raise ShiftbaseIntegrationError('Ungültiger Fahrer')
     with db_conn() as conn:
         _sb_review_table(conn)
@@ -5034,7 +5126,8 @@ def _sb_review_source(driver_id, year, month):
             'SELECT * FROM shiftbase_review_drafts WHERE driver_id=? AND year=? AND month=?',(driver_id,year,month)).fetchall()}
         name=str(driver['name'])
     start,end=_sb_month_window(year,month)
-    times=_shiftbase_get_all('timesheets',{'min_date':start,'max_date':end,'user_id':uid})
+    times=(month_snapshot[0] if month_snapshot is not None else
+           _shiftbase_get_all('timesheets',{'min_date':start,'max_date':end,'user_id':uid}))
     rows=_sb_dayview_entries(times,uid,year,month)
     # Preserve the original API list record of exactly this user and month.
     # Only validated list records may supplement OMITTED fields in the detail GET.
@@ -5044,7 +5137,8 @@ def _sb_review_source(driver_id, year, month):
         if entry_uid == uid and entry_id and entry_day and start <= entry_day <= end:
             t = _sb_get(entry, 'Timesheet')
             raw_timesheets[str(entry_id)] = dict(entry)
-    absences=_shiftbase_get_all('absentees',{'min_date':start,'max_date':end,'user_id':uid})
+    absences=(month_snapshot[1] if month_snapshot is not None else
+              _shiftbase_get_all('absentees',{'min_date':start,'max_date':end,'user_id':uid}))
     absence_ranges=_sb_review_absence_ranges(absences,uid)
     try:
         result=_sb_monthly_reconciliation_data(rows,payroll,absence_ranges,year,month)
@@ -5208,8 +5302,16 @@ def _sb_preview_neighbor_shifts(source, candidate_days):
         checks.append((shiftbase_date.fromisoformat(last) + shiftbase_timedelta(days=1)).isoformat())
     neighbors = []
     for day in checks:
-        raw = _shiftbase_get_all('timesheets', {'min_date': day, 'max_date': day,
-                                                'user_id': source['uid']})
+        shared = _SB_PREVIEW_NEIGHBORS.get()
+        if shared is not None:
+            # The combined monthly view shares these adjacent-day GETs for
+            # all employees; every row is still filtered by its Shiftbase ID.
+            if day not in shared:
+                shared[day] = _shiftbase_get_all('timesheets', {'min_date':day,'max_date':day})
+            raw = shared[day]
+        else:
+            raw = _shiftbase_get_all('timesheets', {'min_date': day, 'max_date': day,
+                                                    'user_id': source['uid']})
         for row in _sb_dayview_entries(raw, source['uid'], int(day[:4]), int(day[5:7])):
             # The interval must be known, even for an uneditable neighboring shift.
             item = _sb_review_row_obj(row)
@@ -6717,7 +6819,7 @@ def admin_shiftbase_transfer_dashboard():
 .sb-overview .sb-cell{max-width:350px;overflow-wrap:break-word}
 </style>''',
        '<div class="sb-overview"><div class="card"><h2>Shiftbase – Monatsübersicht für alle Fahrer</h2>',
-       '<p>Du kannst einzelne oder alle zugeordneten Fahrer auswählen. Die rechnerische Vorschau wird je Fahrer getrennt geladen. <b>An Shiftbase gehen nur vorher anhand der Arbeitszeitnachweise geprüfte und vorgemerkte Korrekturen.</b></p>',
+       '<p>Du kannst einzelne oder alle zugeordneten Fahrer auswählen. Der Monatsdatenabruf wird für die ausgewählten Fahrer zusammengefasst; die Vorschläge werden danach je Fahrer separat berechnet. <b>An Shiftbase gehen nur vorher anhand der Arbeitszeitnachweise geprüfte und vorgemerkte Korrekturen.</b></p>',
        '<form action="'+url_for('admin_shiftbase_transfer_dashboard')+'" method="get" class="actions">',
        '<label>Jahr<input name="year" type="number" min="2020" max="2100" value="'+str(year)+'" style="width:110px"></label>',
        '<label>Monat<select name="month" style="width:155px">'+''.join('<option value="'+str(m)+'"'+(' selected' if m==month else '')+'>'+MONATE[m]+'</option>' for m in range(1,13))+'</select></label>',
@@ -6727,7 +6829,8 @@ def admin_shiftbase_transfer_dashboard():
        '<div class="sb-toolbar"><button type="button" id="sb-all" class="primary">Alle auswählen</button>',
        '<button type="button" id="sb-confirmed">Alle vorgemerkten auswählen</button>',
        '<button type="button" id="sb-none">Auswahl aufheben</button>',
-       '<button type="button" id="sb-preview">Vorschläge für Auswahl berechnen (nur lesen)</button></div>',
+       '<button type="button" id="sb-preview-all" class="primary">Vorschläge für ALLE Fahrer erstellen</button>',
+       '<button type="button" id="sb-preview">Vorschläge für Auswahl erstellen</button></div>',
        '<div id="sb-read-progress" role="status" class="sb-fine">Noch keine Vorschau geladen.</div>',
        '<form id="sb-run-form" method="post" action="'+url_for('admin_shiftbase_transfer_start')+'">',
        '<input type="hidden" name="csrf_token" value="'+esc(_sb_csrf_token())+'">',
@@ -6738,45 +6841,128 @@ def admin_shiftbase_transfer_dashboard():
         try:count=len(json.loads(stage['corrections_json'])) if stage else 0
         except (ValueError,TypeError):count=0
         preview=url_for('admin_shiftbase_pruefvorschau',year=year,month=month,driver_id=did)
-        h.append('<tr data-driver="'+str(did)+'"><td><input type="checkbox" name="driver_id" value="'+str(did)+'" aria-label="'+esc(driver['name'])+' wählen"></td>'
+        h.append('<tr data-driver="'+str(did)+'"><td><input type="checkbox" name="driver_id" value="'+str(did)+'" data-ready="'+('1' if count else '0')+'" aria-label="'+esc(driver['name'])+' wählen"></td>'
                  '<td><b>'+esc(driver['name'])+'</b><div class="sb-fine">Shiftbase-ID '+esc(mapping[did])+'</div></td>'
                  '<td>'+esc(_sb_dayview_hm(driver['payroll_hours']) if driver['payroll_hours'] is not None else '–')+'</td>'
                  '<td class="sb-cell" data-preview="'+str(did)+'">Noch nicht berechnet</td>'
                  '<td>'+('<span class="sb-ok">'+str(count)+' geprüft / vorgemerkt</span>' if count else '<span class="sb-pending">Noch nicht bestätigt</span>')+'</td>'
                  '<td><a href="'+esc(preview)+'">Zeiten prüfen</a></td></tr>')
-    h.append('</tbody></table></div><p class="sb-fine">Der folgende Button erstellt einen fortsetzbaren Versandauftrag nur für ausgewählte Fahrer mit zuvor geprüften Istzeit-Korrekturen. Ungeprüfte rechnerische Vorschläge sind nicht versendbar.</p>'
-             '<button class="primary" id="sb-launch" type="submit" style="max-width:520px">Geprüfte Korrekturen ausgewählter Fahrer senden</button></form>')
-    h.append('''<script>
+    h.append('</tbody></table></div><p class="sb-fine">Bereits einzeln geprüfte und vorgemerkte Änderungen können hier erneut ausgewählt und gesendet werden.</p>'
+             '<button class="primary" id="sb-launch" type="submit" style="max-width:520px">Bereits vorgemerkte Istzeiten senden</button></form>')
+    h.append('<form id="sb-bulk-review-form" action="'+url_for('admin_shiftbase_bulk_review')+'" method="post" style="margin-top:20px">'
+             '<input type="hidden" name="csrf_token" value="'+esc(_sb_csrf_token())+'">'
+             '<input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">'
+             '<div class="card"><h3>Gemeinsame Prüfansicht – rechnerische Vorschläge für alle gewählten Fahrer</h3>'
+             '<p class="sb-fine"><b>Wichtig:</b> Ein berechneter Vorschlag ist kein Arbeitszeitnachweis. '
+             'Erst nach Kontrolle der angezeigten Zeiten und Pausen anhand von Talex/Originalunterlagen '
+             'je Fahrer ausdrücklich als echte Istzeiten bestätigen. Ohne Bestätigung wird nichts gesendet.</p>'
+             '<div class="actions"><button type="button" id="sb-expand-proposals">Alle Fahrerdetails öffnen</button>'
+             '<button type="button" id="sb-collapse-proposals">Alle Fahrerdetails schließen</button></div>'
+             '<div id="sb-bulk-review-results" role="region" aria-label="Monatsvorschläge"></div>'
+             '<div id="sb-bulk-review-count" class="sb-fine"></div>'
+             '<div class="actions" style="margin-top:14px">'
+             '<button type="submit" name="mode" value="start" class="primary" style="width:auto">Alle ausdrücklich geprüften Änderungen senden · Fortschrittsanzeige</button>'
+             '<button type="submit" name="mode" value="queue" style="width:auto">Nur gemeinsam vormerken</button>'
+             '</div></div></form>')
+    h.append(r'''<script>
 (function(){
 const root=document.querySelector('.sb-overview');if(!root)return;
 const checks=()=>Array.from(root.querySelectorAll('input[name="driver_id"]:checked'));
-root.querySelector('#sb-all').onclick=()=>root.querySelectorAll('input[name="driver_id"]').forEach(x=>x.checked=true);
-root.querySelector('#sb-none').onclick=()=>root.querySelectorAll('input[name="driver_id"]').forEach(x=>x.checked=false);
-root.querySelector('#sb-confirmed').onclick=()=>root.querySelectorAll('input[name="driver_id"]').forEach(x=>x.checked=x.dataset.ready==='1');
+const boxes=()=>Array.from(root.querySelectorAll('tr[data-driver] input[name="driver_id"]'));
+root.querySelector('#sb-all').onclick=()=>boxes().forEach(x=>x.checked=true);
+root.querySelector('#sb-none').onclick=()=>boxes().forEach(x=>x.checked=false);
+root.querySelector('#sb-confirmed').onclick=()=>boxes().forEach(x=>x.checked=x.dataset.ready==='1');
 const progress=root.querySelector('#sb-read-progress');
+const result=document.getElementById('sb-bulk-review-results');
+const reviewForm=document.getElementById('sb-bulk-review-form');
+const counter=document.getElementById('sb-bulk-review-count');
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const signed=v=>{const n=Math.abs(v);return (v>0?'+':v<0?'−':'')+Math.floor(n/60)+':'+String(n%60).padStart(2,'0');};
+function net(s,e,p){if(!/^\d{2}:\d{2}$/.test(s)||!/^\d{2}:\d{2}$/.test(e)||!/^\d+$/.test(p))return null;
+ const a=Number(s.slice(0,2))*60+Number(s.slice(3)),b=Number(e.slice(0,2))*60+Number(e.slice(3)),z=Number(p);
+ const d=(b<=a?b+1440:b)-a;return d>0&&d<=1440&&z<=d?d-z:null;}
 root.querySelector('#sb-search').addEventListener('input',function(){const term=this.value.toLocaleLowerCase('de');root.querySelectorAll('tr[data-driver]').forEach(row=>row.style.display=row.textContent.toLocaleLowerCase('de').includes(term)?'':'none');});
-root.querySelector('#sb-preview').onclick=async function(){
+let loaded=false;
+function recalc(){let drivers=0,changes=0;
+ result.querySelectorAll('.sb-driver-review').forEach(panel=>{
+  let count=0;
+  panel.querySelectorAll('.sb-review-shift').forEach(row=>{
+   const fields=Array.from(row.querySelectorAll('input[data-field]'));
+   const dirty=fields.some(x=>x.value!==x.dataset.original);
+   row.classList.toggle('sb-dirty',dirty);
+   const nums=fields.map(x=>x.value);
+   const old=fields.map(x=>x.dataset.original);
+   const oldNet=net(old[0],old[1],old[2]),newNet=net(nums[0],nums[1],nums[2]);
+   const diff=row.querySelector('.sb-row-diff');if(diff)diff.textContent=oldNet===null||newNet===null?'–':signed(newNet-oldNet);
+   if(dirty)count++;
+  });
+  panel.querySelector('.sb-driver-count').textContent=count+' geänderte Schichten';
+  const check=panel.querySelector('input.sb-driver-cert');
+  check.disabled=!count||panel.dataset.blocked==='1';if(check.disabled)check.checked=false;
+  if(check.checked){drivers++;changes+=count;}
+ });
+ counter.textContent=drivers+' Fahrer mit bestätigten Istzeiten · '+changes+' zu sendende Schichtänderungen.';
+}
+async function load(all){
+ if(all) boxes().forEach(x=>x.checked=true);
  const ids=checks().map(x=>x.value);
- if(!ids.length){progress.textContent='Bitte zuerst Fahrer auswählen.';return;}
- this.disabled=true;
- for(let i=0;i<ids.length;i++){
-   const id=ids[i],cell=root.querySelector('[data-preview="'+id+'"]');
-   progress.textContent='Lese Vorschau '+(i+1)+' / '+ids.length+' …';
-   try{
-     const url='/admin/shiftbase/transfer/preview?driver_id='+encodeURIComponent(id)+'&year='+encodeURIComponent(String(YYYY))+'&month='+encodeURIComponent(String(MM));
-     const r=await fetch(url,{credentials:'same-origin',cache:'no-store'});
-     const j=await r.json();
-     cell.textContent=r.ok?j.result:(j.error||'Abruf fehlgeschlagen');
-   }catch(e){cell.textContent='Verbindung unterbrochen; später erneut versuchen.';}
+ if(!ids.length){progress.textContent='Bitte Fahrer auswählen.';return;}
+ loaded=false;result.innerHTML='';counter.textContent='';
+ const buttons=[root.querySelector('#sb-preview'),root.querySelector('#sb-preview-all')];buttons.forEach(x=>x.disabled=true);
+ progress.textContent='Lese gemeinsame Shiftbase-Monatsdaten und berechne Vorschläge für '+ids.length+' Fahrer …';
+ try{
+  const body=new URLSearchParams({csrf_token:'CSRF',year:'YYYY',month:'MM'});
+  ids.forEach(id=>body.append('driver_id',id));
+  const response=await fetch('BULKPREVIEW',{method:'POST',body,credentials:'same-origin',cache:'no-store'});
+  const data=await response.json();if(!response.ok)throw Error(data.error||'Abruf fehlgeschlagen');
+  for(const item of data.drivers){
+   const cell=root.querySelector('[data-preview="'+item.driver_id+'"]');if(cell)cell.textContent=item.summary||item.error||'Nicht verfügbar';
+   if(item.error){result.insertAdjacentHTML('beforeend','<p class="flash err">'+esc(item.name)+': '+esc(item.error)+'</p>');continue;}
+   const panel=document.createElement('details');panel.className='sb-driver-review';panel.dataset.did=item.driver_id;panel.dataset.blocked=item.blocked?'1':'0';
+   panel.style.cssText='border:1px solid #d9dee8;border-radius:12px;padding:12px;margin:10px 0;background:#fff';
+   let rows='';
+   for(const r of item.rows){
+    if(!r.editable){rows+='<tr><td>'+esc(r.day)+'</td><td>'+esc(r.original.start)+'–'+esc(r.original.end)+' (Pause '+esc(r.original.break_minutes)+')</td><td colspan="3">Gesperrt / unvollständig – keine Änderung</td></tr>';continue;}
+    const prefix='d_'+item.driver_id+'_';
+    const field=(name,type,val,orig,minmax)=>'<input data-field="'+name+'" data-original="'+esc(orig)+'" type="'+type+'" name="'+prefix+'sb_'+name+'_'+esc(r.id)+'" value="'+esc(val)+'" '+(minmax||'')+' required aria-label="'+name+' '+esc(r.day)+'">';
+    rows+='<tr class="sb-review-shift"><td>'+esc(r.day)+'</td><td>'+esc(r.original.start)+'–'+esc(r.original.end)+' · Pause '+esc(r.original.break_minutes)+'</td>'+
+    '<td><input type="hidden" name="'+prefix+'sb_sig_'+esc(r.id)+'" value="'+esc(r.signature)+'"><div style="display:grid;grid-template-columns:1fr 1fr 90px;gap:6px">'+
+    field('start','time',r.proposed.start,r.original.start,'')+field('end','time',r.proposed.end,r.original.end,'')+field('pause','number',r.proposed.pause,r.original.break_minutes,'min="0" max="600"')+'</div></td>'+
+    '<td class="sb-row-diff">'+esc(r.diff)+'</td><td>'+(r.assumed_break?'<b style="color:#b54708">Pause nur angenommen!</b>':'Prüfen')+'</td></tr>';
+   }
+   const disabled=item.blocked?' disabled':'';
+   panel.innerHTML='<summary style="cursor:pointer;font-weight:800">'+esc(item.name)+' · '+esc(item.summary)+' · <span class="sb-driver-count">0 geänderte Schichten</span></summary>'+
+    (item.blocked?'<p class="flash err">'+esc(item.blocked)+'</p>':'')+
+    '<div class="table-wrap" style="margin:10px 0"><table style="min-width:820px"><thead><tr><th>Datum</th><th>Original</th><th>Vorschlag / korrigierbar (Beginn, Ende, Pause)</th><th>Diff.</th><th>Hinweis</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<label style="display:flex;align-items:start;gap:10px;font-weight:700"><input type="checkbox" class="sb-driver-cert" name="driver_id" value="'+item.driver_id+'" style="width:20px;height:20px;flex-shrink:0"'+disabled+'>Ich bestätige ausdrücklich: Alle geänderten Zeiten und Pausen dieses Fahrers sind anhand der tatsächlichen Original-Arbeitszeitnachweise geprüft und korrekt.</label>';
+   result.appendChild(panel);
+  }
+  loaded=true;result.querySelectorAll('input[data-field]').forEach(el=>el.addEventListener('change',recalc));
+  result.querySelectorAll('input[data-field]').forEach(el=>el.addEventListener('input',recalc));
+  result.querySelectorAll('input.sb-driver-cert').forEach(el=>el.addEventListener('change',recalc));
+  recalc();progress.textContent='Vorschläge für '+data.drivers.length+' Fahrer geladen – es wurde NICHTS an Shiftbase gesendet.';
+ }catch(e){progress.textContent='Vorschau fehlgeschlagen: '+e.message;result.innerHTML='';}
+ finally{buttons.forEach(x=>x.disabled=false);}
+}
+root.querySelector('#sb-preview').onclick=()=>load(false);
+root.querySelector('#sb-preview-all').onclick=()=>load(true);
+root.querySelector('#sb-expand-proposals').onclick=()=>result.querySelectorAll('.sb-driver-review').forEach(x=>x.open=true);
+root.querySelector('#sb-collapse-proposals').onclick=()=>result.querySelectorAll('.sb-driver-review').forEach(x=>x.open=false);
+root.querySelector('#sb-run-form').addEventListener('submit',e=>{if(!checks().length){e.preventDefault();alert('Bitte Fahrer auswählen.');}});
+reviewForm.addEventListener('submit',e=>{
+ recalc();const certs=Array.from(result.querySelectorAll('input.sb-driver-cert:checked'));
+ if(!loaded||!certs.length){e.preventDefault();alert('Bitte zuerst Vorschläge laden, die Zeitnachweise prüfen und die betreffenden Fahrer ausdrücklich bestätigen.');return;}
+ for(const panel of result.querySelectorAll('.sb-driver-review')){
+  const selected=Boolean(panel.querySelector('.sb-driver-cert:checked'));
+  for(const row of panel.querySelectorAll('.sb-review-shift')){
+   if(!selected||!row.classList.contains('sb-dirty')) row.querySelectorAll('input').forEach(x=>x.disabled=true);
+  }
  }
- progress.textContent='Vorschau für '+ids.length+' Fahrer geladen. Keine Shiftbase-Daten verändert.';
- this.disabled=false;
-};
-root.querySelector('#sb-run-form').addEventListener('submit',function(e){
- if(!checks().length){e.preventDefault();alert('Bitte Fahrer auswählen.');}
+ reviewForm.querySelectorAll('button[type=submit]').forEach(x=>x.disabled=true);
+ const submit=document.createElement('input');submit.type='hidden';submit.name='mode';submit.value=e.submitter&&e.submitter.value==='queue'?'queue':'start';reviewForm.appendChild(submit);
 });
 })();
-</script>'''.replace('YYYY',str(year)).replace('MM',str(month)))
+</script>'''.replace('CSRF',esc(_sb_csrf_token())).replace('YYYY',str(year)).replace('MM',str(month)).replace('BULKPREVIEW',url_for('admin_shiftbase_bulk_preview')))
     if recent_runs:
         h.append('<h3>Letzte Übertragungen wieder öffnen</h3><p class="sb-fine">Bei Browserabbruch die bisherige Übertragung über ihren Link fortsetzen. Es werden keine PUTs automatisch wiederholt.</p>')
         for r in recent_runs:
@@ -6784,6 +6970,147 @@ root.querySelector('#sb-run-form').addEventListener('submit',function(e){
                      +esc(r['created_at'])+' · Versandauftrag '+esc(r['id'][:8])+' …</a></p>')
     h.append('<p><a href="'+url_for('admin_shiftbase_abgleich',year=year,month=month)+'">Zurück zum einfachen Monatsabgleich</a></p></div></div>')
     return base_page('Shiftbase – alle Fahrer',''.join(h),'shiftbase')
+
+
+def _sb_bulk_month_snapshot(year, month):
+    """Two shared, unmodified Shiftbase collections instead of two per driver.
+
+    Always filter each returned entry by its ACTUAL user/month downstream;
+    never trust remote collection filters for ownership.
+    """
+    start, end = _sb_month_window(year, month)
+    times = _shiftbase_get_all('timesheets', {'min_date':start,'max_date':end})
+    absences = _shiftbase_get_all('absentees', {'min_date':start,'max_date':end})
+    return times, absences
+
+
+def _sb_bulk_driver_ids(form):
+    raw=form.getlist('driver_id')
+    if not raw or len(raw)>150 or any(not re.fullmatch(r'[0-9]{1,12}',x) for x in raw):
+        raise ShiftbaseIntegrationError('Bitte gültige Fahrer auswählen (maximal 150).')
+    ids=[int(x) for x in raw]
+    if len(ids)!=len(set(ids)):
+        raise ShiftbaseIntegrationError('Fahrer doppelt ausgewählt.')
+    with db_conn() as conn:
+        mapping=_sb_mapping(conn)
+        eligible={r['driver_id'] for r in _sb_local_month(conn, int(form['year']), int(form['month']))
+                  if r['driver_id'] in mapping}
+    if not set(ids).issubset(eligible):
+        raise ShiftbaseIntegrationError('Nur aktive, eindeutig zugeordnete Fahrer sind erlaubt.')
+    return ids
+
+
+@app.post('/admin/shiftbase/transfer/bulk-preview')
+@admin_login_required
+def admin_shiftbase_bulk_preview():
+    _sb_verified_post_csrf(request.form)
+    neighbor_token = _SB_PREVIEW_NEIGHBORS.set({})
+    try:
+        year=int(request.form['year']);month=int(request.form['month'])
+        if not 2020<=year<=2100 or not 1<=month<=12: raise ValueError('Ungültiger Monat')
+        ids=_sb_bulk_driver_ids(request.form)
+        snapshot=_sb_bulk_month_snapshot(year,month)
+        results=[]
+        for did in ids:
+            try:
+                source=_sb_review_source(did,year,month,month_snapshot=snapshot)
+                plan=_sb_hypothetical_preview(source)
+                blocked=plan['blocked_reason'] if not plan['days'] else ''
+                if source.get('vacation_count') not in ('','0'):
+                    blocked=('Urlaubstage sind in der Cloud nur als Anzahl gespeichert. '
+                             'Einzelansicht öffnen und belegte Urlaubstage eingeben.')
+                rows=[]
+                for r in source['rows']:
+                    eid=str(r['entry_id']); orig=_sb_review_row_obj(r)
+                    suggestion=plan['days'].get(eid)
+                    try: sick=int(str(r['day'])[-2:]) in set(_expand_day_ranges(source.get('sick_ranges','')))
+                    except ValueError: sick=True
+                    editable=not bool(r.get('deleted') or r.get('absence') or sick or
+                        orig['break_minutes']=='' or orig['start']=='–' or orig['end']=='–' or
+                        str(r.get('status','')).lower() in {'rejected','declined','abgelehnt'})
+                    proposed={'start':suggestion['new_start'] if suggestion else orig['start'],
+                              'end':suggestion['new_end'] if suggestion else orig['end'],
+                              'pause':str(suggestion['new_pause']) if suggestion else orig['break_minutes']}
+                    rows.append({'id':eid,'day':str(r['day']),'original':orig,'proposed':proposed,
+                                 'editable':editable,'signature':_sb_direct_baseline_signature(did,source['uid'],year,month,eid,orig)
+                                 if editable else '',
+                                 'diff':_sb_signed_hm(Decimal(suggestion['delta_minutes'])/Decimal(60)) if suggestion else '0:00',
+                                 'assumed_break':bool(suggestion and suggestion['assumed_break_change'])})
+                summary=('Ist '+_sb_dayview_hm(source['actual'])+' · Lohn '+
+                         (_sb_dayview_hm(source['payroll']) if source['payroll'] is not None else '–')+
+                         ' · Vorschläge '+str(len(plan['days']))+
+                         ' · Rest '+_sb_signed_hm(plan['unallocated']))
+                results.append({'driver_id':did,'name':source['name'],'summary':summary,
+                                'blocked':blocked,'rows':rows})
+            except (ShiftbaseIntegrationError,ValueError,TypeError,KeyError) as exc:
+                with db_conn() as conn:
+                    row=conn.execute('SELECT name FROM drivers WHERE id=?',(did,)).fetchone()
+                results.append({'driver_id':did,'name':str(row['name']) if row else str(did),
+                                'error':str(exc)})
+        response=make_response(jsonify({'drivers':results,'year':year,'month':month}))
+        response.headers['Cache-Control']='private, no-store'
+        return response
+    except (ShiftbaseIntegrationError,ValueError,TypeError,KeyError) as exc:
+        return jsonify({'error':str(exc)}),422
+    finally:
+        _SB_PREVIEW_NEIGHBORS.reset(neighbor_token)
+
+
+@app.post('/admin/shiftbase/transfer/bulk-review')
+@admin_login_required
+def admin_shiftbase_bulk_review():
+    """Collectively certify *actual* times for multiple explicitly checked drivers.
+
+    Re-fetch the live monthly snapshot, re-run original signed-source and
+    rest/break/absence checks independently for each driver. No PUT here.
+    All staging occurs in one database transaction or none at all.
+    """
+    _sb_verified_post_csrf(request.form)
+    try:
+        year=int(request.form['year']);month=int(request.form['month'])
+        if not 2020<=year<=2100 or not 1<=month<=12: raise ValueError('Ungültiger Monat')
+        ids=_sb_bulk_driver_ids(request.form)
+        mode=str(request.form.get('mode','start'))
+        if mode not in ('start','queue'): raise ValueError('Ungültiger Versandmodus')
+        snapshot=_sb_bulk_month_snapshot(year,month)
+        prepared=[]
+        for did in ids:
+            prefix='d_'+str(did)+'_'
+            subform={key[len(prefix):]:value for key,value in request.form.items() if key.startswith(prefix)}
+            subform['confirmed_batch']='actual_work_verified_using_records'
+            source=_sb_review_source(did,year,month,month_snapshot=snapshot)
+            corrections=_sb_queue_form_certified(source,subform,did,year,month)
+            prepared.append((did,source,corrections))
+        with db_conn() as conn:
+            _sb_queue_schema(conn)
+            for did,source,corrections in prepared:
+                active=conn.execute('SELECT t.id FROM shiftbase_transfer_tasks t '
+                         'JOIN shiftbase_transfer_runs r ON t.run_id=r.id '
+                         'WHERE t.driver_id=? AND r.year=? AND r.month=? '
+                         'AND t.state NOT IN (?,?,?) LIMIT 1',
+                         (did,year,month,'confirmed','uncertain','error')).fetchone()
+                if active:
+                    raise ShiftbaseIntegrationError('Für '+source['name']+' läuft bereits ein Versand.')
+                conn.execute('DELETE FROM shiftbase_review_queue WHERE driver_id=? AND year=? AND month=?',
+                             (did,year,month))
+                conn.execute('INSERT INTO shiftbase_review_queue '
+                     '(driver_id,year,month,shiftbase_user_id,source_json,corrections_json,created_at) '
+                     'VALUES(?,?,?,?,?,?,?)',
+                     (did,year,month,source['uid'],json.dumps(source,default=str,ensure_ascii=False),
+                      json.dumps(corrections,ensure_ascii=False),now_iso()))
+            conn.commit()
+        if mode=='queue':
+            flash(str(len(prepared))+' Fahrer gemeinsam mit geprüften Istzeiten vorgemerkt.','ok')
+            return redirect(url_for('admin_shiftbase_transfer_dashboard',year=year,month=month))
+        run_id=_sb_create_transfer_run(ids,year,month)
+        return redirect(url_for('admin_shiftbase_transfer_view',run_id=run_id,autostart=1))
+    except (ShiftbaseIntegrationError,ValueError,TypeError,KeyError) as exc:
+        return base_page('Shiftbase – gemeinsame Prüfung fehlgeschlagen',
+             '<div class="card"><h2>Keine Übertragung gestartet</h2><p>'+shiftbase_escape(str(exc))+
+             '</p><p>Es wurden keine ungeprüften Zeitvorschläge gesendet. Bitte korrigieren und neu prüfen.</p>'
+             '<a href="'+url_for('admin_shiftbase_transfer_dashboard',year=year if 'year' in locals() else 2026,
+                                month=month if 'month' in locals() else 11)+'">Zurück zur Monatsübersicht</a></div>',
+             'shiftbase'),422
 
 
 @app.get('/admin/shiftbase/transfer/preview')
@@ -6881,7 +7208,7 @@ def admin_shiftbase_transfer_view(run_id):
 .sb-transfer button{max-width:450px}
 </style>''',
        '<div class="sb-transfer"><div class="card"><h2>Shiftbase – überprüfte Korrekturen übertragen</h2>',
-       '<p>Beschleunigter Versand: HTTPS-Verbindungen werden nach Möglichkeit wiederverwendet und unnötige Statusanfragen entfallen. Original-GET, genau ein PUT und bestätigender GET bleiben erhalten. Bei Verbindungsabbruch wird <b>kein PUT automatisch wiederholt</b>.</p>',
+       '<p>Beschleunigter Versand: HTTPS-Verbindungen werden wiederverwendet, pro Schicht erfolgen Vorbereitung, PUT und bestätigender GET soweit möglich in einer Browseranfrage. Unabhängige Mitarbeiter können begrenzt parallel übertragen werden; ohne erneuten PUT bei Unsicherheit. Original-GET, genau ein PUT und bestätigender GET bleiben erhalten. Bei Verbindungsabbruch wird <b>kein PUT automatisch wiederholt</b>.</p>',
        '<div id="sb-transfer-label" class="sb-big">Bereit zur Übertragung</div>',
        '<progress id="sb-transfer-progress" value="0" max="'+str(max(len(tasks),1))+'"></progress>',
        '<p id="sb-transfer-current" role="status">'+str(len(tasks))+' geprüfte Schichtkorrektur(en).</p>',
@@ -7017,6 +7344,38 @@ def _sb_prepare_task(task):
     return payload,source,before,after,eid
 
 
+def _sb_fast_dispatch_task(task, read_timeout=8):
+    """Advance one task through all available phases, without any PUT retry.
+
+    Each transition is durably committed before the following network action.
+    Interruption after marking 'sending' can ONLY lead to GET reconciliation.
+    Different employees can be processed independently, but never two tasks
+    for the same employee at the same time.
+    """
+    token=_SB_STEP_READ_TIMEOUT.set(read_timeout)
+    try:
+        current=dict(task)
+        for _ in range(4):
+            old=current['state']
+            if old in ('confirmed','uncertain','error','sending','checking','preparing'):
+                if old in ('sending','checking','preparing') and _sb_task_is_stale(current):
+                    _sb_task_dispatch_one(current)
+                break
+            _sb_task_dispatch_one(current)
+            with db_conn() as conn:
+                next_row=conn.execute('SELECT * FROM shiftbase_transfer_tasks WHERE id=?',
+                                      (task['id'],)).fetchone()
+            if not next_row:
+                break
+            current=dict(next_row)
+            # On uncertain network result, the state remains 'sending'. Do
+            # not poll it or issue another PUT within the same HTTP request.
+            if current['state']==old:
+                break
+    finally:
+        _SB_STEP_READ_TIMEOUT.reset(token)
+
+
 def _sb_task_is_stale(task, seconds=65):
     """Only recover a supposedly in-flight operation after its timeout window."""
     try:
@@ -7141,36 +7500,54 @@ def admin_shiftbase_transfer_step(run_id):
         if not run: abort(404)
         flagged=conn.execute('SELECT id FROM shiftbase_transfer_tasks WHERE run_id=? '
                              'AND state IN (?,?) LIMIT 1',(run_id,'error','uncertain')).fetchone()
-        next_row=conn.execute('SELECT * FROM shiftbase_transfer_tasks WHERE run_id=? '
-                              'AND state<>? ORDER BY ordinal LIMIT 1',(run_id,'confirmed')).fetchone()
-        task_count=conn.execute('SELECT id FROM shiftbase_transfer_tasks WHERE run_id=? LIMIT 1',(run_id,)).fetchone()
-    if not task_count: return jsonify({'error':'Leerer Versandauftrag.'}),422
-    if flagged: return jsonify(_sb_run_state(run_id))
-    next_task=dict(next_row) if next_row else None
-    if next_task is not None:
+        candidates=[dict(r) for r in conn.execute('SELECT * FROM shiftbase_transfer_tasks '
+                    'WHERE run_id=? AND state<>? ORDER BY ordinal', (run_id,'confirmed')).fetchall()]
+    if not candidates:
+        return jsonify(_sb_run_state(run_id))
+    if flagged:
+        return jsonify(_sb_run_state(run_id))
+    try:
+        read_timeout=max(3,min(9,int(os.environ.get('SHIFTBASE_STEP_READ_TIMEOUT','8'))))
+        workers=max(1,min(3,int(os.environ.get('SHIFTBASE_PARALLEL_WORKERS','2'))))
+    except ValueError:
+        read_timeout=8;workers=2
+    # Only the earliest outstanding task per employee is eligible. This
+    # preserves per-employee sequence/rest checks and prevents racing edits.
+    chosen=[];seen=set()
+    for item in candidates:
+        did=int(item['driver_id'])
+        if did not in seen:
+            seen.add(did)
+            chosen.append(item)
+            if len(chosen)>=workers:break
+    def work(item):
         try:
-            read_timeout = max(3,min(9,int(os.environ.get('SHIFTBASE_STEP_READ_TIMEOUT','8'))))
-        except ValueError:
-            read_timeout = 8
-        timeout_token = _SB_STEP_READ_TIMEOUT.set(read_timeout)
-        try:
-            _sb_task_dispatch_one(next_task)
+            _sb_fast_dispatch_task(item,read_timeout)
         except Exception:
-            # Deliberately no automatic PUT retry on unclassified failures;
-            # state remains durable and manual inspection is required.
-            app.logger.exception('Shiftbase transfer step interrupted: run=%s task=%s',run_id,next_task['id'])
+            # Do not retry PUT. Current durable state is decisive.
+            app.logger.exception('Shiftbase transfer interrupted: run=%s task=%s',run_id,item['id'])
             with db_conn() as conn:
-                conn.execute('UPDATE shiftbase_transfer_tasks SET state=?,message=?,updated_at=? '
-                             'WHERE id=? AND state NOT IN (?,?)',
-                             ('uncertain','Unerwarteter Fehler – Shiftbase prüfen, keine automatische Wiederholung.',
-                              now_iso(),next_task['id'],'confirmed','uncertain'))
+                current=conn.execute('SELECT state FROM shiftbase_transfer_tasks WHERE id=?',
+                                     (item['id'],)).fetchone()
+                if current and current['state'] in ('pending','prepared','preparing'):
+                    conn.execute('UPDATE shiftbase_transfer_tasks SET state=?,message=?,updated_at=? '
+                                 'WHERE id=? AND state=?',
+                                 ('error','Fehler vor PUT – bitte prüfen.',now_iso(),item['id'],current['state']))
+                elif current and current['state'] in ('sending','verifying','checking'):
+                    conn.execute('UPDATE shiftbase_transfer_tasks SET message=? WHERE id=?',
+                                 ('Vorgang unklar – nur GET-Abgleich oder manuelle Prüfung; kein neuer PUT.',item['id']))
                 conn.commit()
-        finally:
-            _SB_STEP_READ_TIMEOUT.reset(timeout_token)
+    # Bounded concurrency is safe across different Shiftbase user IDs. Never
+    # process multiple tasks of the same driver together.
+    if len(chosen)>1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(chosen)) as executor:
+            list(executor.map(work,chosen))
+    else:
+        work(chosen[0])
     result=_sb_run_state(run_id)
     result['pause']=bool(result['blocked'])
-    result['retry_after_ms']=(1200 if next_task and next_task['state'] in ('preparing','checking','sending')
-                              and not _sb_task_is_stale(next_task) else 0)
+    result['retry_after_ms']=(1200 if result.get('next') and 'sending' in result['next'] else 0)
     return jsonify(result)
 
 # ========== End resumable transfer ==========
@@ -7185,6 +7562,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
