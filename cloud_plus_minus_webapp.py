@@ -4037,6 +4037,13 @@ def _sb_report(conn,year,month,users,times,absences):
                 for k,v in entry.items()
                 if isinstance(v,dict) and str(k).lower() in {'user','employee','timesheet','shift','roster'}
             }
+        ts = _sb_get(entry,'Timesheet')
+        if not isinstance(ts,dict):ts=entry
+        # A deliberately declined/removed entry is historical, not work time.
+        if str(_sb_value(ts,'status') or '').strip().lower() in {'declined','rejected','abgelehnt'}:
+            continue
+        if str(_sb_get(ts,'deleted') or '').strip().lower() in {'1','true','yes'}:
+            continue
         uid, day, hours, entry_id = _sb_timesheet_parts(entry)
         if not uid or not day:
             missing_user_ids += int(not bool(uid))
@@ -4790,6 +4797,12 @@ def _sb_dayview_entries(times, uid, year, month):
         ts = _sb_get(entry,'Timesheet')
         if not isinstance(ts,dict):
             ts=entry
+        # Declined records remain visible in Shiftbase's audit trail but must
+        # not count as active actual worked hours in the reconciliation.
+        if str(_sb_value(ts,'status') or '').strip().lower() in {'declined','rejected','abgelehnt'}:
+            continue
+        if str(_sb_get(ts,'deleted') or '').strip().lower() in {'1','true','yes'}:
+            continue
         records.append({
             'day':day, 'entry_id':entry_id or '',
             'begin':_sb_dayview_clock(_sb_value(ts,'starttime','start_time')),
@@ -4911,8 +4924,10 @@ def _sb_monthly_reconciliation_data(day_rows, payroll_hours, absence_ranges, yea
     """
     if not isinstance(day_rows,list):
         raise ValueError('Schichtliste fehlt')
-    if not day_rows or any(row.get('hours') is None for row in day_rows):
-        raise ValueError('Arbeitsstunden fehlen oder sind nicht vollständig aus Shiftbase abrufbar.')
+    if any(row.get('hours') is None for row in day_rows):
+        raise ValueError('Arbeitsstunden sind nicht vollständig aus Shiftbase abrufbar.')
+    # An empty verified month is a legitimate 0:00, e.g. after rejecting an
+    # erroneous only entry. Do not invent hours to match payroll.
     actual=sum((Decimal(str(row['hours'])) for row in day_rows),Decimal('0'))
     payroll=Decimal(str(payroll_hours)) if payroll_hours is not None else None
     if payroll is not None and (not payroll.is_finite() or payroll<0):
@@ -5536,6 +5551,80 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
     return result
 
 
+
+
+def _sb_preview_exclusion_diagnostics(source):
+    """Explain locally why real existing timesheets cannot be used for arithmetic proposals.
+
+    Read-only and deterministic. The payroll difference is NOT proof that an
+    original time entry was inaccurate or that an additional day was worked.
+    """
+    try:
+        sick = set(_expand_day_ranges(source.get('sick_ranges', '')))
+    except ValueError:
+        sick = set()
+    vacation = set()
+    raw_vacation = str(source.get('preview_vacation_days') or '').strip()
+    if raw_vacation:
+        try:
+            vacation = set(_expand_day_ranges(raw_vacation))
+        except ValueError:
+            vacation = set()
+    by_day = {}
+    parsed = {}
+    for row in source.get('rows', []):
+        eid = str(row.get('entry_id', ''))
+        try:
+            original = _sb_review_row_obj(row)
+            net, _, _ = _sb_review_minutes(original['start'], original['end'],
+                                           original['break_minutes'])
+            parsed[eid] = net
+            by_day[row['day']] = by_day.get(row['day'], 0) + net
+        except (ValueError, TypeError, KeyError):
+            parsed[eid] = None
+    detail = []
+    for row in source.get('rows', []):
+        eid = str(row.get('entry_id', ''))
+        day = str(row.get('day', ''))
+        reasons = []
+        try:
+            day_num = int(day[-2:])
+        except ValueError:
+            day_num = -1
+        if row.get('deleted') or str(row.get('status', '')).strip().lower() in ('rejected', 'declined', 'abgelehnt'):
+            reasons.append('Eintrag gelöscht markiert oder bereits abgelehnt')
+        if row.get('absence'):
+            reasons.append('Shiftbase-Abwesenheit überschneidet die Schicht')
+        if day_num in sick:
+            reasons.append('In der Cloud als Krankheitstag geführt')
+        if day_num in vacation:
+            reasons.append('Als Urlaubstag angegeben')
+        if row.get('paid_break') not in ('–', '0 Min.', '0', '0.0 Min.'):
+            reasons.append('Bezahlte Pause oder unbekannte Pausenabrechnung')
+        net = parsed[eid]
+        if net is None:
+            reasons.append('Beginn, Ende oder unbezahlte Pause nicht zuverlässig berechenbar')
+        else:
+            if net > 600:
+                reasons.append('Bereits erfasste Netto-Arbeitszeit über 10 Stunden (' +
+                               _sb_dayview_hm(Decimal(net) / Decimal(60)) + ')')
+            if by_day.get(day, 0) > 600 and net <= 600:
+                reasons.append('Alle Schichten dieses Tages zusammen über 10 Netto-Stunden')
+            try:
+                actual = Decimal(str(row.get('hours'))) * Decimal(60)
+                if not actual.is_finite():
+                    raise ValueError('Keine endliche Zahl')
+                if abs(actual - Decimal(net)) > Decimal('0.51'):
+                    reasons.append('Shiftbase-Stundensumme ' + _sb_dayview_hm(row['hours']) +
+                                   ' stimmt nicht mit Beginn/Ende/Pause (' +
+                                   _sb_dayview_hm(Decimal(net)/Decimal(60)) +
+                                   ') überein')
+            except (TypeError, InvalidOperation, ValueError):
+                reasons.append('Shiftbase-Stundensumme unklar')
+        if reasons:
+            detail.append({'day': day, 'entry_id': eid, 'reasons': reasons})
+    return detail
+
 def _sb_hypothetical_preview(source):
     """Deterministic, hypothetical monthly gap allocation. DISPLAY ONLY.
 
@@ -5894,11 +5983,32 @@ def admin_shiftbase_pruefvorschau():
                 +esc(_sb_dayview_hm(Decimal(item['minutes'])/Decimal(60)))
                 +' – ausschließlich anhand von Originalbelegen prüfen</li>'
                 for item in dcheck['candidates'])+'</ul>')
-        h.append('</div>')
+        h.append('<p><a href="https://app.shiftbase.com/" target="_blank" rel="noopener noreferrer">'+
+                 'Shiftbase öffnen – Arbeitszeitprotokoll</a></p></div>')
+    # Show exact original data issues, including >10h nights and conflicting API totals.
+    # These are not instructions to shorten true recorded work to match payroll.
+    diagnostics = _sb_preview_exclusion_diagnostics(source)
+    if diagnostics:
+        h.append('<details class="sb-diagnose" open><summary>Warum wurden einzelne Schichten ausgeschlossen? ('+
+                 str(len(diagnostics))+' auffällige Einträge)</summary><div style="padding:12px"><ul>')
+        for item in diagnostics:
+            h.append('<li><b>'+esc(item['day'])+'</b>: '+esc('; '.join(item['reasons']))+'</li>')
+        h.append('</ul><p class="sb-muted">Diese Probleme betreffen vorhandene Originalerfassungen. '+
+                 'Einen falsch erfassten Tag nur nach Prüfung des tatsächlichen Arbeitsnachweises korrigieren; '+
+                 'die Lohnabrechnung allein ersetzt keinen Zeitnachweis.</p></div></details>')
     if plan.get('excluded_count'):
-        h.append('<p class="sb-muted">Nicht für Vorschläge geeignete Schichten: '+str(plan['excluded_count'])+' (z. B. Krankheit, Urlaub, unbekannte Zeiten, bezahlte Pausen oder unklare Zeitberechnung). Sie werden nicht verändert.</p>')
+        h.append('<p class="sb-muted">Nicht für automatische Rechenvorschläge geeignete Schichten: '+str(plan['excluded_count'])+'. '+
+                 'Die genauen Gründe stehen oben. Eine belegte manuelle Korrektur kann in der Tabelle dennoch möglich sein.</p>')
     if source.get('sick_ranges'):
         h.append('<p class="sb-muted">Cloud-Krankheitstage: '+esc(source['sick_ranges'])+' (für hypothetische Änderungen ausgeschlossen).</p>')
+    h.append('<p class="sb-muted"><b>Fehlende oder fehlerhafte Arbeitstage:</b> '+
+             'Die Cloud kann derzeit per API nur vorhandene Zeiteinträge bearbeiten. '+
+             'Tatsächlich geleistete, bislang fehlende Tage können nach Belegprüfung in '+
+             '<a href="https://app.shiftbase.com/" target="_blank" rel="noopener noreferrer">Shiftbase</a> '+
+             'unter Arbeitszeitprotokoll → + Arbeitsstunden erfasst werden. '+
+             'Laut Shiftbase lassen sich falsche Einträge nicht löschen, sondern ablehnen. '+
+             'Krankheit, Urlaub, Nachtschicht-Ruhezeit und Abwesenheiten vorher prüfen; '+
+             'danach diesen Monat erneut abrufen. Keine automatische Anlage oder Ablehnung nur wegen der Lohndifferenz.</p>')
     if reply:
         color='ok' if reply.startswith('Erfolg:') else 'err'
         h.append('<div class="flash '+color+'">'+esc(reply)+'</div>')
@@ -5960,6 +6070,7 @@ def admin_shiftbase_pruefvorschau():
     h.append('<div class="sb-batch-actions"><button class="primary" type="submit" name="mode" value="start"'+('' if writable else ' disabled')+'>Geprüfte Istzeiten senden · mit Fortschrittsanzeige</button>')
     h.append('<p class="sb-muted"><span id="sb-changed-count">Änderungen werden gezählt …</span> Nur die nach Talex überprüften Istzeiten bestätigen. Nicht geänderte Schichten und reine Lohnabweichungen werden niemals gesendet.</p></div>')
     h.append('</form>')
+    h.append(_sb_day_ops_html(source,_sb_csrf_token()))
     h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_transfer_dashboard',year=year,month=month)+'">Alle Fahrer / Gesamtversand</a></p>')
     h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_vorschlaege_pruefliste_csv',driver_id=did,year=year,month=month,urlaubs_tage=source['preview_vacation_days'])+'">Vorschläge als unverbindliche Prüfliste (CSV)</a></p>')
     h.append(r"""<script>
@@ -7161,15 +7272,23 @@ async function load(all){
     field('start','time',r.proposed.start,r.original.start,'')+field('end','time',r.proposed.end,r.original.end,'')+field('pause','number',r.proposed.pause,r.original.break_minutes,'min="0" max="600"')+'</div></td>'+
     '<td class="sb-row-diff">'+esc(r.diff)+'</td><td>'+(r.assumed_break?'<b style="color:#b54708">Pause nur angenommen!</b>':'Prüfen')+'</td></tr>';
    }
+   const sourceDiagnostics=(item.diagnostics||[]);
+   const diagnosticsText=sourceDiagnostics.length
+     ? '<div class="sb-hint"><b>Ursache der ausgeschlossenen oder auffälligen Originalschichten:</b><ul>'+
+       sourceDiagnostics.map(x=>'<li>'+esc(x.day)+': '+esc((x.reasons||[]).join('; '))+'</li>').join('')+
+       '</ul><small>Eine Lohndifferenz ist kein Beleg für eine tatsächlich andere Arbeitszeit.</small></div>' : '';
    const review=item.day_review;
    const reviewText=review&&review.kind
      ? '<div class="sb-hint"><b>Fehlende / überzählige Arbeitstage prüfen – keine automatische Anlage oder Löschung:</b> '
        +esc(review.note)+'<p>Orientierungswert: '+esc(review.required_days)+' Tag(e). '
        +(review.candidates||[]).map(x=>esc(x.day)+' ('+esc(Math.floor(x.minutes/60))+':'+String(x.minutes%60).padStart(2,'0')+')').join(', ')
-       +'</p><small>Nur Prüfhilfe. Diese Tage werden nicht an Shiftbase gesendet.</small></div>' : '';
+       +'</p><small>Nur Prüfhilfe. Nachgewiesene fehlende Tage in Shiftbase unter Arbeitszeitprotokoll → + Arbeitsstunden ergänzen; '+
+       'falsche Einträge dort ablehnen (keine Löschfunktion). Krankheit/Urlaub beachten. '+
+       '<a href="https://app.shiftbase.com/" target="_blank" rel="noopener noreferrer">Shiftbase öffnen</a>. '+
+       'Diese Tage werden nicht automatisch gesendet.</small></div>' : '';
    panel.innerHTML='<summary style="cursor:pointer;font-weight:800">'+esc(item.name)+' · '+esc(item.summary)+' · <span class="sb-driver-count">0 geänderte Schichten</span></summary>'+
     (item.balance_note?'<p class="sb-fine">'+esc(item.balance_note)+'</p>':'')+
-    (item.blocked?'<p class="flash err">'+esc(item.blocked)+'</p>':'')+reviewText+
+    (item.blocked?'<p class="flash err">'+esc(item.blocked)+'</p>':'')+diagnosticsText+reviewText+
     '<div class="table-wrap" style="margin:10px 0"><table style="min-width:820px"><thead><tr><th>Datum</th><th>Original</th><th>Vorschlag / korrigierbar (Beginn, Ende, Pause)</th><th>Diff.</th><th>Hinweis</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '<input type="hidden" class="sb-driver-send" name="driver_id" value="'+item.driver_id+'" disabled>'+
     '<div class="sb-fine">Rechnerische Vorschläge · vor dem direkten Versand auf tatsächlich geleistete Zeiten prüfen.</div>';
@@ -7324,6 +7443,10 @@ def admin_shiftbase_bulk_preview():
                                  if editable else '',
                                  'diff':_sb_signed_hm(Decimal(suggestion['delta_minutes'])/Decimal(60)) if suggestion else '0:00',
                                  'assumed_break':bool(suggestion and suggestion['assumed_break_change'])})
+                diagnostics=_sb_preview_exclusion_diagnostics(source)
+                diagnostic_by_id={x['entry_id']:x['reasons'] for x in diagnostics}
+                for item in rows:
+                    item['source_warnings']=diagnostic_by_id.get(item['id'],[])
                 summary=('Ist '+_sb_dayview_hm(source['actual'])+' · Lohn '+
                          (_sb_dayview_hm(source['payroll']) if source['payroll'] is not None else '–')+
                          ' · Vorschläge '+str(len(plan['days']))+
@@ -7336,7 +7459,8 @@ def admin_shiftbase_bulk_preview():
                                 'difference_minutes':delta_minutes,
                                 'blocked':blocked,'rows':rows,
                                 'balance_note':plan.get('balance_note',''),
-                                'day_review':plan.get('day_review')})
+                                'day_review':plan.get('day_review'),
+                                'diagnostics':diagnostics})
             except (ShiftbaseIntegrationError,ValueError,TypeError,KeyError) as exc:
                 with db_conn() as conn:
                     row=conn.execute('SELECT name FROM drivers WHERE id=?',(did,)).fetchone()
@@ -7814,6 +7938,424 @@ def admin_shiftbase_transfer_step(run_id):
     result['pause']=bool(result['blocked'])
     result['retry_after_ms']=(1200 if result.get('next') and 'sending' in result['next'] else 0)
     return jsonify(result)
+
+
+
+# ========== Erweiterung: manuell belegte Arbeitstage und Ablehnung ==========
+# IMPORTANT: This module does not generate timesheets from payroll differences.
+# It requires operator-entered ACTUAL start/end/breaks and an identifiable
+# original evidence reference; hypothetical dates are never posted.
+# The official Shiftbase UI documents manual addition/decline. Its public
+# Stoplight API does not expose a verifiable POST/decline schema without login.
+# Thus new API adapters require an additional *explicit* Render opt-in for the
+# known flat-field request shape; existing verified PUT remains untouched.
+
+def _sb_day_ops_table(conn):
+    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_day_operations (
+        id TEXT PRIMARY KEY,
+        driver_id INTEGER NOT NULL,
+        shiftbase_user_id TEXT NOT NULL,
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        day TEXT NOT NULL,
+        action TEXT NOT NULL,
+        timesheet_id TEXT NOT NULL DEFAULT '',
+        proposed_json TEXT NOT NULL,
+        proof_ref TEXT NOT NULL,
+        state TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )''')
+    conn.execute('''CREATE INDEX IF NOT EXISTS idx_shiftbase_day_ops
+                    ON shiftbase_day_operations(driver_id, day, action, state)''')
+    # Serialises simultaneous browser submissions across Render workers.
+    conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS uq_shiftbase_day_ops_intent
+                    ON shiftbase_day_operations(driver_id, day, action, timesheet_id)''')
+
+
+def _sb_day_ops_enabled(action):
+    setting = ('SHIFTBASE_TIMESHEET_MANUAL_CREATE_ENABLED' if action == 'create'
+               else 'SHIFTBASE_TIMESHEET_MANUAL_DECLINE_ENABLED')
+    if os.environ.get(setting, '').strip() != '1':
+        raise ShiftbaseIntegrationError(
+            'Manuelle Timesheet-'+('Anlage' if action == 'create' else 'Ablehnung')+
+            ' ist noch nicht separat freigeschaltet. Bitte den API-Adapter zuerst '
+            'mit dem dokumentierten Schema des Shiftbase-Kontos abgleichen ('+setting+').')
+    if os.environ.get('SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED', '').strip() != '1':
+        raise ShiftbaseIntegrationError(
+            'Das neue POST-/Ablehnungsformat wurde für diesen Shiftbase-Account noch '
+            'nicht bestätigt. Erst nach API-Schemaabgleich auf Render '
+            'SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED=1 setzen.')
+    if os.environ.get('SHIFTBASE_MOCK_DIR', '').strip():
+        raise ShiftbaseIntegrationError('Keine API-Schreiboperation im Demo-Modus.')
+
+
+def _sb_day_ops_validate_date(source, raw):
+    try:
+        day = shiftbase_date.fromisoformat(str(raw).strip())
+    except ValueError as exc:
+        raise ShiftbaseIntegrationError('Ungültiges Arbeitsdatum (YYYY-MM-DD).') from exc
+    if day.year != source['year'] or day.month != source['month']:
+        raise ShiftbaseIntegrationError('Datum liegt nicht im ausgewählten Monat.')
+    if day > (datetime.now(ZoneInfo('Europe/Berlin')).date() if ZoneInfo else shiftbase_date.today()):
+        raise ShiftbaseIntegrationError('Zukünftige tatsächliche Arbeitszeiten dürfen nicht eingetragen werden.')
+    return day
+
+
+def _sb_day_ops_absence_guard(source, day):
+    d = day.isoformat()
+    try:
+        sick = set(_expand_day_ranges(source.get('sick_ranges', '')))
+    except ValueError as exc:
+        raise ShiftbaseIntegrationError('Cloud-Krankheitstage sind nicht eindeutig. Keine Anlage.') from exc
+    if day.day in sick:
+        raise ShiftbaseIntegrationError('Tag ist in der Cloud als krank vermerkt. Keine Anlage.')
+    # Cloud stores vacation as a NUMBER, not specific dates. Without a reliable
+    # day-by-day record we cannot prove that any selected date is free.
+    if str(source.get('vacation_count', '')).strip() not in ('', '0'):
+        raise ShiftbaseIntegrationError(
+            'Urlaub ist in der Cloud nur als Tagesanzahl gespeichert. '
+            'Vor dem Hinzufügen müssen die konkreten Urlaubstage zuverlässig abgeglichen werden.')
+    for fr, to, description, status in source.get('absence_ranges', []):
+        if fr <= d <= to and str(status).strip().lower() not in ('declined','rejected','abgelehnt'):
+            raise ShiftbaseIntegrationError('Shiftbase führt an diesem Tag eine Abwesenheit ('+
+                                           str(description)[:60]+'). Keine Anlage.')
+
+
+def _sb_day_ops_clock_checks(start, end, pause):
+    net, duration, pm = _sb_review_minutes(start, end, str(pause))
+    if net <= 0 or net > 480:
+        raise ShiftbaseIntegrationError('Neue Schicht benötigt 0:15 bis höchstens 8:00 Netto-Arbeitszeit.')
+    if net % 15 or pm % 15 or int(start[3:]) % 15 or int(end[3:]) % 15:
+        raise ShiftbaseIntegrationError('Beginn, Ende, Netto-Dauer und Pause müssen im 15-Minuten-Takt liegen.')
+    if net > 360 and pm < 30:
+        raise ShiftbaseIntegrationError('Bei mehr als 6 Stunden sind mindestens 30 Minuten Pause nötig.')
+    if net > 540 and pm < 45:
+        raise ShiftbaseIntegrationError('Bei mehr als 9 Stunden sind mindestens 45 Minuten Pause nötig.')
+    if start < '06:00':
+        raise ShiftbaseIntegrationError('Neue Schicht beginnt vor 06:00: bitte individuell prüfen und manuell in Shiftbase erfassen.')
+    return net, duration, pm
+
+
+def _sb_day_ops_neighbor_checks(source, item, net):
+    '''One read-only cross-month lookaround + rest/overlap and weekly 48 h gate.'''
+    day = shiftbase_date.fromisoformat(item['day'])
+    beg = (day-shiftbase_timedelta(days=7)).isoformat()
+    finish = (day+shiftbase_timedelta(days=7)).isoformat()
+    remote = _shiftbase_get_all('timesheets', {'min_date':beg, 'max_date':finish,
+                                                'user_id':source['uid']})
+    around=[]
+    week_net=net
+    week_start=day-shiftbase_timedelta(days=day.weekday())
+    week_end=week_start+shiftbase_timedelta(days=6)
+    for entry in remote:
+        uid, d, hours, eid = _sb_timesheet_parts(entry)
+        if uid != source['uid'] or not d or not beg <= d <= finish:
+            continue
+        ts=_sb_get(entry,'Timesheet')
+        if not isinstance(ts,dict): ts=entry
+        status=str(_sb_value(ts,'status') or '').lower()
+        if status in ('declined','rejected','abgelehnt'):
+            continue
+        if str(_sb_get(ts,'deleted') or '').strip().lower() in ('1','true','yes'):
+            continue
+        if d == item['day']:
+            raise ShiftbaseIntegrationError('Auf diesem Tag existiert bereits eine Shiftbase-Arbeitsschicht. Kein Duplikat erzeugen.')
+        if hours is None:
+            raise ShiftbaseIntegrationError('Nachbarschicht ohne auswertbare Stunden: keine sichere Ruhezeit-/Wochenprüfung.')
+        if week_start <= shiftbase_date.fromisoformat(d) <= week_end:
+            week_net += int((Decimal(hours)*Decimal(60)).quantize(Decimal('1')))
+        original = {
+            'day':d,
+            'start':_sb_dayview_clock(_sb_value(ts,'starttime','start_time')),
+            'end':_sb_dayview_clock(_sb_value(ts,'endtime','end_time')),
+            'deleted':False,
+        }
+        around.append(original)
+    if week_net > 48*60:
+        raise ShiftbaseIntegrationError('Mit diesem Tag würde die konservative 48-Stunden-Wochengrenze überschritten.')
+    conflict=_sb_rest_violation(around+[item])
+    if conflict:
+        raise ShiftbaseIntegrationError('Keine Anlage: '+conflict)
+
+
+def _sb_day_ops_write_native(method, path, payload):
+    '''One HTTP write, never retries; do not trust HTTP 2xx alone.'''
+    cfg=_shiftbase_config()
+    if cfg['mock_dir']:
+        raise ShiftbaseIntegrationError('Schreibzugriff im Demo-Modus gesperrt.')
+    if os.environ.get('SHIFTBASE_AUTH_HEADER','Authorization').strip().lower()!='authorization' or \
+       os.environ.get('SHIFTBASE_AUTH_PREFIX','API').strip().upper()!='API':
+        raise ShiftbaseIntegrationError('Timesheet-Schreibadapter erwartet Authorization: API <token>.')
+    raw_token=cfg['token'].strip()
+    if raw_token.lower().startswith('api '): raw_token=raw_token[4:].strip()
+    if method not in ('POST','PUT') or not (path == '/timesheets' or
+        (method=='PUT' and re.fullmatch(r'/timesheets/[0-9]{1,20}',path))):
+        raise ShiftbaseIntegrationError('Nicht zugelassener Timesheet-Schreibpfad.')
+    headers={'Authorization':'API '+raw_token,
+             'Accept':'application/json','Content-Type':'application/json',
+             'User-Agent':'PlusMinusCloud-VerifiedDayOperations/1.0'}
+    data=json.dumps(payload, ensure_ascii=False, separators=(',',':')).encode('utf-8')
+    try:
+        status, body=_sb_http_request(method, cfg['base']+path, headers, 20,
+                                      payload=data, max_bytes=1_000_000)
+    except HTTPError as exc:
+        raise ShiftbaseIntegrationError(
+            'Shiftbase '+method+' HTTP '+str(exc.code)+'. Keine automatische Wiederholung; '
+            'API-Felder prüfen, bevor eine weitere Aktion erfolgt.') from exc
+    except (URLError,OSError,TimeoutError) as exc:
+        raise ShiftbaseIntegrationError(
+            'Verbindung beim '+method+' unklar. Vor einem neuen Schreibversuch direkt in Shiftbase prüfen.') from exc
+    if status not in (200,201,204):
+        raise ShiftbaseIntegrationError('Shiftbase '+method+' HTTP '+str(status)+'. Ergebnis nicht bestätigt.')
+    if not body.strip():return status,{}
+    try:
+        result=json.loads(body.decode('utf-8'))
+    except (UnicodeError,ValueError) as exc:
+        raise ShiftbaseIntegrationError('Shiftbase '+method+' lieferte kein lesbares JSON. Nur GET-Kontrolle.') from exc
+    if isinstance(result,dict) and (result.get('success') is False or result.get('ok') is False or result.get('error')):
+        raise ShiftbaseIntegrationError('Shiftbase meldet einen API-Anwendungsfehler. Nur GET-Kontrolle.')
+    return status,result
+
+
+def _sb_day_ops_audit_start(source, day, action, proposed, proof, timesheet_id=''):
+    with db_conn() as conn:
+        _sb_day_ops_table(conn)
+        rows=conn.execute('''SELECT id,state FROM shiftbase_day_operations
+                             WHERE driver_id=? AND day=? AND action=?
+                             AND (timesheet_id=? OR action='create')
+                             ORDER BY created_at DESC LIMIT 20''',
+                          (source['driver_id'],day,action,str(timesheet_id))).fetchall()
+        if rows:
+            raise ShiftbaseIntegrationError(
+                'Für diesen Tag und diese Aktion existiert bereits ein Übertragungsversuch. '
+                'Zuerst Shiftbase und das Prüfprotokoll kontrollieren; keine unbemerkte Doppelübertragung.')
+        ident=secrets.token_hex(16)
+        conn.execute('''INSERT INTO shiftbase_day_operations
+            (id,driver_id,shiftbase_user_id,year,month,day,action,timesheet_id,
+             proposed_json,proof_ref,state,message,created_at,updated_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (ident,source['driver_id'],source['uid'],source['year'],source['month'],
+             day,action,str(timesheet_id),json.dumps(proposed,ensure_ascii=False),
+             proof,'sending','Schreibvorgang vorbereitet; Ergebnis noch unbekannt',now_iso(),now_iso()))
+        conn.commit()
+    return ident
+
+
+def _sb_day_ops_audit_finish(ident, state, message):
+    with db_conn() as conn:
+        conn.execute('UPDATE shiftbase_day_operations SET state=?,message=?,updated_at=? WHERE id=?',
+                     (state,str(message)[:300],now_iso(),ident))
+        conn.commit()
+
+
+def _sb_day_ops_create(form, source):
+    _sb_write_access_checked(source)
+    _sb_day_ops_enabled('create')
+    day=_sb_day_ops_validate_date(source,form.get('work_day',''))
+    _sb_day_ops_absence_guard(source,day)
+    if day.weekday()==6:
+        raise ShiftbaseIntegrationError('Neue Sonntagsarbeit ist wegen Ersatzruhetag-/Ausnahmeprüfung nur direkt in Shiftbase zu erfassen.')
+    start=str(form.get('work_start','')).strip()
+    end=str(form.get('work_end','')).strip()
+    pause=str(form.get('work_break','')).strip()
+    net,span,pm=_sb_day_ops_clock_checks(start,end,pause)
+    evidence=str(form.get('work_proof','')).strip()[:500]
+    if len(evidence)<15:
+        raise ShiftbaseIntegrationError('Für den tatsächlich geleisteten Arbeitstag Beleg/Quelle (mind. 15 Zeichen) eingeben.')
+    # Confirm the mapped Shiftbase user exists in the LIVE users collection;
+    # never trust a typed or stale mapping alone for a new time record.
+    users=_shiftbase_get_all('users')
+    matches=[]
+    for entry in users:
+        embedded=_sb_get(entry,'User')
+        uid=(_sb_id(embedded,'id','user_id') if isinstance(embedded,dict) else None)
+        uid=uid or _sb_id(entry,'id','user_id','employee_id')
+        if uid==source['uid']:
+            matches.append(entry)
+    if len(matches)!=1:
+        raise ShiftbaseIntegrationError('Shiftbase-Benutzer nicht eindeutig im aktuellen Benutzerabruf vorhanden. Kein POST.')
+    metadata={}
+    for field in ('department_id','team_id','shift_id'):
+        value=str(form.get('work_'+field,'')).strip()
+        if not re.fullmatch(r'[0-9]{1,20}',value):
+            raise ShiftbaseIntegrationError(field+' muss eine gültige Shiftbase-ID aus der Abteilung/Schicht sein.')
+        metadata[field]=int(value)
+    item={'day':day.isoformat(),'start':start,'end':end,'break_minutes':str(pm),'deleted':False}
+    _sb_day_ops_neighbor_checks(source,item,net)
+    # Only the official flat-field Timesheet resource is targeted. This is an
+    # opt-in adapter until the account's authenticated Stoplight schema is checked.
+    payload={'user_id':int(source['uid']),'date':item['day'],
+             'starttime':start+':00','endtime':end+':00','break':str(pm),
+             'paid_break':'0','note':evidence[:200],**metadata}
+    ident=_sb_day_ops_audit_start(source,item['day'],'create',payload,evidence)
+    try:
+        _sb_day_ops_write_native('POST','/timesheets',payload)
+        # Never resend POST if the acknowledgement/readback is missing.
+        updated=_shiftbase_get_all('timesheets',{'min_date':item['day'],
+                                                 'max_date':item['day'],
+                                                 'user_id':source['uid']})
+        found=[]
+        for entry in updated:
+            uid,date,_,entry_id=_sb_timesheet_parts(entry)
+            if uid!=source['uid'] or date!=item['day'] or not entry_id:continue
+            ts=_sb_ts_detail(entry_id)
+            _sb_assert_timesheet_owner(ts,source['uid'],entry_id)
+            if _sb_live_snapshot(ts)=={'day':item['day'],'start':start,'end':end,'break_minutes':str(pm)}:
+                found.append(entry_id)
+        if len(set(found))!=1:
+            raise ShiftbaseIntegrationError('POST-Ausgang nicht eindeutig über GET bestätigt; bitte Schicht direkt in Shiftbase überprüfen.')
+    except Exception as exc:
+        _sb_day_ops_audit_finish(ident,'uncertain','POST/GET nicht bestätigt – in Shiftbase prüfen')
+        if isinstance(exc,ShiftbaseIntegrationError):raise
+        raise ShiftbaseIntegrationError('POST oder Rücklesen fehlgeschlagen; keine automatische Wiederholung.') from exc
+    _sb_day_ops_audit_finish(ident,'confirmed','POST und GET bestätigt; Timesheet-ID '+str(found[0]))
+    return 'Arbeitstag '+item['day']+' in Shiftbase angelegt und per GET bestätigt.'
+
+
+def _sb_day_ops_decline(form,source):
+    _sb_write_access_checked(source)
+    _sb_day_ops_enabled('decline')
+    eid=str(form.get('decline_id','')).strip()
+    if not re.fullmatch(r'[0-9]{1,20}',eid):
+        raise ShiftbaseIntegrationError('Timesheet-ID für Ablehnung ungültig.')
+    row=next((r for r in source['rows'] if str(r.get('entry_id'))==eid),None)
+    if row is None:
+        raise ShiftbaseIntegrationError('Timesheet gehört nicht zur ausgewählten Person und zum Monat.')
+    evidence=str(form.get('decline_proof','')).strip()[:500]
+    if len(evidence)<15:
+        raise ShiftbaseIntegrationError('Für die Fehl- oder Doppelerfassung Beleg/Grund (mind. 15 Zeichen) eingeben.')
+    ts=_sb_ts_detail(eid)
+    _sb_assert_timesheet_owner(ts,source['uid'],eid)
+    original=_sb_live_snapshot(ts)
+    if original['day']!=str(row['day']):
+        raise ShiftbaseIntegrationError('Timesheet-Datum stimmt nicht mit dem Monatsabruf überein.')
+    live_status=str(_sb_get(ts,'status') or row.get('status') or '').strip().lower()
+    if live_status in ('declined','rejected','abgelehnt'):
+        raise ShiftbaseIntegrationError('Dieser Timesheet-Eintrag wurde bereits abgelehnt.')
+    if live_status in ('approved','genehmigt','bestätigt'):
+        raise ShiftbaseIntegrationError('Bereits genehmigte Schicht: Ablehnung nur nach gesonderter Prüfung direkt in Shiftbase.')
+    if any(_sb_get(ts,k) not in (None,'') for k in ('clocked_in','clocked_out')):
+        raise ShiftbaseIntegrationError('Gestempelte Schicht: Ablehnung nur nach Prüfung der Stempelnachweise direkt in Shiftbase.')
+    current=_sb_review_row_obj(row)
+    if original!={k:current[k] for k in ('day','start','end','break_minutes')}:
+        raise ShiftbaseIntegrationError('Originalschicht wurde verändert. Bitte erneut abrufen.')
+    payload=_sb_update_payload(ts,eid,original,expected_uid=source['uid'],
+                              monthly_entry=source.get('raw_timesheets',{}).get(eid))
+    payload['status']='Declined'
+    ident=_sb_day_ops_audit_start(source,original['day'],'decline',payload,evidence,eid)
+    try:
+        _sb_day_ops_write_native('PUT','/timesheets/'+eid,payload)
+        checked=_sb_ts_detail(eid)
+        _sb_assert_timesheet_owner(checked,source['uid'],eid)
+        current_status=str(_sb_get(checked,'status') or '').strip().lower()
+        if current_status not in ('declined','rejected','abgelehnt'):
+            raise ShiftbaseIntegrationError('PUT-Ausgang nicht durch GET bestätigt. Keine Wiederholung; direkt in Shiftbase prüfen.')
+        if _sb_live_snapshot(checked)!=original:
+            raise ShiftbaseIntegrationError('Ablehnungs-GET zeigt unerwartet veränderte Uhrzeiten; bitte direkt in Shiftbase prüfen.')
+    except Exception as exc:
+        _sb_day_ops_audit_finish(ident,'uncertain','Statusänderung nicht durch GET bestätigt – manuell prüfen')
+        if isinstance(exc,ShiftbaseIntegrationError):raise
+        raise ShiftbaseIntegrationError('Ablehnungsversuch unklar; bitte in Shiftbase prüfen.') from exc
+    _sb_day_ops_audit_finish(ident,'confirmed','Ablehnung per GET bestätigt')
+    return 'Eintrag '+eid+' wurde in Shiftbase abgelehnt und per GET bestätigt (nicht gelöscht).'
+
+
+@app.post('/admin/shiftbase/arbeitstage/aktion')
+@admin_login_required
+def admin_shiftbase_day_operation():
+    _sb_verified_post_csrf(request.form)
+    raw=str(request.form.get('driver_id','')).strip()
+    try:
+        did=int(raw)
+        year=int(str(request.form.get('year','')))
+        month=int(str(request.form.get('month','')))
+        if not re.fullmatch(r'[0-9]{1,12}',raw) or did<=0 or year<2020 or year>2100 or month<1 or month>12:
+            raise ValueError()
+    except (ValueError,TypeError):
+        abort(400,'Ungültige Mitarbeiter-/Monatsangaben.')
+    mode=str(request.form.get('operation','')).strip()
+    if mode not in ('create','decline'):
+        abort(400,'Unbekannte Aktion.')
+    try:
+        source=_sb_review_source(did,year,month)
+        if mode=='create':
+            message=_sb_day_ops_create(request.form,source)
+        else:
+            message=_sb_day_ops_decline(request.form,source)
+        session['shiftbase_direct_result']='Erfolg: '+message
+    except ShiftbaseIntegrationError as exc:
+        session['shiftbase_direct_result']='Fehler: '+str(exc)
+    return redirect(url_for('admin_shiftbase_pruefvorschau',driver_id=did,year=year,month=month),code=303)
+
+
+def _sb_day_ops_html(source,csrf):
+    '''Explicit operator-entered additions and individual reject controls.'''
+    from markupsafe import escape as _escape
+    escape=lambda value:str(_escape(str(value if value is not None else '')))
+    did=source['driver_id']; year=source['year']; month=source['month']
+    action=url_for('admin_shiftbase_day_operation')
+    csrf_fields=(''.join('<input type="hidden" name="'+k+'" value="'+escape(v)+'">'
+                  for k,v in (('csrf_token',csrf),('driver_id',did),('year',year),('month',month))))
+    metadata_defaults={}
+    # Prefill IDs only when every known value in THIS employee/month agrees.
+    # The operator still needs to verify the actual department and shift.
+    for key in ('department_id','team_id','shift_id'):
+        vals=set()
+        for entry in source.get('raw_timesheets',{}).values():
+            ts=_sb_get(entry,'Timesheet')
+            if not isinstance(ts,dict):ts=entry
+            value=_sb_get(ts,key)
+            if value is not None and re.fullmatch(r'[0-9]{1,20}',str(value)):
+                vals.add(str(value))
+        metadata_defaults[key]=next(iter(vals)) if len(vals)==1 else ''
+    html=['<details class="sb-day-manager"><summary>Nachgewiesenen Arbeitstag hinzufügen oder fehlerhaften Eintrag ablehnen</summary>',
+          '<div style="padding:15px">',
+          '<p class="sb-muted"><b>Keine automatische Anpassung an Lohnstunden:</b> Neue Tage nur mit tatsächlich belegten Start-/Endzeiten, Pausen, Abteilung, Team und Schichtart. '
+          'Bei bestehenden Fehl-/Doppelerfassungen wird ein Eintrag abgelehnt, nicht gelöscht. '
+          'Die API-Anlage/Ablehnung ist separat freizuschalten und wird immer erneut gelesen.</p>']
+    html.append('<h3>Arbeitszeit nachtragen (nur nach Originalbeleg)</h3>')
+    html.append('<form method="post" action="'+escape(action)+'" class="grid grid-3" style="align-items:end">'+csrf_fields+
+                '<input type="hidden" name="operation" value="create">'+
+                '<label>Arbeitstag<input type="date" name="work_day" min="'+str(year)+'-'+str(month).zfill(2)+'-01" max="'+_sb_month_window(year,month)[1]+'" required></label>'+ 
+                '<label>Beginn<input type="time" name="work_start" step="900" required></label>'+ 
+                '<label>Ende<input type="time" name="work_end" step="900" required></label>'+ 
+                '<label>Unbezahlte Pause (Min.)<input type="number" name="work_break" min="0" max="90" step="15" value="30" required></label>'+ 
+                '<label>Shiftbase-Abteilungs-ID<input type="number" name="work_department_id" value="'+escape(metadata_defaults['department_id'])+'" min="1" step="1" required></label>'+ 
+                '<label>Shiftbase-Team-ID<input type="number" name="work_team_id" value="'+escape(metadata_defaults['team_id'])+'" min="1" step="1" required></label>'+ 
+                '<label>Shiftbase-Schichtart-ID<input type="number" name="work_shift_id" value="'+escape(metadata_defaults['shift_id'])+'" min="1" step="1" required></label>'+ 
+                '<label style="grid-column:span 2">Originalnachweis und Begründung<input type="text" name="work_proof" minlength="15" maxlength="500" placeholder="z.B. Talex-Bericht 14.10., Fahrtendienst tatsächlich geleistet" required></label>'+ 
+                '<div style="grid-column:1/-1"><button type="submit" class="primary" style="max-width:500px">Nachgewiesenen Arbeitstag in Shiftbase anlegen</button></div></form>')
+    html.append('<h3 style="margin-top:25px">Falsche / doppelte Schicht ablehnen</h3>')
+    html.append('<p class="sb-muted">Nur bei belegter Fehl- oder Doppelerfassung; bereits genehmigte oder gestempelte Istzeiten nicht ohne vorherige Klärung ablehnen.</p>')
+    for row in source['rows']:
+        if row.get('deleted') or str(row.get('status','')).lower() in ('declined','rejected','abgelehnt'):
+            continue
+        eid=str(row.get('entry_id',''))
+        if not re.fullmatch(r'[0-9]{1,20}',eid):continue
+        html.append('<form method="post" action="'+escape(action)+'" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;padding:9px;border:1px solid #dce3ec;border-radius:9px">'+
+                    csrf_fields+'<input type="hidden" name="operation" value="decline"><input type="hidden" name="decline_id" value="'+escape(eid)+'">'+
+                    '<strong>'+escape(row['day'])+'</strong><span>'+escape(row.get('begin',''))+'–'+escape(row.get('end',''))+' · ID '+escape(eid)+'</span>'+ 
+                    '<input type="text" style="min-width:250px;flex:1" name="decline_proof" minlength="15" maxlength="500" placeholder="Fehlernachweis / Ablehnungsgrund (mind. 15 Zeichen)" required>'+ 
+                    '<button type="submit" style="width:auto">Fehlerhaften Eintrag ablehnen</button></form>')
+    with db_conn() as conn:
+        _sb_day_ops_table(conn)
+        history=conn.execute('''SELECT day, action, state, message, updated_at FROM shiftbase_day_operations
+                                WHERE driver_id=? AND year=? AND month=? ORDER BY created_at DESC LIMIT 12''',
+                             (did,year,month)).fetchall()
+    if history:
+        html.append('<details><summary>Prüfprotokoll der letzten Anlage-/Ablehnungsversuche</summary><ul style="padding:14px">')
+        for operation in history:
+            html.append('<li>'+escape(operation['day'])+' · '+escape(operation['action'])+' · <b>'+
+                        escape(operation['state'])+'</b> · '+escape(operation['message'])+'</li>')
+        html.append('</ul></details>')
+    html.append('<p class="sb-muted">API-Freigabe über Render: SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED, '
+                'SHIFTBASE_TIMESHEET_MANUAL_CREATE_ENABLED bzw. SHIFTBASE_TIMESHEET_MANUAL_DECLINE_ENABLED. '
+                'Bestehende Schichtkorrekturen bleiben unabhängig davon verfügbar.</p></div></details>')
+    return ''.join(html)
+
+# ========== Ende Erweiterung Arbeitstage ==========
 
 # ========== End resumable transfer ==========
 
