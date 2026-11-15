@@ -6819,11 +6819,11 @@ def admin_shiftbase_transfer_dashboard():
 .sb-overview .sb-cell{max-width:350px;overflow-wrap:break-word}
 </style>''',
        '<div class="sb-overview"><div class="card"><h2>Shiftbase – Monatsübersicht für alle Fahrer</h2>',
-       '<p>Du kannst einzelne oder alle zugeordneten Fahrer auswählen. Der Monatsdatenabruf wird für die ausgewählten Fahrer zusammengefasst; die Vorschläge werden danach je Fahrer separat berechnet. <b>An Shiftbase gehen nur vorher anhand der Arbeitszeitnachweise geprüfte und vorgemerkte Korrekturen.</b></p>',
-       '<form action="'+url_for('admin_shiftbase_transfer_dashboard')+'" method="get" class="actions">',
+       '<p>Du kannst einzelne oder alle zugeordneten Fahrer auswählen. Der Monatsdatenabruf wird für die ausgewählten Fahrer zusammengefasst; die Vorschläge werden danach je Fahrer separat berechnet. <b>An Shiftbase sollen ausschließlich mit Arbeitszeitnachweisen abgeglichene Zeitkorrekturen gehen; Vorschläge allein sind kein Nachweis.</b></p>',
+       '<form action="'+url_for('admin_shiftbase_transfer_dashboard')+'" method="get" class="actions" id="sb-month-filter">',
        '<label>Jahr<input name="year" type="number" min="2020" max="2100" value="'+str(year)+'" style="width:110px"></label>',
        '<label>Monat<select name="month" style="width:155px">'+''.join('<option value="'+str(m)+'"'+(' selected' if m==month else '')+'>'+MONATE[m]+'</option>' for m in range(1,13))+'</select></label>',
-       '<button type="submit" class="primary">Monat anzeigen</button></form>',
+       '<noscript><button type="submit" class="primary">Monat anzeigen</button></noscript></form>',
        '<p>'+str(len(eligible))+' aktive, eindeutig zugeordnete Fahrer in dieser Übersicht. Alle übrigen Mitarbeiter bleiben ausgeschlossen, bis sie korrekt zugeordnet sind.</p>',
        '<label>Fahrer suchen<input type="search" id="sb-search" placeholder="Name eingeben …" style="max-width:380px"></label>',
        '<div class="sb-toolbar"><button type="button" id="sb-all" class="primary">Alle auswählen</button>',
@@ -6835,7 +6835,7 @@ def admin_shiftbase_transfer_dashboard():
        '<form id="sb-run-form" method="post" action="'+url_for('admin_shiftbase_transfer_start')+'">',
        '<input type="hidden" name="csrf_token" value="'+esc(_sb_csrf_token())+'">',
        '<input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">',
-       '<div class="table-wrap"><table><thead><tr><th>Auswahl</th><th>Fahrer</th><th>Abrechnung</th><th>Vorschau / Differenz</th><th>Geprüfte Korrekturen</th><th>Aktion</th></tr></thead><tbody>']
+       '<div class="table-wrap"><table><thead><tr><th>Auswahl</th><th>Fahrer</th><th>Abrechnung</th><th>Vorschau / Differenz</th><th>Vorgemerkte Korrekturen</th><th>Aktion</th></tr></thead><tbody>']
     for driver in eligible:
         did=int(driver['driver_id']); stage=stages.get(did)
         try:count=len(json.loads(stage['corrections_json'])) if stage else 0
@@ -6845,7 +6845,7 @@ def admin_shiftbase_transfer_dashboard():
                  '<td><b>'+esc(driver['name'])+'</b><div class="sb-fine">Shiftbase-ID '+esc(mapping[did])+'</div></td>'
                  '<td>'+esc(_sb_dayview_hm(driver['payroll_hours']) if driver['payroll_hours'] is not None else '–')+'</td>'
                  '<td class="sb-cell" data-preview="'+str(did)+'">Noch nicht berechnet</td>'
-                 '<td>'+('<span class="sb-ok">'+str(count)+' geprüft / vorgemerkt</span>' if count else '<span class="sb-pending">Noch nicht bestätigt</span>')+'</td>'
+                 '<td>'+('<span class="sb-ok">'+str(count)+' geprüft / vorgemerkt</span>' if count else '<span class="sb-pending">Noch nicht vorgemerkt</span>')+'</td>'
                  '<td><a href="'+esc(preview)+'">Zeiten prüfen</a></td></tr>')
     h.append('</tbody></table></div><p class="sb-fine">Bereits einzeln geprüfte und vorgemerkte Änderungen können hier erneut ausgewählt und gesendet werden.</p>'
              '<button class="primary" id="sb-launch" type="submit" style="max-width:520px">Bereits vorgemerkte Istzeiten senden</button></form>')
@@ -6854,19 +6854,33 @@ def admin_shiftbase_transfer_dashboard():
              '<input type="hidden" name="year" value="'+str(year)+'"><input type="hidden" name="month" value="'+str(month)+'">'
              '<div class="card"><h3>Gemeinsame Prüfansicht – rechnerische Vorschläge für alle gewählten Fahrer</h3>'
              '<p class="sb-fine"><b>Wichtig:</b> Ein berechneter Vorschlag ist kein Arbeitszeitnachweis. '
-             'Erst nach Kontrolle der angezeigten Zeiten und Pausen anhand von Talex/Originalunterlagen '
-             'je Fahrer ausdrücklich als echte Istzeiten bestätigen. Ohne Bestätigung wird nichts gesendet.</p>'
+             'Vergleiche die vorgeschlagenen Zeiten und Pausen mit den tatsächlichen Arbeitszeitnachweisen. '
+             '<b>Ein Klick auf „Geprüfte Istzeiten senden“ ist die direkte Freigabe der angezeigten Korrekturen;</b> '
+             'ein zusätzliches Häkchen oder Bestätigungsfenster gibt es nicht. Unveränderte und gesperrte Schichten werden nicht übertragen.</p>'
              '<div class="actions"><button type="button" id="sb-expand-proposals">Alle Fahrerdetails öffnen</button>'
              '<button type="button" id="sb-collapse-proposals">Alle Fahrerdetails schließen</button></div>'
              '<div id="sb-bulk-review-results" role="region" aria-label="Monatsvorschläge"></div>'
              '<div id="sb-bulk-review-count" class="sb-fine"></div>'
              '<div class="actions" style="margin-top:14px">'
-             '<button type="submit" name="mode" value="start" class="primary" style="width:auto">Alle ausdrücklich geprüften Änderungen senden · Fortschrittsanzeige</button>'
-             '<button type="submit" name="mode" value="queue" style="width:auto">Nur gemeinsam vormerken</button>'
+             '<button type="submit" name="mode" value="start" class="primary" style="width:auto">Geprüfte Istzeiten direkt senden · Fortschrittsanzeige</button>'
+             '<button type="submit" name="mode" value="queue" style="width:auto">Änderungen gemeinsam vormerken</button>'
              '</div></div></form>')
     h.append(r'''<script>
 (function(){
 const root=document.querySelector('.sb-overview');if(!root)return;
+// Monat und Jahr bestimmen immer den Kontext: nach jeder Auswahl ohne weiteren Button neu laden.
+const monthFilter=root.querySelector('#sb-month-filter');
+const monthInput=monthFilter.querySelector('select[name="month"]');
+const yearInput=monthFilter.querySelector('input[name="year"]');
+let yearNavigationTimer;
+const updateMonth=()=>{if(monthFilter.reportValidity())monthFilter.requestSubmit();};
+monthInput.addEventListener('change',updateMonth);
+yearInput.addEventListener('change',updateMonth);
+yearInput.addEventListener('input',()=>{
+ clearTimeout(yearNavigationTimer);
+ if(/^\d{4}$/.test(yearInput.value)&&yearInput.checkValidity())
+  yearNavigationTimer=setTimeout(updateMonth,550);
+});
 const checks=()=>Array.from(root.querySelectorAll('input[name="driver_id"]:checked'));
 const boxes=()=>Array.from(root.querySelectorAll('tr[data-driver] input[name="driver_id"]'));
 root.querySelector('#sb-all').onclick=()=>boxes().forEach(x=>x.checked=true);
@@ -6897,11 +6911,12 @@ function recalc(){let drivers=0,changes=0;
    if(dirty)count++;
   });
   panel.querySelector('.sb-driver-count').textContent=count+' geänderte Schichten';
-  const check=panel.querySelector('input.sb-driver-cert');
-  check.disabled=!count||panel.dataset.blocked==='1';if(check.disabled)check.checked=false;
-  if(check.checked){drivers++;changes+=count;}
+  const candidate=panel.querySelector('input.sb-driver-send');
+  const ready=count>0&&panel.dataset.blocked!=='1';
+  candidate.disabled=!ready;
+  if(ready){drivers++;changes+=count;}
  });
- counter.textContent=drivers+' Fahrer mit bestätigten Istzeiten · '+changes+' zu sendende Schichtänderungen.';
+ counter.textContent=drivers+' Fahrer mit Änderungen · '+changes+' zu sendende Schichtänderungen. Vor dem Senden mit Originalnachweisen abgleichen.';
 }
 async function load(all){
  if(all) boxes().forEach(x=>x.checked=true);
@@ -6930,16 +6945,15 @@ async function load(all){
     field('start','time',r.proposed.start,r.original.start,'')+field('end','time',r.proposed.end,r.original.end,'')+field('pause','number',r.proposed.pause,r.original.break_minutes,'min="0" max="600"')+'</div></td>'+
     '<td class="sb-row-diff">'+esc(r.diff)+'</td><td>'+(r.assumed_break?'<b style="color:#b54708">Pause nur angenommen!</b>':'Prüfen')+'</td></tr>';
    }
-   const disabled=item.blocked?' disabled':'';
    panel.innerHTML='<summary style="cursor:pointer;font-weight:800">'+esc(item.name)+' · '+esc(item.summary)+' · <span class="sb-driver-count">0 geänderte Schichten</span></summary>'+
     (item.blocked?'<p class="flash err">'+esc(item.blocked)+'</p>':'')+
     '<div class="table-wrap" style="margin:10px 0"><table style="min-width:820px"><thead><tr><th>Datum</th><th>Original</th><th>Vorschlag / korrigierbar (Beginn, Ende, Pause)</th><th>Diff.</th><th>Hinweis</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    '<label style="display:flex;align-items:start;gap:10px;font-weight:700"><input type="checkbox" class="sb-driver-cert" name="driver_id" value="'+item.driver_id+'" style="width:20px;height:20px;flex-shrink:0"'+disabled+'>Ich bestätige ausdrücklich: Alle geänderten Zeiten und Pausen dieses Fahrers sind anhand der tatsächlichen Original-Arbeitszeitnachweise geprüft und korrekt.</label>';
+    '<input type="hidden" class="sb-driver-send" name="driver_id" value="'+item.driver_id+'" disabled>'+
+    '<div class="sb-fine">Rechnerische Vorschläge · vor dem direkten Versand auf tatsächlich geleistete Zeiten prüfen.</div>';
    result.appendChild(panel);
   }
   loaded=true;result.querySelectorAll('input[data-field]').forEach(el=>el.addEventListener('change',recalc));
   result.querySelectorAll('input[data-field]').forEach(el=>el.addEventListener('input',recalc));
-  result.querySelectorAll('input.sb-driver-cert').forEach(el=>el.addEventListener('change',recalc));
   recalc();progress.textContent='Vorschläge für '+data.drivers.length+' Fahrer geladen – es wurde NICHTS an Shiftbase gesendet.';
  }catch(e){progress.textContent='Vorschau fehlgeschlagen: '+e.message;result.innerHTML='';}
  finally{buttons.forEach(x=>x.disabled=false);}
@@ -6948,18 +6962,23 @@ root.querySelector('#sb-preview').onclick=()=>load(false);
 root.querySelector('#sb-preview-all').onclick=()=>load(true);
 root.querySelector('#sb-expand-proposals').onclick=()=>result.querySelectorAll('.sb-driver-review').forEach(x=>x.open=true);
 root.querySelector('#sb-collapse-proposals').onclick=()=>result.querySelectorAll('.sb-driver-review').forEach(x=>x.open=false);
-root.querySelector('#sb-run-form').addEventListener('submit',e=>{if(!checks().length){e.preventDefault();alert('Bitte Fahrer auswählen.');}});
+root.querySelector('#sb-run-form').addEventListener('submit',e=>{if(!checks().length){e.preventDefault();progress.textContent='Bitte zuerst mindestens einen vorgemerkten Fahrer auswählen.';}});
 reviewForm.addEventListener('submit',e=>{
- recalc();const certs=Array.from(result.querySelectorAll('input.sb-driver-cert:checked'));
- if(!loaded||!certs.length){e.preventDefault();alert('Bitte zuerst Vorschläge laden, die Zeitnachweise prüfen und die betreffenden Fahrer ausdrücklich bestätigen.');return;}
+ recalc();const targets=Array.from(result.querySelectorAll('input.sb-driver-send:not(:disabled)'));
+ if(!loaded||!targets.length){
+  e.preventDefault();
+  progress.textContent=loaded?'Keine veränderbaren Schichtkorrekturen zum Senden vorhanden.':'Bitte zuerst Vorschläge für die gewünschten Fahrer erstellen.';
+  return;
+ }
  for(const panel of result.querySelectorAll('.sb-driver-review')){
-  const selected=Boolean(panel.querySelector('.sb-driver-cert:checked'));
+  const selected=Boolean(panel.querySelector('.sb-driver-send:not(:disabled)'));
   for(const row of panel.querySelectorAll('.sb-review-shift')){
    if(!selected||!row.classList.contains('sb-dirty')) row.querySelectorAll('input').forEach(x=>x.disabled=true);
   }
  }
  reviewForm.querySelectorAll('button[type=submit]').forEach(x=>x.disabled=true);
  const submit=document.createElement('input');submit.type='hidden';submit.name='mode';submit.value=e.submitter&&e.submitter.value==='queue'?'queue':'start';reviewForm.appendChild(submit);
+ const userAction=document.createElement('input');userAction.type='hidden';userAction.name='reviewed_send_action';userAction.value='administrator_clicked_reviewed_times';reviewForm.appendChild(userAction);
 });
 })();
 </script>'''.replace('CSRF',esc(_sb_csrf_token())).replace('YYYY',str(year)).replace('MM',str(month)).replace('BULKPREVIEW',url_for('admin_shiftbase_bulk_preview')))
@@ -7059,7 +7078,7 @@ def admin_shiftbase_bulk_preview():
 @app.post('/admin/shiftbase/transfer/bulk-review')
 @admin_login_required
 def admin_shiftbase_bulk_review():
-    """Collectively certify *actual* times for multiple explicitly checked drivers.
+    """Stage admin-submitted, reviewed actual times from multiple drivers in one click.
 
     Re-fetch the live monthly snapshot, re-run original signed-source and
     rest/break/absence checks independently for each driver. No PUT here.
@@ -7069,6 +7088,8 @@ def admin_shiftbase_bulk_review():
     try:
         year=int(request.form['year']);month=int(request.form['month'])
         if not 2020<=year<=2100 or not 1<=month<=12: raise ValueError('Ungültiger Monat')
+        if request.form.get('reviewed_send_action') != 'administrator_clicked_reviewed_times':
+            raise ShiftbaseIntegrationError('Bitte die geprüften Zeiten über die Schaltfläche der gemeinsamen Prüfansicht senden.')
         ids=_sb_bulk_driver_ids(request.form)
         mode=str(request.form.get('mode','start'))
         if mode not in ('start','queue'): raise ValueError('Ungültiger Versandmodus')
