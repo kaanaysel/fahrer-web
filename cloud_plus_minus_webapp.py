@@ -2142,6 +2142,7 @@ def base_page(title: str, body: str, active: str = "dashboard") -> str:
         ("dashboard","Dashboard",url_for("admin_dashboard")), ("drivers","Fahrer",url_for("admin_drivers")),
         ("payroll_hours","Stunden für Lohnabrechnung",url_for("admin_months")),
         ("shiftbase", "Shiftbase-Abgleich", url_for("admin_shiftbase_abgleich")),
+        ("shiftbase_payroll", "Lohnzettel / Shiftbase-Dateien", url_for("admin_shiftbase_payroll")),
         ("exports","Export/Backup",url_for("admin_exports")), ("cleanup","Aufräumen",url_for("admin_cleanup")), ("portal","Fahrerportal",url_for("driver_login")),
     ]
     flashes = "".join(f'<div class="flash {"ok" if c=="ok" else "err"}">{m}</div>' for c,m in get_flashed_messages(with_categories=True))
@@ -5439,21 +5440,67 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
         result['note'] = ('Weniger als 15 Minuten offen – keine künstlichen Arbeitstage oder ' 'Minute-für-Minute-Anpassung. Beleg prüfen.')
         return result
     if remaining_minutes < 0:
-        # These are existing, actually recorded days to AUDIT, not deletions.
+        # Existing entries are review leads only. NEVER select or decline a real
+        # timesheet solely because its recorded hours exceed payroll hours.
+        issues = {str(x['entry_id']):x['reasons']
+                  for x in _sb_preview_exclusion_diagnostics(source)}
         existing = []
-        for day, minutes in sorted(known_daily_net.items()):
-            if minutes > 0:
-                existing.append({'day': day, 'minutes': minutes})
+        try:
+            excluded = set(_expand_day_ranges(source.get('sick_ranges','')))
+            vac_count = str(source.get('vacation_count','')).strip()
+            if vac_count not in ('','0'):
+                exact = str(source.get('preview_vacation_days','')).strip()
+                vacation = set(_expand_day_ranges(exact)) if exact else set()
+                if not exact or len(vacation) != int(vac_count):
+                    result.update(kind='check_existing',
+                                  note='Urlaubstage nur als Anzahl gespeichert: '
+                                       'Vor einer Entfallprüfung konkrete Urlaubstage angeben.')
+                    return result
+                excluded.update(vacation)
+        except (ValueError,TypeError):
+            result.update(kind='check_existing',note='Abwesenheitstage nicht eindeutig datiert.')
+            return result
+        for row in source.get('rows', []):
+            day = str(row.get('day',''))
+            try:
+                day_number = shiftbase_date.fromisoformat(day).day
+            except ValueError:
+                continue
+            if day_number in excluded or row.get('absence'):
+                continue
+            if any(fr <= day <= to and str(status).lower() not in
+                   ('rejected','declined','abgelehnt')
+                   for fr,to,_,status in source.get('absence_ranges',[])):
+                continue
+            eid = str(row.get('entry_id', ''))
+            if not re.fullmatch(r'[0-9]{1,20}',eid) or row.get('deleted'):
+                continue
+            if str(row.get('status', '')).lower() in ('declined','rejected','abgelehnt'):
+                continue
+            try:
+                minutes = int((Decimal(str(row['hours']))*Decimal(60)).quantize(Decimal('1')))
+                if minutes <= 0: continue
+            except (TypeError,ValueError,InvalidOperation):
+                continue
+            reasons = issues.get(eid, [])
+            existing.append({'day':str(row['day']),'minutes':minutes,
+                             'entry_id':eid,'reasons':reasons})
+        # Prioritise obvious recording anomalies for investigation, and otherwise
+        # lead with entries closest to the remaining excess (not assumed wrong).
+        existing.sort(key=lambda x:(0 if x['reasons'] else 1,
+                         abs(x['minutes']-abs(remaining_minutes)),x['day']))
         result.update(kind='check_existing',
-                      required_days=(abs(remaining_minutes) + 479)//480,
+                      required_days=max(1,(abs(remaining_minutes)+479)//480),
                       candidates=existing[:12],
-                      note='Mehr Stunden erfasst als abgerechnet. Bestehende Tage auf '
-                           'Fehl- oder Doppelerfassungen prüfen. Ohne Originalnachweis '
-                           'darf keine vorhandene Arbeitsschicht entfernt werden.')
+                      note='Mehr Shiftbase-Stunden als Lohnstunden. Nur möglicherweise '
+                           'fehlerhafte oder doppelte Timesheets zur Prüfung gelistet. '
+                           'Eine erfasste Schicht bleibt unverändert, bis der Nachweis '
+                           'eines Erfassungsfehlers vorliegt und die konkrete Timesheet-ID '
+                           'ausdrücklich zur Ablehnung ausgewählt wurde.')
         return result
 
     # Only propose investigations of FREE days; never invent clock punches.
-    occupied = set(known_daily_net)
+    occupied = set(known_daily_net) | {str(r.get('day')) for r in source.get('rows',[]) if not r.get('deleted')}
     blocked = set(excluded_numbers)
     first = shiftbase_date(source['year'], source['month'], 1)
     last = shiftbase_date.fromisoformat(_sb_month_window(source['year'], source['month'])[1])
@@ -5538,7 +5585,10 @@ def _sb_preview_day_review(source, remaining_minutes, rest_rows, known_daily_net
         if _sb_rest_violation(projected + [tentative]) is not None:
             continue
         projected.append(tentative)
-        nominated.append({'day': day.isoformat(), 'minutes': minutes})
+        nominated.append({'day': day.isoformat(), 'minutes': minutes,
+                          'draft_start':'08:00', 'draft_end':end_clock,
+                          'draft_break':pause,
+                          'label':'Rechnerische Platzhalter-Uhrzeiten, keine Istzeit'})
     result['candidates'] = nominated
     result['note'] = ('Nur mögliche Daten zur Suche in Talex/Originalbelegen, KEINE '
                       'tatsächlich nachgewiesenen Schichten. Feiertage, Sonntags-'
@@ -5730,10 +5780,20 @@ def _sb_hypothetical_preview(source):
     except (ShiftbaseIntegrationError, ValueError) as exc:
         result['blocked_reason'] = ('Ruhezeiten können nicht zuverlässig geprüft werden: '
                                     + str(exc))
+        if difference < 0:
+            result['day_review'] = _sb_preview_day_review(
+                source, -int((abs(difference)*Decimal(60)).quantize(Decimal('1'))),
+                [],daily_net,sick_days | vacation_days)
         return result
     if original_conflict:
         result['blocked_reason'] = ('Bereits im Ausgangsmonat besteht ein Zeit-/Ruhezeitkonflikt ('
                                     + original_conflict + '). Keine automatische Verteilung.')
+        # Still present actual existing entries for manual ERROR investigation;
+        # no new hypothetical workday can be safely scheduled while rest fails.
+        if difference < 0:
+            result['day_review'] = _sb_preview_day_review(
+                source, -int((abs(difference)*Decimal(60)).quantize(Decimal('1'))),
+                [],daily_net,sick_days | vacation_days)
         return result
 
     requested_minutes = int((abs(difference) * Decimal(60)).quantize(Decimal('1')))
@@ -5975,7 +6035,7 @@ def admin_shiftbase_pruefvorschau():
         h.append('<p class="sb-muted">Hinweis zur Planung: '+esc(plan['blocked_reason'])+'</p>')
     if plan.get('day_review') and plan['day_review'].get('kind'):
         dcheck=plan['day_review']
-        h.append('<div class="sb-hint"><b>Zusätzliche / entfallende Arbeitstage – nur Prüfliste, kein Versand:</b> '
+        h.append('<div class="sb-hint"><b>Zusätzliche / entfallende Arbeitstage – Vorschau vor eigener Belegprüfung:</b> '
                  +esc(dcheck.get('note',''))+'<br>Orientierungswert: '
                  +str(dcheck.get('required_days',0))+' Tag(e).')
         if dcheck.get('candidates'):
@@ -6002,13 +6062,10 @@ def admin_shiftbase_pruefvorschau():
     if source.get('sick_ranges'):
         h.append('<p class="sb-muted">Cloud-Krankheitstage: '+esc(source['sick_ranges'])+' (für hypothetische Änderungen ausgeschlossen).</p>')
     h.append('<p class="sb-muted"><b>Fehlende oder fehlerhafte Arbeitstage:</b> '+
-             'Die Cloud kann derzeit per API nur vorhandene Zeiteinträge bearbeiten. '+
-             'Tatsächlich geleistete, bislang fehlende Tage können nach Belegprüfung in '+
-             '<a href="https://app.shiftbase.com/" target="_blank" rel="noopener noreferrer">Shiftbase</a> '+
-             'unter Arbeitszeitprotokoll → + Arbeitsstunden erfasst werden. '+
-             'Laut Shiftbase lassen sich falsche Einträge nicht löschen, sondern ablehnen. '+
-             'Krankheit, Urlaub, Nachtschicht-Ruhezeit und Abwesenheiten vorher prüfen; '+
-             'danach diesen Monat erneut abrufen. Keine automatische Anlage oder Ablehnung nur wegen der Lohndifferenz.</p>')
+             'Rechnerische Zusatz- oder Entfalltage werden unten jetzt als bearbeitbare '+
+             'Prüfkarten angezeigt. Datum, Arbeitsbeginn, Arbeitsende und Pause kannst du '+
+             'vor jeder Einzelfreigabe ändern. Eine reine Abrechnungsdifferenz ist kein '+
+             'Arbeitszeitnachweis: kein automatisches POST oder Ablehnen.</p>')
     if reply:
         color='ok' if reply.startswith('Erfolg:') else 'err'
         h.append('<div class="flash '+color+'">'+esc(reply)+'</div>')
@@ -6070,6 +6127,8 @@ def admin_shiftbase_pruefvorschau():
     h.append('<div class="sb-batch-actions"><button class="primary" type="submit" name="mode" value="start"'+('' if writable else ' disabled')+'>Geprüfte Istzeiten senden · mit Fortschrittsanzeige</button>')
     h.append('<p class="sb-muted"><span id="sb-changed-count">Änderungen werden gezählt …</span> Nur die nach Talex überprüften Istzeiten bestätigen. Nicht geänderte Schichten und reine Lohnabweichungen werden niemals gesendet.</p></div>')
     h.append('</form>')
+    h.append(_sb_day_candidate_cards(source,plan,_sb_csrf_token()))
+    h.append(_SB_DAY_PROPOSAL_JS)
     h.append(_sb_day_ops_html(source,_sb_csrf_token()))
     h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_transfer_dashboard',year=year,month=month)+'">Alle Fahrer / Gesamtversand</a></p>')
     h.append('<p><a class="btn small" href="'+url_for('admin_shiftbase_vorschlaege_pruefliste_csv',driver_id=did,year=year,month=month,urlaubs_tage=source['preview_vacation_days'])+'">Vorschläge als unverbindliche Prüfliste (CSV)</a></p>')
@@ -7170,7 +7229,14 @@ def admin_shiftbase_transfer_dashboard():
              '<div id="sb-bulk-review-count" class="sb-fine"></div>'
              '<div class="actions" style="margin-top:14px">'
              '<button type="submit" name="mode" value="start" class="primary" style="width:auto">Geprüfte Istzeiten direkt senden · Fortschrittsanzeige</button>'
-             '</div></div></form>')
+             '</div></div></form>'
+             '<div class="card"><h3>Neue / möglicherweise fehlerhafte Arbeitstage – einzeln kontrollieren</h3>'
+             '<p class="sb-fine">Automatisch vorgeschlagene Tage und Fehlbuchungen stehen hier als einzelne, editierbare Prüfaufträge. '
+             'Sie werden nicht gemeinsam mit den bestehenden PUT-Korrekturen versendet. '
+             'Neue Tage dürfen ausschließlich anhand tatsächlicher Nachweise eingetragen werden; bei Fehlbuchungen '
+             'muss die konkrete Timesheet-ID nachweislich falsch sein. Die API-Einzeltest-Freigabe bleibt getrennt.</p>'
+             '<div id="sb-bulk-day-actions"></div></div>')
+    h.append(_SB_DAY_PROPOSAL_JS)
     h.append(r'''<script>
 (function(){
 const root=document.querySelector('.sb-overview');if(!root)return;
@@ -7248,7 +7314,7 @@ async function load(all){
  if(all) boxes().forEach(x=>x.checked=true);
  const ids=checks().map(x=>x.value);
  if(!ids.length){progress.textContent='Bitte Fahrer auswählen.';return;}
- loaded=false;result.innerHTML='';counter.textContent='';
+ loaded=false;result.innerHTML='';root.querySelector('#sb-bulk-day-actions').innerHTML='';counter.textContent='';
  const buttons=[root.querySelector('#sb-preview'),root.querySelector('#sb-preview-all')];buttons.forEach(x=>x.disabled=true);
  progress.textContent='Lese gemeinsame Shiftbase-Monatsdaten und berechne Vorschläge für '+ids.length+' Fahrer …';
  try{
@@ -7256,6 +7322,8 @@ async function load(all){
   ids.forEach(id=>body.append('driver_id',id));
   const response=await fetch('BULKPREVIEW',{method:'POST',body,credentials:'same-origin',cache:'no-store'});
   const data=await response.json();if(!response.ok)throw Error(data.error||'Abruf fehlgeschlagen');
+  const dayActions=root.querySelector('#sb-bulk-day-actions');
+  dayActions.innerHTML='';
   for(const item of data.drivers){
    const cell=root.querySelector('[data-preview="'+item.driver_id+'"]');if(cell)cell.textContent=item.summary||item.error||'Nicht verfügbar';
    paintDiff(item.driver_id,item.error?null:item.difference_minutes);
@@ -7278,13 +7346,52 @@ async function load(all){
        sourceDiagnostics.map(x=>'<li>'+esc(x.day)+': '+esc((x.reasons||[]).join('; '))+'</li>').join('')+
        '</ul><small>Eine Lohndifferenz ist kein Beleg für eine tatsächlich andere Arbeitszeit.</small></div>' : '';
    const review=item.day_review;
+   // Independent per-day forms are outside the timesheet correction form.
+   // The operator can change the dates and real times, and must enter proof.
+   if(review&&review.kind&&(review.candidates||[]).length){
+    const wrapper=document.createElement('details');wrapper.style.cssText='border:1px solid #d9dee8;padding:12px;margin:10px 0;border-radius:12px';
+    const meta=item.ops_metadata||{};
+    const field=(name,type,value,extra='')=>'<label>'+esc(name.replaceAll('_',' '))+'<input name="'+name+'" type="'+type+'" value="'+esc(value||'')+'" '+extra+' required></label>';
+    const hidden='<input type="hidden" name="csrf_token" value="CSRF"><input type="hidden" name="driver_id" value="'+esc(item.driver_id)+'">'+
+      '<input type="hidden" name="year" value="YYYY"><input type="hidden" name="month" value="MM">';
+    let cards='';
+    (review.candidates||[]).forEach((lead,i)=>{
+     const create=review.kind==='check_missing',eid=String(lead.entry_id||'');
+     if(!create&&!/^\d{1,20}$/.test(eid))return;
+     let fields='';
+     if(create){
+      if(!lead.draft_start||!lead.draft_end)return;
+      fields='<input type="hidden" name="operation" value="create"><div class="grid grid-3">'+
+        field('work_day','date',lead.day,'min="YYYY-MM-01" max="MONTHEND"')+
+        field('work_start','time',lead.draft_start,'step="900"')+
+        field('work_end','time',lead.draft_end,'step="900"')+
+        field('work_break','number',lead.draft_break,'min="0" max="90" step="15"')+
+        field('work_department_id','number',meta.department_id,'min="1"')+
+        field('work_team_id','number',meta.team_id,'min="1"')+
+        field('work_shift_id','number',meta.shift_id,'min="1"')+'</div>'+field('work_proof','text','','minlength="15" maxlength="500" placeholder="Originalbeleg, echte Zeiten und Pause"')+
+        '<p style="font-size:12px;color:#92400e">Rechnerischer Platzhalter '+esc(lead.minutes)+' Minuten netto. Zeiten und Pausen vor dem Senden anhand des Nachweises ändern.</p>';
+     }else{
+      fields='<input type="hidden" name="operation" value="decline"><input type="hidden" name="decline_id" value="'+esc(eid)+'">'+
+        '<p>Eintrag '+esc(eid)+' · '+esc(lead.day)+' · '+esc(lead.minutes)+' Minuten. '+esc((lead.reasons||[]).join('; '))+'</p>'+
+        field('decline_proof','text','','minlength="15" maxlength="500" placeholder="Beweis für Fehler/Duplikat"');
+     }
+     cards+='<form class="sb-proposed-day" method="post" action="DAYACTION" style="padding:12px;margin:10px 0;background:#f8fbff;border:1px solid #d6e4f2;border-radius:11px">'+
+       hidden+'<b>'+esc(create?'Neuer Arbeitstag – Entwurf '+(i+1):'Mögliche Fehlbuchung – prüfen')+'</b>'+fields+
+       '<div class="actions"><button type="submit" name="day_submit_mode" value="check">Nur prüfen – nichts senden</button></div>'+
+       (item.ops_live?'<label style="display:flex;align-items:center;gap:8px"><input style="width:auto" type="checkbox" name="one_live_write" value="yes">Echten Arbeitsnachweis geprüft – genau diese Aktion freigeben</label>'+
+        '<div class="actions"><button class="primary" type="submit" name="day_submit_mode" value="live">Diesen Tag einzeln senden</button></div>':'')+
+       '<p class="sb-day-proposal-result" role="status"></p></form>';
+    });
+    wrapper.innerHTML='<summary style="cursor:pointer;font-weight:800">'+esc(item.name)+' · '+esc(review.candidates.length)+' vorgeschlagene Tagesprüfungen</summary><p>'+esc(review.note||'')+'</p>'+cards;
+    dayActions.appendChild(wrapper);
+   }
    const reviewText=review&&review.kind
-     ? '<div class="sb-hint"><b>Fehlende / überzählige Arbeitstage prüfen – keine automatische Anlage oder Löschung:</b> '
+     ? '<div class="sb-hint"><b>Fehlende / überzählige Arbeitstage – unten als kontrollierbare Tagesaktionen:</b> '
        +esc(review.note)+'<p>Orientierungswert: '+esc(review.required_days)+' Tag(e). '
        +(review.candidates||[]).map(x=>esc(x.day)+' ('+esc(Math.floor(x.minutes/60))+':'+String(x.minutes%60).padStart(2,'0')+')').join(', ')
-       +'</p><small>Nur Prüfhilfe. Nachgewiesene fehlende Tage in Shiftbase unter Arbeitszeitprotokoll → + Arbeitsstunden ergänzen; '+
-       'falsche Einträge dort ablehnen (keine Löschfunktion). Krankheit/Urlaub beachten. '+
-       '<a href="https://app.shiftbase.com/" target="_blank" rel="noopener noreferrer">Shiftbase öffnen</a>. '+
+       +'</p><small>Einzelne, editierbare Prüfaufträge stehen weiter unten. '+
+       'Originalarbeitszeiten und Krankheit/Urlaub beachten. '+
+       'Originalbelege vor jedem Einzelsenden prüfen. '+
        'Diese Tage werden nicht automatisch gesendet.</small></div>' : '';
    panel.innerHTML='<summary style="cursor:pointer;font-weight:800">'+esc(item.name)+' · '+esc(item.summary)+' · <span class="sb-driver-count">0 geänderte Schichten</span></summary>'+
     (item.balance_note?'<p class="sb-fine">'+esc(item.balance_note)+'</p>':'')+
@@ -7323,7 +7430,8 @@ reviewForm.addEventListener('submit',e=>{
  const userAction=document.createElement('input');userAction.type='hidden';userAction.name='reviewed_send_action';userAction.value='administrator_clicked_reviewed_times';reviewForm.appendChild(userAction);
 });
 })();
-</script>'''.replace('CSRF',esc(_sb_csrf_token())).replace('YYYY',str(year)).replace('MM',str(month)).replace('BULKPREVIEW',url_for('admin_shiftbase_bulk_preview')).replace('MONTHSTATUS',url_for('admin_shiftbase_month_status')))
+</script>'''.replaceAll('CSRF',esc(_sb_csrf_token())).replaceAll('YYYY',str(year)).replaceAll('MM',str(month)).replace('BULKPREVIEW',url_for('admin_shiftbase_bulk_preview')).replace('MONTHSTATUS',url_for('admin_shiftbase_month_status'))
+       .replaceAll('DAYACTION',url_for('admin_shiftbase_day_operation')).replaceAll('MONTHEND',_sb_month_window(year,month)[1]))
     if recent_runs:
         h.append('<h3>Letzte Übertragungen wieder öffnen</h3><p class="sb-fine">Bei Browserabbruch die bisherige Übertragung über ihren Link fortsetzen. Es werden keine PUTs automatisch wiederholt.</p>')
         for r in recent_runs:
@@ -7460,6 +7568,11 @@ def admin_shiftbase_bulk_preview():
                                 'blocked':blocked,'rows':rows,
                                 'balance_note':plan.get('balance_note',''),
                                 'day_review':plan.get('day_review'),
+                                'ops_metadata':_sb_day_metadata_defaults(source),
+                                'ops_live':bool(_sb_day_ops_experimental_available(source) or
+                                   (os.environ.get('SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED','')=='1'
+                                    and os.environ.get('SHIFTBASE_VERIFIED_WRITE_ENABLED','')=='1'
+                                    and not os.environ.get('SHIFTBASE_MOCK_DIR',''))),
                                 'diagnostics':diagnostics})
             except (ShiftbaseIntegrationError,ValueError,TypeError,KeyError) as exc:
                 with db_conn() as conn:
@@ -8049,7 +8162,7 @@ def _sb_day_ops_validate_date(source, raw):
     return day
 
 
-def _sb_day_ops_absence_guard(source, day):
+def _sb_day_ops_absence_guard(source, day, form=None):
     d = day.isoformat()
     try:
         sick = set(_expand_day_ranges(source.get('sick_ranges', '')))
@@ -8059,10 +8172,23 @@ def _sb_day_ops_absence_guard(source, day):
         raise ShiftbaseIntegrationError('Tag ist in der Cloud als krank vermerkt. Keine Anlage.')
     # Cloud stores vacation as a NUMBER, not specific dates. Without a reliable
     # day-by-day record we cannot prove that any selected date is free.
-    if str(source.get('vacation_count', '')).strip() not in ('', '0'):
-        raise ShiftbaseIntegrationError(
-            'Urlaub ist in der Cloud nur als Tagesanzahl gespeichert. '
-            'Vor dem Hinzufügen müssen die konkreten Urlaubstage zuverlässig abgeglichen werden.')
+    vacation_count = str(source.get('vacation_count', '')).strip()
+    if vacation_count not in ('', '0'):
+        entered = str((form or {}).get('urlaubs_tage','')).strip()
+        if not entered:
+            raise ShiftbaseIntegrationError('Cloud-Urlaub enthält nur eine Tagesanzahl. '
+                'Vor einer Anlage alle Urlaubstage aus Originalunterlagen angeben.')
+        try:
+            known_days = set(_expand_day_ranges(entered))
+            count = int(vacation_count)
+            if count <= 0 or count > 31 or len(known_days) != count:
+                raise ValueError('Die Anzahl der konkreten Urlaubstage stimmt nicht mit der Cloud überein.')
+            for n in known_days:
+                shiftbase_date(source['year'],source['month'],n)
+        except (ValueError,TypeError) as exc:
+            raise ShiftbaseIntegrationError('Urlaubstage nicht eindeutig geprüft: '+str(exc)) from exc
+        if day.day in known_days:
+            raise ShiftbaseIntegrationError('Das Datum ist ein bestätigter Urlaubstag. Keine Anlage.')
     for fr, to, description, status in source.get('absence_ranges', []):
         if fr <= d <= to and str(status).strip().lower() not in ('declined','rejected','abgelehnt'):
             raise ShiftbaseIntegrationError('Shiftbase führt an diesem Tag eine Abwesenheit ('+
@@ -8228,7 +8354,7 @@ def _sb_day_ops_audit_finish(ident, state, message):
 def _sb_day_ops_create(form, source):
     execution=_sb_day_ops_execution(form,source,'create')
     day=_sb_day_ops_validate_date(source,form.get('work_day',''))
-    _sb_day_ops_absence_guard(source,day)
+    _sb_day_ops_absence_guard(source,day,form)
     if day.weekday()==6:
         raise ShiftbaseIntegrationError('Neue Sonntagsarbeit ist wegen Ersatzruhetag-/Ausnahmeprüfung nur direkt in Shiftbase zu erfassen.')
     start=str(form.get('work_start','')).strip()
@@ -8370,12 +8496,147 @@ def admin_shiftbase_day_operation():
             message=_sb_day_ops_create(request.form,source)
         else:
             message=_sb_day_ops_decline(request.form,source)
-        session['shiftbase_direct_result']=('Testprüfung: ' if str(request.form.get('day_submit_mode',''))=='check'
-                                            else 'Erfolg: ')+message
+        message=('Testprüfung: ' if str(request.form.get('day_submit_mode',''))=='check'
+                 else 'Erfolg: ')+message
+        if request.accept_mimetypes.best == 'application/json':
+            return jsonify({'ok':True,'message':message,'operation':mode})
+        session['shiftbase_direct_result']=message
     except ShiftbaseIntegrationError as exc:
-        session['shiftbase_direct_result']='Fehler: '+str(exc)
+        message='Fehler: '+str(exc)
+        if request.accept_mimetypes.best == 'application/json':
+            return jsonify({'ok':False,'message':message,'operation':mode}),422
+        session['shiftbase_direct_result']=message
     return redirect(url_for('admin_shiftbase_pruefvorschau',driver_id=did,year=year,month=month),code=303)
 
+
+
+def _sb_day_metadata_defaults(source):
+    """Only prefill metadata if every observed entry for this user agrees."""
+    defaults = {}
+    for key in ('department_id','team_id','shift_id'):
+        observed = set()
+        for row in source.get('raw_timesheets',{}).values():
+            ts = _sb_get(row,'Timesheet')
+            if not isinstance(ts,dict): ts = row
+            value = _sb_get(ts,key)
+            if value is not None and re.fullmatch(r'[0-9]{1,20}',str(value)):
+                observed.add(str(value))
+        defaults[key] = next(iter(observed)) if len(observed)==1 else ''
+    return defaults
+
+
+def _sb_day_candidate_cards(source, plan, csrf):
+    """Standalone EDITABLE forms for hypothetical day leads.
+
+    They do not nest inside the verified existing-timesheet form. Any live
+    operation goes through the original individually locked / audited API gate.
+    """
+    from markupsafe import escape as _escape
+    esc = lambda value: str(_escape(str(value if value is not None else '')))
+    review = plan.get('day_review') or {}
+    if review.get('kind') not in ('check_missing','check_existing'):
+        return ''
+    candidates = review.get('candidates') or []
+    meta = _sb_day_metadata_defaults(source)
+    live = (_sb_day_ops_experimental_available(source) or
+            (os.environ.get('SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED','')=='1'
+             and os.environ.get('SHIFTBASE_VERIFIED_WRITE_ENABLED','')=='1'
+             and not os.environ.get('SHIFTBASE_MOCK_DIR','')))
+    first,last = _sb_month_window(source['year'],source['month'])
+    head = '<input type="hidden" name="csrf_token" value="'+esc(csrf)+'">' + \
+           '<input type="hidden" name="driver_id" value="'+esc(source['driver_id'])+'">' + \
+           '<input type="hidden" name="year" value="'+esc(source['year'])+'">' + \
+           '<input type="hidden" name="month" value="'+esc(source['month'])+'">'
+    raw_dates = str(source.get('preview_vacation_days') or '')
+    html=['<section class="sb-planned-days" style="margin:18px 0;padding:15px;border:1px solid #d5e2f0;border-radius:15px;background:#f7fbff">',
+          '<h3>Arbeitstage aus dem Monatsabgleich – direkt kontrollierbar</h3>',
+          '<p><b>Planung, KEINE bestätigte Istzeit:</b> '+esc(review.get('note',''))+'</p>',
+          '<p>Jede Karte ist unabhängig bearbeitbar. Daten und Zeiten können vor der Prüfung geändert werden. '
+          'Die tatsächlichen Uhrzeiten und Pausen sowie die Belegquelle müssen von dir kontrolliert werden. '
+          '<b>Es wird nichts automatisch angelegt oder abgelehnt.</b></p>']
+    if not candidates:
+        html.append('<p>Kein rechtlich und rechnerisch ausreichend plausibler Tag gefunden. '
+                    'Der offene Rest bleibt ungeklärt.</p>')
+    for index,lead in enumerate(candidates):
+        kind = review['kind']
+        eid = str(lead.get('entry_id',''))
+        if kind=='check_existing' and not re.fullmatch(r'[0-9]{1,20}',eid):
+            continue
+        duration = int(lead.get('minutes',0))
+        if kind=='check_missing' and not (360<=duration<=480 and duration%15==0):
+            continue
+        html.append('<form class="sb-proposed-day" method="post" action="'+esc(url_for('admin_shiftbase_day_operation'))+'" '
+                    'style="background:white;border:1px solid #cddbeb;padding:12px;border-radius:12px;margin:12px 0">'+head)
+        if kind=='check_missing':
+            html.append('<h4>Zusätzlichen Tag nach Belegprüfung erfassen – Entwurf '+str(index+1)+'</h4>'
+                        '<input type="hidden" name="operation" value="create">')
+            if raw_dates:
+                html.append('<input type="hidden" name="urlaubs_tage" value="'+esc(raw_dates)+'">')
+            html.append('<div class="grid grid-3">'
+                        '<label>Datum (änderbar)<input type="date" name="work_day" value="'+esc(lead['day'])+'" min="'+first+'" max="'+last+'" required></label>'
+                        '<label>Beginn – nur Platzhalter<input type="time" name="work_start" value="'+esc(lead.get('draft_start','08:00'))+'" step="900" required></label>'
+                        '<label>Ende – nur Platzhalter<input type="time" name="work_end" value="'+esc(lead.get('draft_end','16:30'))+'" step="900" required></label>'
+                        '<label>Pause (Minuten)<input type="number" name="work_break" value="'+esc(lead.get('draft_break',30))+'" min="0" max="90" step="15" required></label>'
+                        '<label>Shiftbase-Abteilungs-ID<input type="number" name="work_department_id" value="'+esc(meta['department_id'])+'" min="1" required></label>'
+                        '<label>Shiftbase-Team-ID<input type="number" name="work_team_id" value="'+esc(meta['team_id'])+'" min="1" required></label>'
+                        '<label>Shiftbase-Schichtart-ID<input type="number" name="work_shift_id" value="'+esc(meta['shift_id'])+'" min="1" required></label>'
+                        '</div><p><b>Rechnerischer Richtwert: '+esc(_sb_dayview_hm(Decimal(duration)/Decimal(60)))+' netto.</b> '
+                        '08:00 und die Endzeit sind Platzhalter, keine tatsächlichen Stempelzeiten. '
+                        'Nicht über belegte Zeiten hinaus ergänzen.</p>'
+                        '<label>Originalnachweis/Quelle (Pflicht)<input type="text" name="work_proof" minlength="15" maxlength="500" '
+                        'placeholder="Beleg mit tatsächlichem Arbeitsbeginn, Ende und Pause" required></label>')
+        else:
+            html.append('<h4>Mögliche Fehlbuchung prüfen – Timesheet '+esc(eid)+'</h4>'
+                        '<input type="hidden" name="operation" value="decline">'
+                        '<input type="hidden" name="decline_id" value="'+esc(eid)+'">'
+                        '<p><b>Originaldatum '+esc(lead['day'])+' · '+esc(_sb_dayview_hm(Decimal(duration)/Decimal(60)))+'</b></p>'
+                        + ('<p>Prüfgründe: '+esc('; '.join(lead.get('reasons',[])))+'</p>' if lead.get('reasons') else '')+
+                        '<p>Nur ablehnen, wenn genau diese Schicht nachweislich falsch oder doppelt ist. '
+                        'Tatsächlich geleistete Arbeitszeit darf nicht wegen einer Lohndifferenz verschwinden.</p>'
+                        '<label>Fehler-/Doppelnachweis (Pflicht)<input type="text" name="decline_proof" minlength="15" maxlength="500" '
+                        'placeholder="Konkreter Beleg, warum diese Timesheet-ID falsch ist" required></label>')
+        html.append('<div class="actions" style="margin-top:10px">'
+                    '<button type="submit" name="day_submit_mode" value="check">Nur prüfen – nichts senden</button></div>')
+        if live:
+            html.append('<label style="margin-top:9px;display:flex;gap:8px;align-items:center">'
+                        '<input type="checkbox" name="one_live_write" value="yes" style="width:auto">'
+                        'Ich habe die Zeiten bzw. den Fehler mit Originalbelegen geprüft und will genau diesen Eintrag senden.</label>'
+                        '<div class="actions"><button type="submit" name="day_submit_mode" value="live" class="primary">'
+                        'Diesen geprüften Tag einzeln an Shiftbase senden</button></div>')
+        else:
+            html.append('<p style="color:#92400e">Live-Anlage/Ablehnung noch nicht freigeschaltet. '
+                        'Die Vorprüfung ist sofort nutzbar; der separate experimentelle Einzeltest bleibt wie bisher möglich.</p>')
+        html.append('<p class="sb-day-proposal-result" aria-live="polite" style="font-size:13px"></p></form>')
+    html.append('</section>')
+    return ''.join(html)
+
+_SB_DAY_PROPOSAL_JS = r"""<script>
+(function(){
+  document.addEventListener('submit',async function(e){
+   const form=e.target;if(!form.matches('.sb-proposed-day'))return;
+   e.preventDefault();
+   if(!form.reportValidity())return;
+   const mode=(e.submitter&&e.submitter.value)||'check';
+   const data=new FormData(form);data.set('day_submit_mode',mode);
+   const output=form.querySelector('.sb-day-proposal-result');
+   const buttons=[...form.querySelectorAll('button[type="submit"]')];
+   buttons.forEach(b=>b.disabled=true);
+   output.textContent='Prüfung läuft …';
+   try{
+     const response=await fetch(form.action,{method:'POST',body:data,credentials:'same-origin',
+       headers:{Accept:'application/json'},cache:'no-store'});
+     const answer=await response.json();
+     output.textContent=answer.message||'Unbekanntes Ergebnis.';
+     output.style.color=response.ok?'#067647':'#b42318';
+     if(response.ok&&mode==='live'){
+       output.textContent+=' Bitte Monatsdaten neu laden und die Shiftbase-Bestätigung kontrollieren.';
+       form.querySelectorAll('input,button').forEach(el=>el.disabled=true);
+     }
+   }catch(err){output.textContent='Verbindung unterbrochen. Bei Live-Versand NICHT wiederholen, zuerst Shiftbase und Prüfprotokoll kontrollieren.';output.style.color='#b42318';}
+   finally{if(mode!=='live')buttons.forEach(b=>b.disabled=false);}
+ });
+})();
+</script>"""
 
 def _sb_day_ops_html(source,csrf):
     '''Explicit operator-entered additions and individual reject controls.'''
@@ -8410,7 +8671,7 @@ def _sb_day_ops_html(source,csrf):
             if value is not None and re.fullmatch(r'[0-9]{1,20}',str(value)):
                 vals.add(str(value))
         metadata_defaults[key]=next(iter(vals)) if len(vals)==1 else ''
-    html=['<details class="sb-day-manager"><summary>Nachgewiesenen Arbeitstag hinzufügen oder fehlerhaften Eintrag ablehnen</summary>',
+    html=['<details class="sb-day-manager"><summary>Freie manuelle Eingabe – nachgewiesenen Tag hinzufügen / Eintrag ablehnen</summary>',
           '<div style="padding:15px">',
           '<p class="sb-muted"><b>Keine automatische Anpassung an Lohnstunden:</b> Neue Tage nur mit tatsächlich belegten Start-/Endzeiten, Pausen, Abteilung, Team und Schichtart. '
           'Bei bestehenden Fehl-/Doppelerfassungen wird ein Eintrag abgelehnt, nicht gelöscht. '
@@ -8469,6 +8730,531 @@ def _sb_day_ops_html(source,csrf):
                 'SHIFTBASE_TIMESHEET_WRITE_SCHEMA_CONFIRMED muss für den experimentellen Test NICHT auf 1 gesetzt werden. '
                 'Einmalversuch ohne automatischen Retry und mit GET-Nachkontrolle; bestehende Korrekturen unverändert.</p></div></details>')
     return ''.join(html)
+
+
+# ========== Vertrauliche DATEV-Lohnzettel: Einzelseiten und sichere Zuordnung ==========
+# Hinweis: Die Shiftbase Public API dokumentiert keinen bestaetigten Upload fuer
+# persoenliche Mitarbeiterdateien. Deshalb KEIN automatischer API-Upload an einen
+# geratenen Endpoint. Dateien werden nur nach Admin-Pruefung privat ausgegeben.
+# Eine globale Firmen-Datei darf NIE verwendet werden (fuer alle sichtbar).
+import hashlib as _sbpay_hashlib
+import shutil as _sbpay_shutil
+import unicodedata as _sbpay_unicodedata
+from markupsafe import escape as _sbpay_escape
+try:
+    from pypdf import PdfWriter as _SbpayWriter
+except Exception:
+    _SbpayWriter = None
+
+_SBPAY_MONTHS = {
+    'januar': 1, 'februar': 2, 'maerz': 3, 'marz': 3, 'märz': 3, 'märz': 3,
+    'april': 4, 'mai': 5, 'juni': 6, 'juli': 7, 'august': 8,
+    'september': 9, 'oktober': 10, 'november': 11, 'dezember': 12,
+}
+_SBPAY_ROOT = DATA_ROOT / 'private_shiftbase_payroll'
+
+
+def _sbpay_secure_dir(directory):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+
+
+def _sbpay_norm(name):
+    text = _sbpay_unicodedata.normalize('NFKD', str(name or '').casefold())
+    text = ''.join(ch for ch in text if not _sbpay_unicodedata.combining(ch))
+    text = text.replace('ß', 'ss')
+    return re.sub(r'[^a-z0-9]+', ' ', text).strip()
+
+
+def _sbpay_period(text):
+    # Recognize the official DATEV heading; do not derive it from the upload name.
+    m = re.search(r'\bf[uü]r\s+(Januar|Februar|M[aä]rz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+(20\d{2})\b',
+                  text, re.I)
+    if not m:
+        return None
+    month_key = _sbpay_norm(m.group(1)).replace(' ', '')
+    return (int(m.group(2)), _SBPAY_MONTHS.get(month_key))
+
+
+def _sbpay_identity(text):
+    # The DATEV output used here puts recipient, postal code and *Pers.-Nr.*
+    # on a single text-extraction line. Never guess from the employer heading.
+    identifiers = re.findall(r'\*Pers\.-Nr\.\s*(\d{1,10})\s*\*', text)
+    candidates = []
+    for line in text.splitlines():
+        if '*Pers.-Nr.' not in line:
+            continue
+        head = line.split('B/N*Pers.-Nr.', 1)[0]
+        head = head.split('*Pers.-Nr.', 1)[0]
+        match = re.match(r'^\s*([^\d\n]{4,110}?)(?=\d{5}\b)', head)
+        if match:
+            value = ' '.join(match.group(1).split())
+            if len(value.split()) >= 2 and not value.lower().startswith('hasan  aysel taxi'):
+                candidates.append(value)
+    if len(identifiers) != 1 or len(candidates) != 1:
+        return '', ''
+    return candidates[0], identifiers[0]
+
+
+def _sbpay_schema(conn):
+    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_payroll_batches (
+        id TEXT PRIMARY KEY, year INTEGER NOT NULL, month INTEGER NOT NULL,
+        page_count INTEGER NOT NULL, source_sha256 TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_payroll_pages (
+        batch_id TEXT NOT NULL, page_no INTEGER NOT NULL,
+        employee_name TEXT NOT NULL, personal_no TEXT NOT NULL,
+        source_pages TEXT NOT NULL, file_pages INTEGER NOT NULL,
+        driver_id INTEGER, shiftbase_user_id TEXT NOT NULL DEFAULT '',
+        match_type TEXT NOT NULL DEFAULT 'blocked',
+        approved INTEGER NOT NULL DEFAULT 0, approved_at TEXT,
+        relative_path TEXT NOT NULL, page_sha256 TEXT NOT NULL,
+        PRIMARY KEY(batch_id, page_no))''')
+
+
+def _sbpay_token_check():
+    _sb_verified_post_csrf(request.form)
+
+
+def _sbpay_drivers(conn):
+    _sb_ensure_mapping_table(conn)
+    return [dict(r) for r in conn.execute('''
+        SELECT d.id, d.name, m.shiftbase_user_id
+        FROM drivers d JOIN shiftbase_driver_map m ON d.id=m.driver_id
+        WHERE d.is_active=1 AND COALESCE(d.is_disposition,0)=0
+        ORDER BY d.name COLLATE NOCASE
+    ''').fetchall()]
+
+
+def _sbpay_matching(name, number, drivers, other_names, other_numbers):
+    # Name alone never suffices without a valid DATEV personal number and
+    # uniqueness of this recipient across all pages in the batch.
+    if not name or not number or other_numbers[number] != 1 or other_names[_sbpay_norm(name)] != 1:
+        return None
+    found = [r for r in drivers if _sbpay_norm(r['name']) == _sbpay_norm(name)]
+    return found[0] if len(found) == 1 else None
+
+
+def _sbpay_no_cache(response):
+    response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
+@app.route('/admin/shiftbase/lohnzettel', methods=['GET', 'POST'])
+@admin_login_required
+def admin_shiftbase_payroll():
+    # Import a DATEV batch, split exactly one recipient per PDF, no Shiftbase write.
+    if request.method == 'POST':
+        _sbpay_token_check()
+        upload = request.files.get('payroll_pdf')
+        if not upload or not str(upload.filename or '').lower().endswith('.pdf'):
+            abort(400, 'Bitte eine PDF-Datei auswählen.')
+        content = upload.stream.read(50 * 1024 * 1024 + 1)
+        if len(content) > 50 * 1024 * 1024 or not content.startswith(b'%PDF-'):
+            abort(400, 'Nur eine PDF bis 50 MB ist zulässig.')
+        if PdfReader is None or _SbpayWriter is None:
+            abort(503, 'Die PDF-Bibliothek pypdf fehlt auf Render. Bitte requirements.txt ergänzen.')
+        try:
+            source = PdfReader(io.BytesIO(content), strict=True)
+            if source.is_encrypted:
+                raise ValueError('Passwortgeschützte PDFs werden nicht automatisch verarbeitet.')
+            if not 1 <= len(source.pages) <= 300:
+                raise ValueError('Der Import muss 1 bis 300 Seiten enthalten.')
+            details = []
+            for index, page in enumerate(source.pages):
+                extracted = page.extract_text() or ''
+                name, number = _sbpay_identity(extracted)
+                period = _sbpay_period(extracted)
+                if not period or None in period:
+                    raise ValueError(f'Abrechnungsmonat auf Seite {index + 1} nicht eindeutig erkannt.')
+                if period != _sbpay_period(source.pages[0].extract_text() or ''):
+                    raise ValueError('Verschiedene Abrechnungsmonate in einer Datei.')
+                if not name or not number:
+                    raise ValueError(f'Empfängername oder Personalnummer auf Seite {index + 1} nicht eindeutig. Import gestoppt.')
+                writer = _SbpayWriter()
+                writer.add_page(page)
+                buffer = io.BytesIO()
+                writer.write(buffer)
+                individual = buffer.getvalue()
+                test_reader = PdfReader(io.BytesIO(individual), strict=True)
+                test_name, test_no = _sbpay_identity(test_reader.pages[0].extract_text() or '')
+                if len(test_reader.pages) != 1 or test_name != name or test_no != number:
+                    raise ValueError(f'Der isolierte Einzelseiten-Test für Seite {index + 1} ist fehlgeschlagen.')
+                if len(individual) > 5 * 1024 * 1024:
+                    raise ValueError(f'Seite {index+1} ist größer als die 5-MB-Grenze von Shiftbase.')
+                details.append((name, number, individual))
+            # A payroll recipient can occupy several consecutive DATEV pages.
+            # Group every page belonging to that verified personal number into
+            # a SINGLE file; do not drop follow-up pages with back-pay details.
+            from collections import OrderedDict as _sbpay_ordered
+            people = _sbpay_ordered()
+            for idx, (name, number, _single) in enumerate(details, start=1):
+                found = people.get(number)
+                if found:
+                    if _sbpay_norm(found['name']) != _sbpay_norm(name):
+                        raise ValueError('Eine Personalnummer erscheint mit unterschiedlichen Namen. Import gestoppt.')
+                    found['source_pages'].append(idx)
+                else:
+                    people[number]={'name':name, 'source_pages':[idx]}
+            grouped=[]
+            for number, data in people.items():
+                writer=_SbpayWriter()
+                for original_idx in data['source_pages']:
+                    writer.add_page(source.pages[original_idx - 1])
+                group_stream=io.BytesIO()
+                writer.write(group_stream)
+                merged=group_stream.getvalue()
+                proof=PdfReader(io.BytesIO(merged),strict=True)
+                if len(proof.pages)!=len(data['source_pages']):
+                    raise ValueError('Mehrseitiger Lohnzettel wurde unvollständig zusammengeführt.')
+                for pg in proof.pages:
+                    check_name,check_number=_sbpay_identity(pg.extract_text() or '')
+                    if check_number != number or _sbpay_norm(check_name) != _sbpay_norm(data['name']):
+                        raise ValueError('Mehrseitiger Lohnzettel enthält fremde Mitarbeiterdaten.')
+                if len(merged) > 5 * 1024 * 1024:
+                    raise ValueError('Eine vollständige Mitarbeiter-PDF ist größer als 5 MB.')
+                grouped.append((data['name'], number, merged, data['source_pages']))
+            details=grouped
+        except Exception as exc:
+            # No PDF contents, personal details, or tokens are shown in errors.
+            msg = str(exc) if isinstance(exc, ValueError) else 'Die PDF konnte nicht zuverlässig gelesen werden.'
+            flash(msg if len(msg) < 180 else 'Die PDF enthält nicht unterstützte Seiten.', 'err')
+            return redirect(url_for('admin_shiftbase_payroll'))
+        digest = _sbpay_hashlib.sha256(content).hexdigest()
+        with db_conn() as conn:
+            _sbpay_schema(conn)
+            previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
+                                    (digest,)).fetchone()
+        if previous:
+            flash('Diese identische PDF wurde schon eingelesen. Bestehende Prüfliste geöffnet.', 'ok')
+            return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=previous['id']))
+        from collections import Counter as _sbpay_counter
+        from secrets import token_hex as _sbpay_token_hex
+        names = _sbpay_counter(_sbpay_norm(d[0]) for d in details)
+        numbers = _sbpay_counter(d[1] for d in details)
+        batch_id = _sbpay_token_hex(16)
+        parent = _SBPAY_ROOT / batch_id
+        _sbpay_secure_dir(parent)
+        try:
+            with db_conn() as conn:
+                _sbpay_schema(conn)
+                drivers = _sbpay_drivers(conn)
+                year, month = _sbpay_period(source.pages[0].extract_text() or '')
+                conn.execute('INSERT INTO shiftbase_payroll_batches '
+                             '(id, year, month, page_count, source_sha256, created_at) VALUES(?,?,?,?,?,?)',
+                             (batch_id, year, month, len(source.pages), digest, now_iso()))
+                for name, number, data, source_pages in details:
+                    page_no = source_pages[0]
+                    path = parent / f'blatt_{page_no:03d}.pdf'
+                    with open(path, 'xb') as f:
+                        os.chmod(path, 0o600)
+                        f.write(data)
+                    driver = _sbpay_matching(name, number, drivers, names, numbers)
+                    matched = bool(driver)
+                    relative_path = f'{batch_id}/blatt_{page_no:03d}.pdf'
+                    conn.execute('''INSERT INTO shiftbase_payroll_pages
+                        (batch_id,page_no,employee_name,personal_no,source_pages,file_pages,
+                         driver_id,shiftbase_user_id,match_type,approved,relative_path,page_sha256)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (batch_id, page_no, name, number, json.dumps(source_pages), len(source_pages),
+                         int(driver['id']) if matched else None,
+                         str(driver['shiftbase_user_id']) if matched else '',
+                         'exact' if matched else 'blocked', 0, relative_path,
+                         _sbpay_hashlib.sha256(data).hexdigest()))
+                conn.commit()
+        except Exception:
+            _sbpay_shutil.rmtree(parent, ignore_errors=True)
+            raise
+        flash(f'{len(details)} Mitarbeiter-PDFs aus {len(source.pages)} Originalseiten erstellt. Keine Datei wurde an Shiftbase gesendet.', 'ok')
+        return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
+
+    with db_conn() as conn:
+        _sbpay_schema(conn)
+        batches = conn.execute('SELECT id,year,month,page_count,created_at FROM shiftbase_payroll_batches '
+                               'ORDER BY created_at DESC LIMIT 15').fetchall()
+    token = str(_sbpay_escape(_sb_csrf_token()))
+    h = ['<div class="card" style="max-width:1150px"><h2>Vertrauliche Lohnzettel – pro Fahrer eine PDF</h2>',
+         '<p>DATEV-Monatsdatei hochladen. Jede Seite wird unverändert als eigene PDF gespeichert. '
+         'Mitarbeiter werden nur bei eindeutigem Namen UND vorhandener Shiftbase-Zuordnung vorgeschlagen. '
+         'Jeder Beleg muss vor der Ausgabe einer Person ausdrücklich geprüft werden.</p>',
+         '<div class="flash err"><b>Datenschutz:</b> Keine Firmendateien verwenden! '
+         'Der offizielle persönliche Datei-Upload von Shiftbase ist bestätigt, aber kein Public-API-Uploadformat. '
+         'Daher erfolgt hier KEIN automatischer Upload. PDFs nach Freigabe nur beim richtigen Mitarbeiter '
+         'unter Mitarbeiter → Dateien → Datei hinzufügen hochladen und „Für Mitarbeiter sichtbar“ aktivieren.</div>',
+         '<form method="post" enctype="multipart/form-data" class="actions" style="align-items:end">',
+         '<input type="hidden" name="csrf_token" value="'+token+'">',
+         '<label style="max-width:550px">DATEV-Lohnabrechnung (PDF)'
+         '<input type="file" name="payroll_pdf" accept="application/pdf,.pdf" required></label>',
+         '<button class="primary" style="width:auto">Einzelseiten erzeugen und zuordnen</button></form>',
+         '<p class="muted" style="font-size:13px">Der ursprüngliche Gesamtbeleg wird nicht gespeichert. '
+         'Die Einzeldateien liegen getrennt vom öffentlichen Webverzeichnis in einem geschützten '
+         'Datenordner. Für Render sollte ein persistentes, nur administrativ zugängliches Volume verwendet werden.</p></div>',
+         '<div class="card" style="max-width:1150px"><h2>Bereits eingelesene Abrechnungen</h2>']
+    if batches:
+        h.append('<div class="table-wrap"><table style="min-width:650px"><thead><tr>'
+                 '<th>Monat</th><th>Seiten</th><th>Import</th><th>Aktion</th></tr></thead><tbody>')
+        for row in batches:
+            link = url_for('admin_shiftbase_payroll_batch',batch_id=row['id'])
+            h.append('<tr><td>'+str(row['month']).zfill(2)+'/'+str(row['year'])+'</td><td>'+str(row['page_count'])+'</td>'
+                     '<td>'+str(_sbpay_escape(row['created_at']))+'</td><td><a href="'+link+'">Prüfliste öffnen</a></td></tr>')
+        h.append('</tbody></table></div>')
+    else:
+        h.append('<p class="muted">Noch keine PDF importiert.</p>')
+    h.append('</div>')
+    return _sbpay_no_cache(make_response(base_page('Lohnzettel für Shiftbase', ''.join(h), 'shiftbase_payroll')))
+
+
+def _sbpay_batch_data(conn, batch_id):
+    if not re.fullmatch(r'[a-f0-9]{32}', batch_id or ''):
+        abort(404)
+    _sbpay_schema(conn)
+    batch = conn.execute('SELECT * FROM shiftbase_payroll_batches WHERE id=?',(batch_id,)).fetchone()
+    if not batch:
+        abort(404)
+    entries = conn.execute('SELECT * FROM shiftbase_payroll_pages WHERE batch_id=? ORDER BY page_no',(batch_id,)).fetchall()
+    return batch, entries
+
+
+@app.get('/admin/shiftbase/lohnzettel/<batch_id>')
+@admin_login_required
+def admin_shiftbase_payroll_batch(batch_id):
+    with db_conn() as conn:
+        batch, rows = _sbpay_batch_data(conn, batch_id)
+        drivers = _sbpay_drivers(conn)
+        current = {int(r['id']):str(r['shiftbase_user_id']) for r in drivers}
+        known = {int(r['id']):r for r in drivers}
+    exact = sum(1 for x in rows if x['match_type'] == 'exact')
+    approved = sum(1 for x in rows if int(x['approved']) and x['driver_id'] in current and current[x['driver_id']] == x['shiftbase_user_id'])
+    uncertain = len(rows) - exact
+    token = str(_sbpay_escape(_sb_csrf_token()))
+    h = ['<div class="card"><h2>Abrechnung '+str(batch['month']).zfill(2)+'/'+str(batch['year'])+'</h2>',
+         '<div class="grid grid-3" style="margin-bottom:16px">',
+         '<div class="kpi">Mitarbeiter-PDFs<b>'+str(len(rows))+'</b><small> · '+str(batch['page_count'])+' Quellseiten</small></div>',
+         '<div class="kpi">Namensgleich zugeordnet<b>'+str(exact)+'</b></div>',
+         '<div class="kpi">Zur privaten Ausgabe freigegeben<b>'+str(approved)+'</b></div></div>',
+         '<p><b>Wichtig:</b> Jede Seite enthält genau einen Mitarbeiter. Namen mit Abweichungen und doppelte Namen '
+         'werden blockiert, bis du ihre Identität manuell überprüft hast. '
+         'Alle PDFs bleiben nur für den Admin abrufbar. Es wurde nichts an Shiftbase übertragen.</p>',
+         '<p>Du kannst eindeutige Namensübereinstimmungen gesammelt freigeben, nachdem du sie geprüft hast. '
+         'Eine manuelle Umzuordnung benötigt immer die individuelle Freigabe.</p>',
+         '<form method="post" action="'+url_for('admin_shiftbase_payroll_approve_exact',batch_id=batch_id)+'" '
+         'class="actions" style="margin-bottom:16px">',
+         '<input type="hidden" name="csrf_token" value="'+token+'">',
+         '<label style="display:flex;align-items:center;gap:8px;font-size:13px">'
+         '<input type="checkbox" name="reviewed_all" value="yes" required style="width:auto">'
+         'Ich habe alle eindeutigen Namen und zugehörigen Shiftbase-IDs geprüft.</label>',
+         '<button type="submit" class="primary" style="width:auto">Nur eindeutige Zuordnungen freigeben</button></form>',
+         '<form method="post" action="'+url_for('admin_shiftbase_payroll_resync',batch_id=batch_id)+'" '
+         'class="actions" style="margin-bottom:16px">',
+         '<input type="hidden" name="csrf_token" value="'+token+'">',
+         '<button type="submit" style="width:auto">Zuordnungen aus Shiftbase-Abgleich aktualisieren</button></form>',
+         '<label style="max-width:480px">Prüfliste durchsuchen'
+         '<input id="sbpay-find" type="search" placeholder="Name oder Personalnummer …" autocomplete="off"></label>',
+         '<div class="table-wrap"><table id="sbpay-table" style="min-width:1030px"><thead><tr>'
+         '<th>Originalseiten</th><th>Empfänger aus PDF</th><th>Personal-Nr.</th><th>Zuordnung (Cloud / Shiftbase)</th>'
+         '<th>Prüfstatus</th><th>Kontrolle / Download</th></tr></thead><tbody>']
+    selects = '<option value="">— nicht zuordnen —</option>' + ''.join(
+        '<option value="'+str(d['id'])+'">'+str(_sbpay_escape(d['name']))+' · ID '+str(_sbpay_escape(d['shiftbase_user_id']))+'</option>'
+        for d in drivers)
+    for row in rows:
+        num = int(row['page_no'])
+        did = row['driver_id']
+        match_ok = bool(did in current and current[did] == row['shiftbase_user_id'])
+        is_approved = bool(row['approved']) and match_ok
+        state = ('Freigegeben' if is_approved else
+                 'Eindeutiger Namensvorschlag' if row['match_type']=='exact' and match_ok else 'Manuell prüfen')
+        desc = ((str(_sbpay_escape(known[did]['name'])) + ' · ID '+str(_sbpay_escape(current[did])))
+                if did in known else 'Keine sichere Zuordnung')
+        preview_link=url_for('admin_shiftbase_payroll_pdf',batch_id=batch_id,page_no=num)
+        action=url_for('admin_shiftbase_payroll_assign',batch_id=batch_id,page_no=num)
+        form=['<form method="post" action="'+action+'">',
+              '<input type="hidden" name="csrf_token" value="'+token+'">',
+              '<select name="driver_id" style="min-width:180px" required>',
+              '<option value="">— bitte auswählen —</option>']
+        for driver in drivers:
+            selected=' selected' if int(driver['id'])==did else ''
+            form.append('<option value="'+str(driver['id'])+'"'+selected+'>'+str(_sbpay_escape(driver['name']))+' · '
+                        +str(_sbpay_escape(driver['shiftbase_user_id']))+'</option>')
+        form += ['</select><label style="font-size:11px;margin-top:4px">Name aus PDF zur Kontrolle abschreiben:',
+                 '<input name="confirmed_pdf_name" placeholder="Vollständigen PDF-Namen eingeben" required autocomplete="off" style="font-size:12px"></label>',
+                 '<label style="font-size:11px"><input type="checkbox" name="identity_confirmed" value="yes" required style="width:auto"> '
+                 'Dieselbe Person anhand Personalunterlagen überprüft</label>',
+                 '<button style="width:auto;font-size:12px" type="submit">Zuordnung einzeln freigeben</button></form>']
+        buttons='<a href="'+preview_link+'" class="btn small" style="margin-bottom:8px">Einzelblatt ansehen</a>'
+        if is_approved:
+            buttons+='<p><a href="'+preview_link+'?download=1" class="btn small primary" style="color:white">Nur dieses Blatt herunterladen</a></p>'
+        h.append('<tr><td>'+str(_sbpay_escape(', '.join(str(x) for x in json.loads(row['source_pages']))))+'</td><td><b>'+str(_sbpay_escape(row['employee_name']))+'</b></td>'
+                 '<td>'+str(_sbpay_escape(row['personal_no']))+'</td><td>'+desc+'</td>'
+                 '<td>'+state+'</td><td>'+buttons+'<details><summary>Zuordnung prüfen / ändern</summary>'+
+                 ''.join(form)+'</details></td></tr>')
+    h.append('</tbody></table></div>'
+             '<script>(function(){const q=document.getElementById("sbpay-find");'
+             'const rs=Array.from(document.querySelectorAll("#sbpay-table tbody tr"));'
+             'if(!q)return;q.addEventListener("input",function(){'
+             'const v=q.value.toLocaleLowerCase("de").trim();'
+             'rs.forEach(r=>r.style.display=(!v||r.textContent.toLocaleLowerCase("de").includes(v))?"":"none");'
+             '});})();</script></div>')
+    h.append('<div class="card"><h3>Danach: persönlicher Upload in Shiftbase</h3>'
+             '<p>Für jeden <b>freigegebenen</b> Mitarbeiter nur seine Mitarbeiter-PDF herunterladen (bei Nachberechnung auch mehrere eigene Seiten). '
+             'In Shiftbase beim exakt zugeordneten Mitarbeiter den Reiter <b>Dateien</b> öffnen, '
+             '<b>Datei hinzufügen</b>, Titel z. B. „Lohnabrechnung '+str(batch['month']).zfill(2)+'/'+str(batch['year'])+'“,'
+             ' <b>Für Mitarbeiter sichtbar</b> aktivieren und ausschließlich diese eine PDF hochladen.</p>'
+             '<p><b>Keine allgemeine Firmendatei benutzen:</b> Dort könnten alle Mitarbeiter die Abrechnung sehen.</p>'
+             '<p><a href="'+url_for('admin_shiftbase_payroll')+'">Zurück zum PDF-Import</a></p></div>')
+    return _sbpay_no_cache(make_response(base_page('Lohnzettel – Zuordnung prüfen',''.join(h),'shiftbase_payroll')))
+
+
+@app.post('/admin/shiftbase/lohnzettel/<batch_id>/resync')
+@admin_login_required
+def admin_shiftbase_payroll_resync(batch_id):
+    _sbpay_token_check()
+    from collections import Counter as _C
+    with db_conn() as conn:
+        _, rows = _sbpay_batch_data(conn,batch_id)
+        drivers = _sbpay_drivers(conn)
+        names = _C(_sbpay_norm(r['employee_name']) for r in rows)
+        numbers = _C(r['personal_no'] for r in rows)
+        # Do not overwrite a manually reviewed or already approved decision.
+        reserved={int(r['driver_id']) for r in rows if r['driver_id'] and (r['approved'] or r['match_type']=='manual')}
+        updated=0
+        for r in rows:
+            if r['approved'] or r['match_type']=='manual':
+                continue
+            match=_sbpay_matching(r['employee_name'],r['personal_no'],drivers,names,numbers)
+            if match and int(match['id']) not in reserved:
+                conn.execute('''UPDATE shiftbase_payroll_pages SET
+                    driver_id=?,shiftbase_user_id=?,match_type='exact',approved=0,approved_at=NULL
+                    WHERE batch_id=? AND page_no=?''',
+                    (int(match['id']),str(match['shiftbase_user_id']),batch_id,r['page_no']))
+                reserved.add(int(match['id']))
+                updated+=1
+            else:
+                conn.execute('''UPDATE shiftbase_payroll_pages SET
+                    driver_id=NULL,shiftbase_user_id='',match_type='blocked',approved=0,approved_at=NULL
+                    WHERE batch_id=? AND page_no=?''', (batch_id,r['page_no']))
+        conn.commit()
+    flash(f'{updated} eindeutige Zuordnungen aktualisiert. Zur Freigabe bitte prüfen.', 'ok')
+    return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=batch_id))
+
+
+@app.post('/admin/shiftbase/lohnzettel/<batch_id>/approve-exact')
+@admin_login_required
+def admin_shiftbase_payroll_approve_exact(batch_id):
+    _sbpay_token_check()
+    if request.form.get('reviewed_all') != 'yes':
+        abort(400, 'Bitte erst die Namen und IDs prüfen.')
+    with db_conn() as conn:
+        batch, rows = _sbpay_batch_data(conn, batch_id)
+        drivers = _sbpay_drivers(conn)
+        mapped={int(x['id']):x for x in drivers}
+        from collections import Counter as _C
+        names=_C(_sbpay_norm(x['employee_name']) for x in rows)
+        nums=_C(x['personal_no'] for x in rows)
+        updated=0
+        for row in rows:
+            if row['match_type']!='exact' or row['driver_id'] not in mapped:
+                continue
+            drv=mapped[row['driver_id']]
+            if (str(drv['shiftbase_user_id']) != row['shiftbase_user_id'] or
+                    _sbpay_norm(drv['name']) != _sbpay_norm(row['employee_name']) or
+                    names[_sbpay_norm(row['employee_name'])] != 1 or nums[row['personal_no']] != 1):
+                continue
+            conn.execute('UPDATE shiftbase_payroll_pages SET approved=1,approved_at=? WHERE batch_id=? AND page_no=?',
+                         (now_iso(), batch_id, row['page_no']))
+            updated+=1
+        conn.commit()
+    flash(f'{updated} eindeutige Einzelseiten zur Ausgabe freigegeben. Kein Upload an Shiftbase.', 'ok')
+    return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=batch_id))
+
+
+@app.post('/admin/shiftbase/lohnzettel/<batch_id>/assign/<int:page_no>')
+@admin_login_required
+def admin_shiftbase_payroll_assign(batch_id, page_no):
+    _sbpay_token_check()
+    try:
+        driver_id=int(request.form.get('driver_id') or '0')
+    except ValueError:
+        abort(400)
+    if request.form.get('identity_confirmed') != 'yes':
+        abort(400, 'Identitätsbestätigung fehlt.')
+    with db_conn() as conn:
+        batch, rows = _sbpay_batch_data(conn,batch_id)
+        row=next((x for x in rows if int(x['page_no'])==page_no),None)
+        if not row:
+            abort(404)
+        if not _sbpay_norm(row['employee_name']) or not row['personal_no']:
+            abort(409, 'Mitarbeiter-Identität unvollständig.')
+        if _sbpay_norm(request.form.get('confirmed_pdf_name')) != _sbpay_norm(row['employee_name']):
+            abort(400, 'Der eingegebene Name stimmt nicht mit der PDF überein.')
+        drivers={int(x['id']):x for x in _sbpay_drivers(conn)}
+        target=drivers.get(driver_id)
+        if not target or not re.fullmatch(r'[0-9]{1,20}',str(target['shiftbase_user_id'])):
+            abort(400, 'Nur aktiv zugeordnete Shiftbase-Fahrer können ausgewählt werden.')
+        used=conn.execute('SELECT page_no FROM shiftbase_payroll_pages WHERE batch_id=? AND driver_id=? AND page_no<>?',
+                          (batch_id,driver_id,page_no)).fetchone()
+        if used:
+            abort(409, 'Ein anderer Lohnzettel ist diesem Fahrer bereits zugeordnet.')
+        conn.execute('''UPDATE shiftbase_payroll_pages
+            SET driver_id=?,shiftbase_user_id=?,match_type='manual',approved=1,approved_at=?
+            WHERE batch_id=? AND page_no=?''',
+            (driver_id,str(target['shiftbase_user_id']),now_iso(),batch_id,page_no))
+        conn.commit()
+    flash('Einzelne, manuell überprüfte Zuordnung freigegeben. Noch nichts an Shiftbase gesendet.', 'ok')
+    return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=batch_id))
+
+
+@app.get('/admin/shiftbase/lohnzettel/<batch_id>/blatt/<int:page_no>')
+@admin_login_required
+def admin_shiftbase_payroll_pdf(batch_id, page_no):
+    with db_conn() as conn:
+        batch, rows = _sbpay_batch_data(conn,batch_id)
+        row=next((x for x in rows if int(x['page_no'])==page_no),None)
+        if row is None:
+            abort(404)
+        # Preview is admin-only. Download is additionally blocked until
+        # explicit approval, and revokes if current Shiftbase mapping changes.
+        if request.args.get('download') == '1':
+            mapping = _sb_mapping(conn)
+            if not row['approved'] or not row['driver_id'] or mapping.get(int(row['driver_id'])) != row['shiftbase_user_id']:
+                abort(403, 'Empfänger muss vor dem Download erneut geprüft werden.')
+            other=conn.execute('SELECT page_no FROM shiftbase_payroll_pages WHERE batch_id=? AND driver_id=? AND page_no<>?',
+                               (batch_id,int(row['driver_id']),page_no)).fetchone()
+            if other:
+                abort(403, 'Mehrdeutige Fahrerzuordnung.')
+    expected = f'{batch_id}/blatt_{page_no:03d}.pdf'
+    if row['relative_path'] != expected:
+        abort(403)
+    path = _SBPAY_ROOT / expected
+    if not path.is_file() or path.is_symlink():
+        abort(404)
+    try:
+        content=path.read_bytes()
+        if _sbpay_hashlib.sha256(content).hexdigest()!=row['page_sha256']:
+            abort(409, 'Das Einzelblatt wurde seit dem Import verändert.')
+        reader=PdfReader(io.BytesIO(content),strict=True)
+        if reader.is_encrypted or len(reader.pages)!=int(row['file_pages']):
+            abort(409, 'Die Anzahl der Mitarbeiterseiten ist nicht korrekt.')
+        for page in reader.pages:
+            actual_name,actual_number=_sbpay_identity(page.extract_text() or '')
+            if actual_name!=row['employee_name'] or actual_number!=row['personal_no']:
+                abort(409, 'Eine Mitarbeiterseite enthält einen abweichenden Empfänger.')
+    except (OSError, ValueError) as exc:
+        abort(409, 'Die Einzelseite kann nicht sicher verifiziert werden.')
+    download=request.args.get('download')=='1'
+    filename=secure_filename('Lohnabrechnung_'+str(batch['year'])+'_'+str(batch['month']).zfill(2)+'_PersNr_'+str(row['personal_no'])+'_'+str(row['employee_name'])+'.pdf')
+    response=send_file(io.BytesIO(content),mimetype='application/pdf',as_attachment=download,
+                       download_name=filename if download else f'Pruefblatt_{page_no:03d}.pdf',
+                       max_age=0)
+    return _sbpay_no_cache(response)
+
+# ========== Ende vertrauliche DATEV-Lohnzettel ==========
 
 # ========== Ende Erweiterung Arbeitstage ==========
 
