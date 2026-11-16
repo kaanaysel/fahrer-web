@@ -9514,14 +9514,12 @@ def _sbpay_browser_contract():
                 return None
     except (ValueError, TypeError, KeyError, UnicodeError):
         return None
-    test_user_id = os.environ.get('SHIFTBASE_PAYROLL_WEB_TEST_USER_ID','').strip()
-    if not re.fullmatch(r'[0-9]{1,20}',test_user_id):
-        return None
-    bulk = os.environ.get('SHIFTBASE_PAYROLL_WEB_BULK_ENABLED','0').strip() == '1'
-    # Even bulk requires a specific positive first test in the same environment.
-    # The test user ID is always specified and used for initial validation.
-    return {'mode':'browser', 'state':state, 'test_user_id':test_user_id,
-            'bulk':bulk, 'origin':'https://app.shiftbase.com'}
+    # The recipient and the send mode are always chosen inside the protected
+    # admin interface. No hard-coded test employee or environment bulk toggle.
+    # Both paths still require individual approval, a live ID check and one
+    # persistent attempt per private PDF.
+    return {'mode':'browser', 'state':state,
+            'origin':'https://app.shiftbase.com'}
 
 
 def _sbpay_ui_strict_locator(locators, label):
@@ -9546,8 +9544,6 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
     user_id = str(row['shiftbase_user_id'])
     employee_name = str(row['employee_name'])
     _sbpay_assert_shiftbase_recipient(user_id, employee_name)
-    if not contract.get('bulk') and user_id != contract['test_user_id']:
-        raise ShiftbaseIntegrationError('Einzeltest: nur die explizit freigegebene Shiftbase-ID ist erlaubt.')
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -9646,103 +9642,146 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
 
 
 def _sbpay_delivery_html(batch, rows, drivers, csrf_token):
+    """Strict single-person and opt-in bulk upload controls in the admin view."""
     contract = _sbpay_upload_contract()
     with db_conn() as conn:
         _sbpay_delivery_schema(conn)
         _sbpay_livecheck_schema(conn)
-        history = {int(r['page_no']):dict(r) for r in conn.execute(
+        history = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_deliveries WHERE batch_id=?',
             (batch['id'],)).fetchall()}
-        livechecks = {int(r['page_no']):dict(r) for r in conn.execute(
+        livechecks = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
             (batch['id'],)).fetchall()}
-    mapped = {int(r['id']):str(r['shiftbase_user_id']) for r in drivers}
-    eligible = [r for r in rows if r['approved'] and r['driver_id'] in mapped and
-                mapped[int(r['driver_id'])] == r['shiftbase_user_id']]
-    verified = sum(history.get(int(r['page_no']),{}).get('state')=='confirmed' for r in rows)
-    uncertain = sum(history.get(int(r['page_no']),{}).get('state') in ('sending','unknown','failed') for r in rows)
-    html = ['<div class="card" style="max-width:1200px"><h3>Persönliche Lohnabrechnungen: Versandkontrolle</h3>',
-            '<p>Freigegeben: <b>'+str(len(eligible))+'</b> · per Shiftbase-GET bestaetigt: <b>'+str(verified)+
+    mapped = {int(r['id']): str(r['shiftbase_user_id']) for r in drivers}
+
+    def ready(row):
+        page_no = int(row['page_no'])
+        did = row['driver_id']
+        if not did or not bool(row['approved']) or page_no in history:
+            return False
+        if mapped.get(int(did)) != str(row['shiftbase_user_id']):
+            return False
+        live = livechecks.get(page_no, {})
+        return (live.get('status') == 'verified' and
+                live.get('shiftbase_user_id') == str(row['shiftbase_user_id']) and
+                live.get('page_sha256') == str(row['page_sha256']))
+
+    eligible = [row for row in rows if ready(row)]
+    approved_count = sum(1 for row in rows if row['approved'] and row['driver_id'] and
+                         mapped.get(int(row['driver_id'])) == str(row['shiftbase_user_id']))
+    verified = sum(history.get(int(r['page_no']), {}).get('state') == 'confirmed' for r in rows)
+    ui_seen = sum(history.get(int(r['page_no']), {}).get('state') == 'observed_ui' for r in rows)
+    uncertain = sum(history.get(int(r['page_no']), {}).get('state') in ('sending', 'unknown', 'failed') for r in rows)
+    html = ['<div class="card" style="max-width:1200px"><h3>Persoenliche Lohnabrechnungen: Einzel- und Gesamtversand</h3>',
+            '<p>Freigegebene Zuordnungen: <b>'+str(approved_count)+'</b> · Versandbereit nach Live-Pruefung: <b>'+str(len(eligible))+
+            '</b> · Im Mitarbeiterprofil sichtbar: <b>'+str(ui_seen)+'</b> · API-GET bestaetigt: <b>'+str(verified)+
             '</b> · Klaerfaelle: <b>'+str(uncertain)+'</b>.</p>',
             '<form method="post" action="'+url_for('admin_shiftbase_payroll_livecheck',batch_id=batch['id'])+'" class="actions">'
             '<input type="hidden" name="csrf_token" value="'+str(_sbpay_escape(csrf_token))+'">'
-            '<button type="submit" style="width:auto">Alle Empfänger live mit Shiftbase abgleichen – nur lesen</button></form>']
+            '<button type="submit" style="width:auto">Alle Empfaenger live mit Shiftbase abgleichen – nur lesen</button></form>']
     if not contract:
-        html.append('<div class="flash err"><b>Automatischer Shiftbase-Upload nicht freigegeben.</b> '
-                    'Der dokumentierte Personalakten-Upload per Benutzeroberflaeche hat derzeit kein '
-                    'verifizierbares Public-API-Schreibschema. Es werden daher KEINE vertraulichen PDFs '
-                    'ueber einen geratenen Endpunkt versendet. Die Dateien stehen nach Freigabe zum '
-                    'persoenlichen Upload bereit. Niemals Firmen-Dateien verwenden.</div>')
+        html.append('<div class="flash err"><b>Automatischer Upload noch nicht verfuegbar.</b> '
+                    'Bitte die echte Shiftbase-Browsersitzung als Render-Secret hinterlegen und Chromium installieren. '
+                    'Es werden keine vertraulichen PDFs hochgeladen, solange die Verbindung nicht konfiguriert ist. '
+                    'Niemals die allgemeine Firmenablage verwenden.</div>')
     else:
-        if contract.get('mode') == 'browser':
-            web_id = str(_sbpay_escape(contract['test_user_id']))
-            mode_message = ('Browser-Upload über die Shiftbase-Mitarbeiterakte. '
-                            'Jede Datei wird dem Profil der vorher per API geprüften Mitarbeiter-ID zugeordnet; '
-                            'der Browser muss auf Render installiert und die Anmeldung gültig sein. '
-                            'Nach dem Versand wird nur die Anzeige im Mitarbeiterprofil bestätigt, '
-                            'NICHT die Sichtbarkeit aus Mitarbeitersicht.')
-            if not contract['bulk']:
-                mode_message += ' Einzeltest: nur Shiftbase-ID ' + web_id + '.'
-            else:
-                mode_message += ' Sammelmodus freigeschaltet.'
-            html.append('<div class="flash ok">'+str(_sbpay_escape(mode_message))+'</div>')
+        mode_message = ('Browser-Upload ueber die persoenliche Shiftbase-Mitarbeiterakte. '
+                        'Eine eindeutige Shiftbase-ID, der exakte Mitarbeitername, die Freigabe '
+                        'und der Live-Abgleich sind pro Dokument erforderlich. '
+                        'Das Ergebnis wird nur anhand der Anzeige im Mitarbeiterprofil kontrolliert, '
+                        'nicht aus der Mitarbeitersicht und nicht durch einen Datei-API-GET. '
+                        'Die Browserautomatisierung ist noch nicht live verifiziert.') if contract.get('mode') == 'browser' else (
+                        'Dokumentierter Datei-API-Vertrag aktiviert: Pro Datei Empfaengerpruefung und GET-Kontrolle.')
+        html.append('<div class="flash ok">'+str(_sbpay_escape(mode_message))+'</div>')
+        if eligible:
+            html.append('<div class="actions" style="margin:12px 0">'
+                        '<button type="button" class="primary sbpay-start" data-mode="all" style="width:auto">'
+                        'Alle '+str(len(eligible))+' freigegebenen und live geprueften Lohnzettel hochladen</button>'
+                        '</div>')
         else:
-            html.append('<div class="flash ok"><b>Verifizierter API-Vertrag konfiguriert.</b> '
-                        'Vor POST erfolgt eine Live-Benutzerpruefung, danach GET-Kontrolle.</div>')
-        html.append('<button class="primary" id="sbpay-run" style="width:auto">'
-                    'Freigegebene Lohnzettel persoenlich hochladen</button>'
-                    '<p id="sbpay-progress" class="muted" aria-live="polite"></p>')
-    html.append('<div class="table-wrap"><table style="min-width:830px">'
-                '<thead><tr><th>Name aus PDF</th><th>Shiftbase-Zuordnung</th><th>Live-ID-Prüfung</th>'
-                '<th>Automatischer Versand</th><th>Manueller Upload</th></tr></thead><tbody>')
+            html.append('<p class="muted">Noch kein unverarbeiteter, eindeutig freigegebener und live gepruefter Empfaenger. '
+                        'Zuerst Zuordnungen freigeben und den Live-Abgleich ausfuehren.</p>')
+        html.append('<p id="sbpay-progress" class="muted" aria-live="polite"></p>')
+    html.append('<div class="table-wrap"><table style="min-width:910px">'
+                '<thead><tr><th>Name aus PDF</th><th>Shiftbase-Zuordnung</th><th>Live-ID-Pruefung</th>'
+                '<th>Versandstatus</th><th>Einzelversand</th><th>Download</th></tr></thead><tbody>')
     for row in rows:
         pageno = int(row['page_no'])
         did = row['driver_id']
-        mapped_ok = bool(did in mapped and mapped[int(did)]==str(row['shiftbase_user_id']))
+        mapped_ok = bool(did and mapped.get(int(did)) == str(row['shiftbase_user_id']))
         approved = bool(row['approved']) and mapped_ok
         delivery = history.get(pageno)
         checked = livechecks.get(pageno, {})
         live_ok = (checked.get('status') == 'verified' and mapped_ok and
                    checked.get('shiftbase_user_id') == str(row['shiftbase_user_id']) and
                    checked.get('page_sha256') == str(row['page_sha256']) and approved)
-        live_label = 'Eindeutig geprüft' if live_ok else 'Nicht geprüft / gesperrt'
+        live_label = 'Eindeutig geprueft' if live_ok else 'Nicht geprueft / gesperrt'
         state = (delivery or {}).get('state', 'nicht versendet')
-        label = {'confirmed':'Durch Shiftbase-GET bestaetigt',
-                 'observed_ui':'Im persoenlichen Dateien-Tab sichtbar (UI, keine API-GET-Bestaetigung)',
-                 'unknown':'Ergebnis unklar; NICHT erneut senden',
-                 'failed':'Fehlversuch; vor erneutem Versand pruefen',
-                 'sending':'Versuch gestartet; Status nachpruefen',
-                 'manual':'Manuell in Shiftbase kontrolliert'}.get(state,'Noch nicht versendet')
+        label = {'confirmed': 'Durch Shiftbase-GET bestaetigt',
+                 'observed_ui': 'Im persoenlichen Dateien-Tab sichtbar (keine API-GET-Bestaetigung)',
+                 'unknown': 'Ergebnis unklar; NICHT erneut senden',
+                 'failed': 'Fehlversuch; vor erneutem Versand pruefen',
+                 'sending': 'Versuch gestartet; Status nachpruefen',
+                 'preparing': 'Browser-Vorpruefung in Arbeit',
+                 'manual': 'Manuell in Shiftbase kontrolliert'}.get(state, 'Noch nicht versendet')
         target = 'Shiftbase-ID '+str(_sbpay_escape(row['shiftbase_user_id'])) if mapped_ok else 'Nicht freigegeben'
-        link = url_for('admin_shiftbase_payroll_pdf',batch_id=batch['id'],page_no=pageno)
+        link = url_for('admin_shiftbase_payroll_pdf', batch_id=batch['id'], page_no=pageno)
         action = ('<a class="btn small" href="'+link+'?download=1">Einzel-PDF herunterladen</a>'
                   if approved else 'Zuerst Zuordnung oben freigeben')
+        send_action = ('<button type="button" class="sbpay-start" data-mode="single" '
+                       'data-page="'+str(pageno)+'" style="width:auto">Nur diese Person hochladen</button>'
+                       if contract and ready(row) else ('Bereits versucht – manuell pruefen'
+                           if delivery else 'Erst Zuordnung und Live-Abgleich freigeben'))
         html.append('<tr><td>'+str(_sbpay_escape(row['employee_name']))+'</td><td>'+target+
-                    '</td><td>'+str(_sbpay_escape(live_label))+'</td><td>'+str(_sbpay_escape(label))+'</td><td>'+action+'</td></tr>')
+                    '</td><td>'+str(_sbpay_escape(live_label))+'</td><td>'+str(_sbpay_escape(label))+
+                    '</td><td>'+send_action+'</td><td>'+action+'</td></tr>')
     html.append('</tbody></table></div>'
-                '<p class="muted">Alternativ in Shiftbase: Mitarbeiter → richtige Person → Dateien → '
-                'Datei hinzufügen → „Für Mitarbeiter sichtbar“. '
-                '<b>Die Dateien hier sind vertraulich und nicht fuer die allgemeine Firmenablage bestimmt.</b></p>')
+                '<p class="muted">Alternativ in Shiftbase: Mitarbeiter → richtige Person → Dateien → Datei hinzufuegen '
+                '→ „Fuer Mitarbeiter sichtbar“. <b>Nie in die Firmendateien hochladen.</b></p>')
     if contract:
-        html.append('<p class="muted">Vor dem Start: „Alle Empfänger live mit Shiftbase abgleichen“ ausführen. '
-                    'Nur bestätigte Zuordnungen ohne früheren Versandversuch werden berücksichtigt. '
-                    'Bei unklarem Ergebnis in Shiftbase prüfen, nicht erneut senden.</p>')
-        route = url_for('admin_shiftbase_payroll_upload_step',batch_id=batch['id'])
-        js = '''<script>(function(){var b=document.getElementById("sbpay-run"),p=document.getElementById("sbpay-progress");
-if(!b)return; b.addEventListener("click",async function(){b.disabled=true;p.textContent="Einzelversand wird gestartet …";
-for(var i=0;i<500;i++){try{var body=new URLSearchParams();body.set("csrf_token",CSRF);
-var r=await fetch(ROUTE,{method:"POST",body:body,credentials:"same-origin",cache:"no-store"});
-var d=await r.json();if(!r.ok){p.textContent=d.error||"Versand angehalten.";break;}
-if(d.done){p.textContent="Pruefung und Versandlauf beendet. Ergebnisliste wird geladen.";location.reload();return;}
-p.textContent="Geprueft: "+(i+1)+" Dokument(e). Letztes Ergebnis: "+d.state;
-if(d.state==="unknown"||d.state==="failed"){p.textContent+=" – Klaerung in Shiftbase erforderlich.";}}
-catch(e){p.textContent="Verbindung unterbrochen. Nicht erneut auf Upload klicken, bevor Shiftbase kontrolliert wurde.";break;}}
-b.disabled=false;});})();</script>'''
-        js = js.replace('CSRF',json.dumps(str(_sb_csrf_token()))).replace('ROUTE',json.dumps(route))
+        html.append('<p class="muted">Der Klick auf „Nur diese Person“ laedt nur deren freigegebene PDF hoch. '
+                    '„Alle“ verarbeitet ausschliesslich noch nicht versuchte, einzeln freigegebene und live gepruefte '
+                    'Empfaenger nacheinander. Bei einem unklaren Ergebnis stoppt der Lauf ohne automatischen Zweitversuch. '
+                    'Vor einem Gesamtversand zuerst die Funktion mit einem bewusst gewaehlten Empfaenger kontrollieren.</p>')
+        route = url_for('admin_shiftbase_payroll_upload_step', batch_id=batch['id'])
+        js = r"""<script>(function(){
+const controls=Array.from(document.querySelectorAll(".sbpay-start"));
+const progress=document.getElementById("sbpay-progress");
+if(!controls.length||!progress)return;
+let active=false;
+for(const btn of controls){btn.addEventListener("click",async()=>{
+ if(active)return;
+ const mode=btn.dataset.mode;
+ const page=btn.dataset.page||"";
+ if(mode!=="single"&&mode!=="all")return;
+ if(mode==="all"&&!window.confirm("Alle aktuell freigegebenen und live geprueften Mitarbeiter-PDFs in die PERSOENLICHEN Shiftbase-Akten hochladen? Bitte erst die Empfaenger pruefen."))return;
+ active=true;controls.forEach(b=>b.disabled=true);
+ let completed=0;
+ progress.textContent=(mode==="single"?"Einzelupload":"Gesamtversand")+" gestartet ...";
+ try{
+  for(let i=0;i<500;i++){
+   const body=new URLSearchParams();body.set("csrf_token",CSRF);body.set("mode",mode);
+   if(mode==="single")body.set("page_no",page);
+   const res=await fetch(ROUTE,{method:"POST",body:body,credentials:"same-origin",cache:"no-store"});
+   const data=await res.json();
+   if(!res.ok){progress.textContent=data.error||"Versand gestoppt. Bitte Status in Shiftbase kontrollieren.";break;}
+   if(data.done){progress.textContent="Versand abgeschlossen. Ergebnisliste wird neu geladen.";location.reload();return;}
+   completed++;
+   progress.textContent=completed+" Dokument(e) verarbeitet. Letzter Status: "+data.state;
+   if(mode==="single"||data.state==="unknown"||data.state==="failed"||data.state==="bereits in Bearbeitung"){
+     if(data.state==="unknown"||data.state==="failed")progress.textContent+=" – Ergebnis in Shiftbase klaeren; nicht erneut senden.";
+     location.reload();return;
+   }
+  }
+ }catch(e){progress.textContent="Verbindung unterbrochen. Bitte Shiftbase kontrollieren, bevor du fortfaehrst.";}
+ finally{active=false;controls.forEach(b=>b.disabled=false);}
+});}
+})();</script>"""
+        js = js.replace('CSRF', json.dumps(str(_sb_csrf_token()))).replace('ROUTE', json.dumps(route))
         html.append(js)
     html.append('</div>')
     return ''.join(html)
-
 
 @app.post('/admin/shiftbase/lohnzettel/<batch_id>/upload-next')
 @admin_login_required
@@ -9751,31 +9790,51 @@ def admin_shiftbase_payroll_upload_step(batch_id):
     contract = _sbpay_upload_contract()
     if not contract:
         return _sbpay_no_cache(jsonify({'error':'Kein verifizierter Shiftbase-Personalakten-API-Vertrag konfiguriert.'})), 503
+    # Explicit admin-side choice: exactly one identified page OR all eligible
+    # pages in a sequential run. An unset/invalid mode must NEVER imply bulk.
+    mode = (request.form.get('mode') or '').strip()
+    if mode not in ('single', 'all'):
+        return _sbpay_no_cache(jsonify({'error': 'Einzel- oder Gesamtversand muss explizit gewaehlt werden.'})), 400
+    requested_page = None
+    if mode == 'single':
+        raw_page = (request.form.get('page_no') or '').strip()
+        if not re.fullmatch(r'[1-9][0-9]{0,5}', raw_page):
+            return _sbpay_no_cache(jsonify({'error': 'Eine eindeutige Mitarbeiter-PDF ist erforderlich.'})), 400
+        requested_page = int(raw_page)
+    elif request.form.get('page_no'):
+        return _sbpay_no_cache(jsonify({'error': 'Unzulaessige Einzelseite beim Gesamtversand.'})), 400
     # Claim one row BEFORE network activity; UNIQUE(batch_id,page_no) makes every
     # attempt at most once, including timeouts, lost HTTP replies, or page reloads.
     with db_conn() as conn:
-        batch, rows = _sbpay_batch_data(conn,batch_id)
+        batch, rows = _sbpay_batch_data(conn, batch_id)
         _sbpay_delivery_schema(conn)
         existing = {int(r['page_no']) for r in conn.execute(
             'SELECT page_no FROM shiftbase_payroll_deliveries WHERE batch_id=?',
             (batch_id,)).fetchall()}
         current = _sb_mapping(conn)
         _sbpay_livecheck_schema(conn)
-        live_ok = {int(r['page_no']) for r in conn.execute(
-            'SELECT page_no FROM shiftbase_payroll_livechecks WHERE batch_id=? AND status=?',
-            (batch_id,'verified')).fetchall()}
-        first_success = bool(conn.execute(
-            '''SELECT page_no FROM shiftbase_payroll_deliveries
-               WHERE batch_id=? AND shiftbase_user_id=? AND state='observed_ui' LIMIT 1''',
-            (batch_id,contract.get('test_user_id',''))).fetchone()) if contract.get('mode') == 'browser' else False
-        row = next((r for r in rows if int(r['page_no']) not in existing and
-                    int(r['page_no']) in live_ok and r['approved'] and r['driver_id'] and
-                    current.get(int(r['driver_id'])) == str(r['shiftbase_user_id']) and
-                    (contract.get('mode') != 'browser' or
-                     str(r['shiftbase_user_id']) == contract['test_user_id'] or
-                     (contract['bulk'] and first_success))), None)
+        livechecks = {int(r['page_no']): dict(r) for r in conn.execute(
+            'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
+            (batch_id,)).fetchall()}
+        def allowed(row):
+            page = int(row['page_no'])
+            did = row['driver_id']
+            if page in existing or not did or not row['approved']:
+                return False
+            if mode == 'single' and page != requested_page:
+                return False
+            if current.get(int(did)) != str(row['shiftbase_user_id']):
+                return False
+            live = livechecks.get(page, {})
+            return (live.get('status') == 'verified' and
+                    live.get('shiftbase_user_id') == str(row['shiftbase_user_id']) and
+                    live.get('page_sha256') == str(row['page_sha256']))
+        row = next((r for r in rows if allowed(r)), None)
         if row is None:
-            return _sbpay_no_cache(jsonify({'done':True}))
+            if mode == 'single':
+                return _sbpay_no_cache(jsonify({'error':
+                    'Diese Mitarbeiter-PDF ist nicht freigegeben, nicht live geprueft oder wurde bereits versucht.'})), 409
+            return _sbpay_no_cache(jsonify({'done': True}))
         page_no=int(row['page_no'])
         attempt_id=_sbpay_uuid.uuid4().hex
         conn.execute('''INSERT INTO shiftbase_payroll_deliveries
