@@ -8984,10 +8984,10 @@ def admin_shiftbase_payroll():
          '<p>DATEV-Monatsdatei hochladen. Jede Seite wird unverändert als eigene PDF gespeichert. '
          'Mitarbeiter werden nur bei eindeutigem Namen UND vorhandener Shiftbase-Zuordnung vorgeschlagen. '
          'Jeder Beleg muss vor der Ausgabe einer Person ausdrücklich geprüft werden.</p>',
-         '<div class="flash err"><b>Datenschutz:</b> Keine Firmendateien verwenden! '
-         'Der offizielle persönliche Datei-Upload von Shiftbase ist bestätigt, aber kein Public-API-Uploadformat. '
-         'Daher erfolgt hier KEIN automatischer Upload. PDFs nach Freigabe nur beim richtigen Mitarbeiter '
-         'unter Mitarbeiter → Dateien → Datei hinzufügen hochladen und „Für Mitarbeiter sichtbar“ aktivieren.</div>',
+         '<div class="flash err"><b>Datenschutz:</b> Ausschließlich persönliche Mitarbeiterdateien. '
+         'Automatischer Upload ist nur nach dokumentierter API-Konfiguration oder per eigens '
+         'aktivierter Browserautomatisierung mit Shiftbase-Sitzung möglich. '
+         'Eine Vorschau oder Freigabe allein versendet noch keine Datei.</div>',
          '<form method="post" enctype="multipart/form-data" class="actions" style="align-items:end">',
          '<input type="hidden" name="csrf_token" value="'+token+'">',
          '<label style="max-width:550px">DATEV-Lohnabrechnung (PDF)'
@@ -9273,9 +9273,9 @@ def _sbpay_upload_contract():
     API host and must contain the verified recipient's ID as a whole path segment.
     """
     if os.environ.get('SHIFTBASE_PERSONAL_FILE_UPLOAD_ENABLED', '0').strip() != '1':
-        return None
+        return _sbpay_browser_contract()
     if os.environ.get('SHIFTBASE_PERSONAL_FILE_SCHEMA_VERIFIED', '0').strip() != '1':
-        return None
+        return _sbpay_browser_contract()
     names = {
         'post': 'SHIFTBASE_PERSONAL_FILE_POST_PATH',
         'get': 'SHIFTBASE_PERSONAL_FILE_VERIFY_PATH',
@@ -9476,6 +9476,175 @@ def _sbpay_upload_once(contract, batch, row, content):
     return document_id
 
 
+
+# --- Optionaler Shiftbase-Browserversand: keine undokumentierten REST-Endpunkte ---
+# Die offizielle Shiftbase-Hilfe beschreibt den Mitarbeiter-Dateidialog, aber
+# keinen belegten Public-API-Endpunkt. Dieser Adapter verwendet ausschließlich
+# den authentifizierten Webdialog und stoppt bei unklarer UI. KEINE automatische
+# Anmeldung mit ungesicherten Zugangsdaten, KEINE Firmenablage.
+import base64 as _sbpay_base64
+from urllib.parse import urlparse as _sbpay_urlparse
+
+
+def _sbpay_browser_contract():
+    """Optionale Browserautomatisierung; niemals ohne explizite Render-Secrets."""
+    if os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED', '').strip() != '1':
+        return None
+    encoded = os.environ.get('SHIFTBASE_PAYROLL_WEB_SESSION_B64', '').strip()
+    if not encoded or len(encoded) > 200_000:
+        return None
+    try:
+        state = json.loads(_sbpay_base64.b64decode(encoded, validate=True).decode('utf-8'))
+        if not isinstance(state, dict) or not isinstance(state.get('cookies'), list):
+            return None
+        if len(state['cookies']) == 0:
+            return None
+        # Shiftbase session state never includes other websites. This prevents
+        # accidentally forwarding authentication tokens from unrelated apps.
+        for cookie in state['cookies']:
+            domain = str(cookie.get('domain','')).lstrip('.').lower()
+            if domain not in ('shiftbase.com','app.shiftbase.com') and not domain.endswith('.shiftbase.com'):
+                return None
+        origins = state.get('origins',[])
+        if not isinstance(origins,list):
+            return None
+        for origin in origins:
+            uri = _sbpay_urlparse(str(origin.get('origin','')))
+            if uri.scheme != 'https' or (uri.hostname or '').lower() not in ('shiftbase.com','app.shiftbase.com'):
+                return None
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return None
+    test_user_id = os.environ.get('SHIFTBASE_PAYROLL_WEB_TEST_USER_ID','').strip()
+    if not re.fullmatch(r'[0-9]{1,20}',test_user_id):
+        return None
+    bulk = os.environ.get('SHIFTBASE_PAYROLL_WEB_BULK_ENABLED','0').strip() == '1'
+    # Even bulk requires a specific positive first test in the same environment.
+    # The test user ID is always specified and used for initial validation.
+    return {'mode':'browser', 'state':state, 'test_user_id':test_user_id,
+            'bulk':bulk, 'origin':'https://app.shiftbase.com'}
+
+
+def _sbpay_ui_strict_locator(locators, label):
+    """Return one unambiguous visible UI element; never take a random match."""
+    for loc in locators:
+        try:
+            n = loc.count()
+            if n == 1 and loc.is_visible():
+                return loc
+        except Exception:
+            continue
+    raise ShiftbaseIntegrationError('Shiftbase-Weboberflaeche: '+label+' nicht eindeutig gefunden. Kein Upload.')
+
+
+def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None):
+    """Exactly one page-scope employee upload. No retries and no hidden API calls.
+
+    Does not claim GET/API confirmation: result means that the file is visible
+    in the personal-files UI after upload. The recipient's own view must be
+    independently checked before considering employee visibility proven.
+    """
+    user_id = str(row['shiftbase_user_id'])
+    employee_name = str(row['employee_name'])
+    _sbpay_assert_shiftbase_recipient(user_id, employee_name)
+    if not contract.get('bulk') and user_id != contract['test_user_id']:
+        raise ShiftbaseIntegrationError('Einzeltest: nur die explizit freigegebene Shiftbase-ID ist erlaubt.')
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise ShiftbaseIntegrationError('Playwright fehlt. Bitte Render-Build um Chromium erweitern.') from exc
+    from re import escape as regex_escape
+    title = f'Lohnabrechnung {int(batch["month"]):02d}/{int(batch["year"])}'
+    # Never include the employee name, amount or personal number in the remote
+    # filename. They are already inside the protected PDF.
+    file_name = f'Lohnabrechnung_{int(batch["year"])}_{int(batch["month"]):02d}.pdf'
+    with sync_playwright() as engine:
+        try:
+            browser = engine.chromium.launch(headless=True, args=['--no-sandbox','--disable-dev-shm-usage'])
+        except Exception as exc:
+            raise ShiftbaseIntegrationError('Chromium steht auf Render nicht zur Verfuegung.') from exc
+        try:
+            context = browser.new_context(storage_state=contract['state'], accept_downloads=False,
+                                          service_workers='block')
+            page = context.new_page()
+            page.set_default_timeout(14_000)
+            target = contract['origin'] + '/universal/employees/' + user_id
+            page.goto(target, wait_until='domcontentloaded', timeout=25_000)
+            current = _sbpay_urlparse(page.url)
+            if current.scheme != 'https' or current.hostname != 'app.shiftbase.com':
+                raise ShiftbaseIntegrationError('Browser wurde zu einer anderen Domain umgeleitet. Kein Upload.')
+            # Deep link is officially documented. Its target must not silently
+            # become a different employee or a generic company files area.
+            if (not re.search(r'(?<![0-9])'+regex_escape(user_id)+r'(?![0-9])',current.path) or
+                    'login' in current.path.casefold()):
+                raise ShiftbaseIntegrationError('Mitarbeiter-ID fehlt nach der Profilnavigation; Sitzung moeglicherweise abgelaufen. Kein Upload.')
+            # Confirm the exact name exists on the employee profile; the REST
+            # user-list validation happened immediately before browser open.
+            name = page.get_by_text(employee_name, exact=True)
+            try:
+                name.first.wait_for(state='visible', timeout=20_000)
+            except Exception as exc:
+                raise ShiftbaseIntegrationError('Der Name ist im Mitarbeiterprofil nicht sichtbar; kein Upload.') from exc
+            if name.count() < 1 or not name.first.is_visible():
+                raise ShiftbaseIntegrationError('Der Mitarbeitername ist auf der Zielseite nicht exakt sichtbar.')
+            files_tab = _sbpay_ui_strict_locator([
+                page.get_by_role('tab', name=re.compile(r'^(Dateien|Files)$',re.I)),
+                page.get_by_role('link', name=re.compile(r'^(Dateien|Files)$',re.I)),
+                page.get_by_role('button', name=re.compile(r'^(Dateien|Files)$',re.I)),
+            ],'persoenlicher Dateien-Tab')
+            files_tab.click()
+            page.wait_for_load_state('domcontentloaded')
+            # Abort on another employee after changing tabs.
+            if name.count() < 1 or not name.first.is_visible():
+                raise ShiftbaseIntegrationError('Mitarbeiterprofil nach Tabwechsel nicht mehr identifizierbar.')
+            # A matching title may indicate a previous upload. Never silently
+            # overwrite or duplicate a payslip for this month.
+            if page.get_by_text(title, exact=True).count():
+                raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits im Profil sichtbar; vor neuem Versand pruefen.')
+            add_button = _sbpay_ui_strict_locator([
+                page.get_by_role('button', name=re.compile(r'^(Datei hinzufuegen|Datei hinzufügen|Add file)$',re.I)),
+            ], 'Datei-hinzufuegen-Schaltflaeche')
+            add_button.click()
+            uploads = page.locator('input[type="file"]')
+            if uploads.count() != 1:
+                raise ShiftbaseIntegrationError('Der persönliche Upload-Dialog enthaelt kein eindeutiges Dateifeld.')
+            # Never click save before the exact PDF contents have been assigned.
+            uploads.set_input_files({'name':file_name, 'mimeType':'application/pdf','buffer':content})
+            title_field = _sbpay_ui_strict_locator([
+                page.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
+                page.locator('input[name="title"]'),
+            ],'Dokumenttitel')
+            title_field.fill(title)
+            visible = _sbpay_ui_strict_locator([
+                page.get_by_role('checkbox',name=re.compile(r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I)),
+            ], 'Sichtbarkeit fuer Mitarbeiter')
+            if not visible.is_checked():
+                visible.check()
+            if not visible.is_checked() or title_field.input_value() != title:
+                raise ShiftbaseIntegrationError('Mitarbeitersichtbarkeit oder Dokumenttitel vor dem Upload ungueltig.')
+            save_button = _sbpay_ui_strict_locator([
+                page.get_by_role('button', name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I)),
+            ],'Speichern im Mitarbeiterprofil')
+            if before_submit is None:
+                raise ShiftbaseIntegrationError('Vor dem Upload fehlt die persistente Schreibsperre.')
+            before_submit()       # Persist 'sending' BEFORE network-changing action
+            save_button.click()   # The ONLY external write in this operation
+            try:
+                page.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
+            except Exception as exc:
+                raise ShiftbaseIntegrationError('Upload-Ergebnis unklar: Dokumenttitel danach nicht sichtbar. Nicht erneut senden.') from exc
+            if name.count() < 1 or not name.first.is_visible():
+                raise ShiftbaseIntegrationError('Nach Upload kann das Mitarbeiterprofil nicht erneut bestaetigt werden.')
+            # No provider file-ID or verified REST GET is available. Explicit
+            # UI-only state is used by the caller. Never treat as GET-confirmed.
+            return 'ui:'+_sbpay_uuid.uuid4().hex
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
+
 def _sbpay_delivery_html(batch, rows, drivers, csrf_token):
     contract = _sbpay_upload_contract()
     with db_conn() as conn:
@@ -9505,9 +9674,21 @@ def _sbpay_delivery_html(batch, rows, drivers, csrf_token):
                     'ueber einen geratenen Endpunkt versendet. Die Dateien stehen nach Freigabe zum '
                     'persoenlichen Upload bereit. Niemals Firmen-Dateien verwenden.</div>')
     else:
-        html.append('<div class="flash ok"><b>API-Vertrag ist konfiguriert.</b> '
-                    'Vor jedem POST wird der Benutzer live gegengeprueft; nach jedem POST wird die '
-                    'Mitarbeiterakte per GET kontrolliert. Versandstatus wird dauerhaft gespeichert.</div>')
+        if contract.get('mode') == 'browser':
+            web_id = str(_sbpay_escape(contract['test_user_id']))
+            mode_message = ('Browser-Upload über die Shiftbase-Mitarbeiterakte. '
+                            'Jede Datei wird dem Profil der vorher per API geprüften Mitarbeiter-ID zugeordnet; '
+                            'der Browser muss auf Render installiert und die Anmeldung gültig sein. '
+                            'Nach dem Versand wird nur die Anzeige im Mitarbeiterprofil bestätigt, '
+                            'NICHT die Sichtbarkeit aus Mitarbeitersicht.')
+            if not contract['bulk']:
+                mode_message += ' Einzeltest: nur Shiftbase-ID ' + web_id + '.'
+            else:
+                mode_message += ' Sammelmodus freigeschaltet.'
+            html.append('<div class="flash ok">'+str(_sbpay_escape(mode_message))+'</div>')
+        else:
+            html.append('<div class="flash ok"><b>Verifizierter API-Vertrag konfiguriert.</b> '
+                        'Vor POST erfolgt eine Live-Benutzerpruefung, danach GET-Kontrolle.</div>')
         html.append('<button class="primary" id="sbpay-run" style="width:auto">'
                     'Freigegebene Lohnzettel persoenlich hochladen</button>'
                     '<p id="sbpay-progress" class="muted" aria-live="polite"></p>')
@@ -9527,6 +9708,7 @@ def _sbpay_delivery_html(batch, rows, drivers, csrf_token):
         live_label = 'Eindeutig geprüft' if live_ok else 'Nicht geprüft / gesperrt'
         state = (delivery or {}).get('state', 'nicht versendet')
         label = {'confirmed':'Durch Shiftbase-GET bestaetigt',
+                 'observed_ui':'Im persoenlichen Dateien-Tab sichtbar (UI, keine API-GET-Bestaetigung)',
                  'unknown':'Ergebnis unklar; NICHT erneut senden',
                  'failed':'Fehlversuch; vor erneutem Versand pruefen',
                  'sending':'Versuch gestartet; Status nachpruefen',
@@ -9542,6 +9724,9 @@ def _sbpay_delivery_html(batch, rows, drivers, csrf_token):
                 'Datei hinzufügen → „Für Mitarbeiter sichtbar“. '
                 '<b>Die Dateien hier sind vertraulich und nicht fuer die allgemeine Firmenablage bestimmt.</b></p>')
     if contract:
+        html.append('<p class="muted">Vor dem Start: „Alle Empfänger live mit Shiftbase abgleichen“ ausführen. '
+                    'Nur bestätigte Zuordnungen ohne früheren Versandversuch werden berücksichtigt. '
+                    'Bei unklarem Ergebnis in Shiftbase prüfen, nicht erneut senden.</p>')
         route = url_for('admin_shiftbase_payroll_upload_step',batch_id=batch['id'])
         js = '''<script>(function(){var b=document.getElementById("sbpay-run"),p=document.getElementById("sbpay-progress");
 if(!b)return; b.addEventListener("click",async function(){b.disabled=true;p.textContent="Einzelversand wird gestartet …";
@@ -9575,9 +9760,20 @@ def admin_shiftbase_payroll_upload_step(batch_id):
             'SELECT page_no FROM shiftbase_payroll_deliveries WHERE batch_id=?',
             (batch_id,)).fetchall()}
         current = _sb_mapping(conn)
+        _sbpay_livecheck_schema(conn)
+        live_ok = {int(r['page_no']) for r in conn.execute(
+            'SELECT page_no FROM shiftbase_payroll_livechecks WHERE batch_id=? AND status=?',
+            (batch_id,'verified')).fetchall()}
+        first_success = bool(conn.execute(
+            '''SELECT page_no FROM shiftbase_payroll_deliveries
+               WHERE batch_id=? AND shiftbase_user_id=? AND state='observed_ui' LIMIT 1''',
+            (batch_id,contract.get('test_user_id',''))).fetchone()) if contract.get('mode') == 'browser' else False
         row = next((r for r in rows if int(r['page_no']) not in existing and
-                    r['approved'] and r['driver_id'] and
-                    current.get(int(r['driver_id'])) == str(r['shiftbase_user_id'])), None)
+                    int(r['page_no']) in live_ok and r['approved'] and r['driver_id'] and
+                    current.get(int(r['driver_id'])) == str(r['shiftbase_user_id']) and
+                    (contract.get('mode') != 'browser' or
+                     str(r['shiftbase_user_id']) == contract['test_user_id'] or
+                     (contract['bulk'] and first_success))), None)
         if row is None:
             return _sbpay_no_cache(jsonify({'done':True}))
         page_no=int(row['page_no'])
@@ -9586,7 +9782,8 @@ def admin_shiftbase_payroll_upload_step(batch_id):
           (batch_id,page_no,attempt_id,driver_id,shiftbase_user_id,page_sha256,state,started_at,updated_at)
           VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(batch_id,page_no) DO NOTHING''',
           (batch_id,page_no,attempt_id,int(row['driver_id']),str(row['shiftbase_user_id']),
-           str(row['page_sha256']),'sending',now_iso(),now_iso()))
+           str(row['page_sha256']),'preparing' if contract.get('mode')=='browser' else 'sending',
+           now_iso(),now_iso()))
         conn.commit()
         claimed=conn.execute('''SELECT attempt_id FROM shiftbase_payroll_deliveries
             WHERE batch_id=? AND page_no=?''',(batch_id,page_no)).fetchone()
@@ -9597,11 +9794,41 @@ def admin_shiftbase_payroll_upload_step(batch_id):
     try:
         with db_conn() as conn:
             batch, row, driver, content = _sbpay_verified_pdf(conn,batch_id,page_no)
-        document_id = _sbpay_upload_once(contract,batch,row,content)
-        state='confirmed'
+        if contract.get('mode') == 'browser':
+            def mark_before_browser_save():
+                # An interrupted connection after this point is UNKNOWN, never
+                # automatically resent; the file might already exist in Shiftbase.
+                with db_conn() as wconn:
+                    changed = wconn.execute('''UPDATE shiftbase_payroll_deliveries SET
+                      state='sending', updated_at=? WHERE batch_id=? AND page_no=?
+                      AND attempt_id=? AND state='preparing' ''',
+                      (now_iso(),batch_id,page_no,attempt_id))
+                    wconn.commit()
+                    if getattr(changed,'rowcount',1) == 0:
+                        raise ShiftbaseIntegrationError('Schreibsperre nicht mehr gueltig.')
+            document_id = _sbpay_browser_upload_once(contract,batch,row,content,
+                                                       before_submit=mark_before_browser_save)
+            state='observed_ui'
+        else:
+            document_id = _sbpay_upload_once(contract,batch,row,content)
+            state='confirmed'
     except Exception:
-        # The remote API could already have received a POST. Fail closed:
-        # no automatic resending, no raw response or personal details in logs/UI.
+        # Before Save, a browser attempt is provably write-free. Remove only
+        # that preflight claim so an expired session can be fixed safely.
+        if contract.get('mode') == 'browser':
+            with db_conn() as rconn:
+                current_state = rconn.execute('''SELECT state FROM shiftbase_payroll_deliveries
+                  WHERE batch_id=? AND page_no=? AND attempt_id=?''',
+                  (batch_id,page_no,attempt_id)).fetchone()
+                if current_state and current_state['state'] == 'preparing':
+                    rconn.execute('''DELETE FROM shiftbase_payroll_deliveries
+                      WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='preparing' ''',
+                      (batch_id,page_no,attempt_id))
+                    rconn.commit()
+                    return _sbpay_no_cache(jsonify({'done':False,'error':
+                        'Browser-Vorpruefung fehlgeschlagen. Kein Upload gestartet. '
+                        'Shiftbase-Anmeldung, Browser und Mitarbeiterseite pruefen.'})), 409
+        # After Save could have started, never retry this employee automatically.
         state='unknown'
     with db_conn() as conn:
         _sbpay_delivery_schema(conn)
