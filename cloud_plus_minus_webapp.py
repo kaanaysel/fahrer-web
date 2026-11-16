@@ -8933,7 +8933,11 @@ def admin_shiftbase_payroll():
             previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
                                     (digest,)).fetchone()
         if previous:
-            flash('Diese identische PDF wurde schon eingelesen. Bestehende Prüfliste geöffnet.', 'ok')
+            try:
+                verified, blocked = _sbpay_prepare_batch_checked(previous['id'])
+                flash(f'Bekannte PDF geoeffnet: {verified} Empfaenger versandbereit, {blocked} gesperrt.', 'ok')
+            except Exception:
+                flash('Bekannte PDF geoeffnet. Shiftbase-Abgleich aktuell nicht erreichbar; bei Bedarf unten erneut pruefen.', 'err')
             return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=previous['id']))
         from collections import Counter as _sbpay_counter
         from secrets import token_hex as _sbpay_token_hex
@@ -8972,7 +8976,14 @@ def admin_shiftbase_payroll():
         except Exception:
             _sbpay_shutil.rmtree(parent, ignore_errors=True)
             raise
-        flash(f'{len(details)} Mitarbeiter-PDFs aus {len(source.pages)} Originalseiten erstellt. Keine Datei wurde an Shiftbase gesendet.', 'ok')
+        try:
+            verified, blocked = _sbpay_prepare_batch_checked(batch_id)
+            flash(f'{len(details)} Einzelabrechnungen aus {len(source.pages)} Seiten erstellt. '
+                  f'{verified} eindeutig zugeordnet und auswählbar, {blocked} gesperrt. Noch nichts gesendet.', 'ok')
+        except Exception:
+            flash(f'{len(details)} Einzelabrechnungen aus {len(source.pages)} Seiten erstellt. '
+                  'Der automatische Shiftbase-Abgleich war nicht erreichbar. '
+                  'Nichts versendet; Zuordnungen koennen erneut geprueft werden.', 'err')
         return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
 
     with db_conn() as conn:
@@ -8980,19 +8991,16 @@ def admin_shiftbase_payroll():
         batches = conn.execute('SELECT id,year,month,page_count,created_at FROM shiftbase_payroll_batches '
                                'ORDER BY created_at DESC LIMIT 15').fetchall()
     token = str(_sbpay_escape(_sb_csrf_token()))
-    h = ['<div class="card" style="max-width:1150px"><h2>Vertrauliche Lohnzettel – pro Fahrer eine PDF</h2>',
-         '<p>DATEV-Monatsdatei hochladen. Jede Seite wird unverändert als eigene PDF gespeichert. '
-         'Mitarbeiter werden nur bei eindeutigem Namen UND vorhandener Shiftbase-Zuordnung vorgeschlagen. '
-         'Jeder Beleg muss vor der Ausgabe einer Person ausdrücklich geprüft werden.</p>',
-         '<div class="flash err"><b>Datenschutz:</b> Ausschließlich persönliche Mitarbeiterdateien. '
-         'Automatischer Upload ist nur nach dokumentierter API-Konfiguration oder per eigens '
-         'aktivierter Browserautomatisierung mit Shiftbase-Sitzung möglich. '
-         'Eine Vorschau oder Freigabe allein versendet noch keine Datei.</div>',
+    h = ['<div class="card" style="max-width:1150px"><h2>Lohnzettel in Shiftbase hochladen</h2>',
+         '<p>Gesamt-PDF aus DATEV hochladen. Die Cloud trennt alle Mitarbeiterabrechnungen, '
+         'findet die passenden Shiftbase-IDs und zeigt dir danach eine einzige Liste zum Auswaehlen und Senden.</p>',
+         '<p class="muted" style="font-size:13px">Nur eindeutig abgeglichene Mitarbeiter sind auswaehlbar. '
+         'Keine Datei wird vor deinem Klick auf "Ausgewaehlte senden" uebertragen.</p>',
          '<form method="post" enctype="multipart/form-data" class="actions" style="align-items:end">',
          '<input type="hidden" name="csrf_token" value="'+token+'">',
          '<label style="max-width:550px">DATEV-Lohnabrechnung (PDF)'
          '<input type="file" name="payroll_pdf" accept="application/pdf,.pdf" required></label>',
-         '<button class="primary" style="width:auto">PDF einlesen, Mitarbeiter erkennen und aufteilen</button></form>',
+         '<button class="primary" style="width:auto">PDF hochladen und Empfaenger erkennen</button></form>',
          '<p class="muted" style="font-size:13px">Der ursprüngliche Gesamtbeleg wird nicht gespeichert. '
          'Die Einzeldateien liegen getrennt vom öffentlichen Webverzeichnis in einem geschützten '
          'Datenordner. Für Render sollte ein persistentes, nur administrativ zugängliches Volume verwendet werden.</p></div>',
@@ -9003,7 +9011,7 @@ def admin_shiftbase_payroll():
         for row in batches:
             link = url_for('admin_shiftbase_payroll_batch',batch_id=row['id'])
             h.append('<tr><td>'+str(row['month']).zfill(2)+'/'+str(row['year'])+'</td><td>'+str(row['page_count'])+'</td>'
-                     '<td>'+str(_sbpay_escape(row['created_at']))+'</td><td><a href="'+link+'">Prüfliste öffnen</a></td></tr>')
+                     '<td>'+str(_sbpay_escape(row['created_at']))+'</td><td><a href="'+link+'">Empfaenger anzeigen</a></td></tr>')
         h.append('</tbody></table></div>')
     else:
         h.append('<p class="muted">Noch keine PDF importiert.</p>')
@@ -9023,16 +9031,12 @@ def _sbpay_batch_data(conn, batch_id):
 
 
 
-@app.post('/admin/shiftbase/lohnzettel/<batch_id>/prepare')
-@admin_login_required
-def admin_shiftbase_payroll_prepare(batch_id):
-    """One click: exact-name approvals plus fresh read-only Shiftbase ID checks.
+def _sbpay_prepare_batch_checked(batch_id):
+    """Read-only identity check after import. Returns (verified, blocked).
 
-    Only unambiguous exact-name matches are automatically approved. Anything
-    manually assigned or ambiguous keeps its prior review state; any identity
-    mismatch remains blocked. No payroll PDF is sent by this route.
+    No browser upload is started here; it only approves exact local matches
+    after a fresh official Shiftbase user-list read. Ambiguities fail closed.
     """
-    _sbpay_token_check()
     from collections import Counter as _C
     with db_conn() as conn:
         _, rows = _sbpay_batch_data(conn, batch_id)
@@ -9040,21 +9044,17 @@ def admin_shiftbase_payroll_prepare(batch_id):
         mapped = {int(d['id']): d for d in drivers}
         pdf_names = _C(_sbpay_norm(r['employee_name']) for r in rows)
         pdf_numbers = _C(str(r['personal_no']) for r in rows)
-    try:
-        users = _sbpay_cached_users(force=True)
-        profile_pairs = []
-        for item in users:
-            profile = _sb_get(item, 'User')
-            if not isinstance(profile, dict):
-                profile = item
-            profile_pairs.append((_sb_id(profile, 'id', 'user_id'),
-                                  _sbpay_norm(_sb_user_display(profile))))
-        uid_counts = _C(uid for uid, name in profile_pairs if uid)
-        name_counts = _C(name for uid, name in profile_pairs if name)
-        user_pairs = set(profile_pairs)
-    except Exception:
-        flash('Shiftbase-Benutzerliste nicht erreichbar. Nichts freigegeben oder gesendet.', 'err')
-        return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
+    users = _sbpay_cached_users(force=True)
+    profile_pairs = []
+    for item in users:
+        profile = _sb_get(item, 'User')
+        if not isinstance(profile, dict):
+            profile = item
+        profile_pairs.append((_sb_id(profile, 'id', 'user_id'),
+                              _sbpay_norm(_sb_user_display(profile))))
+    uid_counts = _C(uid for uid, name in profile_pairs if uid)
+    name_counts = _C(name for uid, name in profile_pairs if name)
+    user_pairs = set(profile_pairs)
     passed = 0
     blocked = 0
     with db_conn() as conn:
@@ -9094,114 +9094,167 @@ def admin_shiftbase_payroll_prepare(batch_id):
                 (batch_id, page_no, uid, row['page_sha256'],
                  'verified' if ok else 'blocked', now_iso()))
         conn.commit()
-    flash(f'Empfaengerpruefung abgeschlossen: {passed} eindeutig zugeordnet und versandbereit, '
-          f'{blocked} gesperrt. Es wurde noch nichts hochgeladen.', 'ok')
+    return passed, blocked
+
+
+@app.post('/admin/shiftbase/lohnzettel/<batch_id>/prepare')
+@admin_login_required
+def admin_shiftbase_payroll_prepare(batch_id):
+    """Optional recheck if Shiftbase was unavailable during upload."""
+    _sbpay_token_check()
+    try:
+        passed, blocked = _sbpay_prepare_batch_checked(batch_id)
+    except Exception:
+        flash('Shiftbase-Benutzerliste derzeit nicht erreichbar. Nichts freigegeben oder gesendet.', 'err')
+        return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
+    flash(f'{passed} eindeutig zugeordnet, {blocked} gesperrt. Noch nichts hochgeladen.', 'ok')
     return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
+
 
 @app.get('/admin/shiftbase/lohnzettel/<batch_id>')
 @admin_login_required
 def admin_shiftbase_payroll_batch(batch_id):
+    """One clear admin flow: inspect recognized PDFs, select recipients, send."""
     with db_conn() as conn:
         batch, rows = _sbpay_batch_data(conn, batch_id)
         drivers = _sbpay_drivers(conn)
         _sbpay_delivery_schema(conn)
         _sbpay_livecheck_schema(conn)
-        history = {int(r['page_no']):dict(r) for r in conn.execute(
+        history = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_deliveries WHERE batch_id=?',
             (batch_id,)).fetchall()}
-        checked = {int(r['page_no']):dict(r) for r in conn.execute(
+        checked = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
             (batch_id,)).fetchall()}
     mapping = {int(d['id']): d for d in drivers}
-    tok = str(_sbpay_escape(_sb_csrf_token()))
-    matched = sum(row['match_type'] == 'exact' and row['driver_id'] in mapping and
-                  _sbpay_norm(mapping[row['driver_id']]['name']) == _sbpay_norm(row['employee_name'])
-                  for row in rows)
-    ready = sum(bool(row['approved']) and row['driver_id'] in mapping and
-                str(mapping[row['driver_id']]['shiftbase_user_id']) == str(row['shiftbase_user_id']) and
-                checked.get(int(row['page_no']),{}).get('status') == 'verified' and
-                checked.get(int(row['page_no']),{}).get('page_sha256') == row['page_sha256'] and
-                int(row['page_no']) not in history for row in rows)
-    completed = sum(history.get(int(row['page_no']),{}).get('state') in ('observed_ui','confirmed') for row in rows)
-    title = f'{int(batch["month"]):02d}/{int(batch["year"])}'
-    h = ['<div class="card" style="max-width:1320px">',
-         '<h2>Lohnabrechnungen '+title+' – erkennen, kontrollieren und hochladen</h2>',
-         '<p class="muted">Eine DATEV-Gesamt-PDF wurde in vollständige, getrennte Mitarbeiter-PDFs aufgeteilt. '
-         'Bei mehrseitigen Abrechnungen bleiben alle Seiten derselben Person zusammen. '
-         'Es wird nur an eindeutig identifizierte persoenliche Shiftbase-Profile gesendet, niemals in Firmendateien.</p>',
-         '<div class="grid grid-4" style="margin:16px 0">',
-         '<div class="kpi">Originalseiten<b>'+str(batch['page_count'])+'</b></div>',
-         '<div class="kpi">Einzelabrechnungen<b>'+str(len(rows))+'</b></div>',
-         '<div class="kpi">Namensgleich erkannt<b>'+str(matched)+'</b></div>',
-         '<div class="kpi">Fuer Versand bereit<b>'+str(ready)+'</b><small> · '+str(completed)+' im Profil gesehen</small></div>',
-         '</div>',
-         '<div class="card" style="background:#f5f8ff;border-color:#b9d0f8;box-shadow:none">',
-         '<p style="margin-top:0"><b>Schritt 1 abgeschlossen:</b> PDF importiert und getrennt. '
-         '<b>Schritt 2:</b> Empfaenger pruefen. <b>Schritt 3:</b> Freigegebene Einzel-PDFs hochladen.</p>',
-         '<form method="post" action="'+url_for('admin_shiftbase_payroll_prepare',batch_id=batch_id)+'" class="actions">',
-         '<input type="hidden" name="csrf_token" value="'+tok+'">',
-         '<button class="primary" style="width:auto">Eindeutige Empfaenger pruefen und Versand vorbereiten</button>',
-         '</form><p class="muted" style="font-size:12px;margin:8px 0 0">'
-         'Liest die aktuelle Shiftbase-Benutzerliste; prueft Name, Shiftbase-ID und Doppelzuordnungen. '
-         'Uneindeutige Empfaenger bleiben gesperrt. Dabei wird noch keine PDF versendet.</p></div>',
-         '<label style="max-width:520px">Mitarbeiter suchen'
-         '<input id="sbpay-find" type="search" placeholder="Name oder Personalnummer" autocomplete="off"></label>',
-         '<div class="table-wrap"><table id="sbpay-table" style="min-width:1060px"><thead><tr>'
-         '<th>Originalseiten</th><th>Erkannter Empfaenger</th><th>Shiftbase-Ziel</th><th>Kontrolle</th>'
-         '<th>Status</th><th>Bei Unklarheit</th></tr></thead><tbody>']
+    from collections import Counter as _sbpay_count
+    mapped_ids = _sbpay_count(int(r['driver_id']) for r in rows if r['driver_id'])
+    pay_names = _sbpay_count(_sbpay_norm(r['employee_name']) for r in rows)
+    pay_numbers = _sbpay_count(str(r['personal_no']) for r in rows)
+    can_upload = _sbpay_upload_contract() is not None
+    items = []
+    ready_count = blocked_count = finished_count = unclear_count = 0
     for row in rows:
-        num = int(row['page_no'])
+        number = int(row['page_no'])
         did = int(row['driver_id']) if row['driver_id'] else 0
         driver = mapping.get(did)
-        correct = bool(driver and str(driver['shiftbase_user_id']) == str(row['shiftbase_user_id']))
-        check = checked.get(num,{})
-        live_ok = (bool(row['approved']) and correct and check.get('status') == 'verified' and
-                   check.get('shiftbase_user_id') == str(row['shiftbase_user_id']) and
-                   check.get('page_sha256') == row['page_sha256'])
-        delivery = history.get(num, {})
-        state = delivery.get('state')
-        if state == 'confirmed':
-            status, bgcolor = 'API-bestaetigt', '#e8f8ef'
+        correct = bool(driver and str(driver['shiftbase_user_id']) == str(row['shiftbase_user_id'])
+                       and (row['match_type'] != 'exact' or
+                            _sbpay_norm(driver['name']) == _sbpay_norm(row['employee_name'])))
+        proof = checked.get(number, {})
+        unique = (mapped_ids[did] == 1 and
+                  pay_names[_sbpay_norm(row['employee_name'])] == 1 and
+                  pay_numbers[str(row['personal_no'])] == 1)
+        verified = (bool(row['approved']) and correct and unique and
+                    proof.get('status') == 'verified' and
+                    proof.get('shiftbase_user_id') == str(row['shiftbase_user_id']) and
+                    proof.get('page_sha256') == row['page_sha256'])
+        delivery = history.get(number, {})
+        state = delivery.get('state', '')
+        eligible = bool(verified and not state)
+        if eligible:
+            ready_count += 1
+            status, color = 'Bereit', '#e8f8ef'
+        elif state == 'confirmed':
+            finished_count += 1
+            status, color = 'Uebertragung bestaetigt', '#e8f8ef'
         elif state == 'observed_ui':
-            status, bgcolor = 'Im persoenlichen Profil sichtbar (Mitarbeitersicht noch pruefen)', '#e8f8ef'
+            finished_count += 1
+            status, color = 'Im Mitarbeiterprofil gesehen', '#e8f8ef'
         elif state:
-            status, bgcolor = 'Versuch '+str(_sbpay_escape(state))+' – vor neuem Versuch pruefen', '#fff0ed'
-        elif live_ok:
-            status, bgcolor = 'Versandbereit', '#e8f8ef'
-        elif row['match_type'] == 'exact' and correct:
-            status, bgcolor = 'Erkannt – Shiftbase-Pruefung fehlt', '#fff7e8'
+            unclear_count += 1
+            status, color = 'Ergebnis pruefen – nicht erneut senden', '#fff0ed'
         else:
-            status, bgcolor = 'Gesperrt – eindeutige Zuordnung fehlt', '#fff0ed'
-        pages = ', '.join(str(p) for p in json.loads(row['source_pages']))
-        link = url_for('admin_shiftbase_payroll_pdf',batch_id=batch_id,page_no=num)
-        target = str(_sbpay_escape(driver['name']))+'<small style="display:block;color:#667085">Shiftbase-ID '+str(_sbpay_escape(row['shiftbase_user_id']))+'</small>' if correct else 'Nicht eindeutig zugeordnet'
-        preview = '<a class="btn small" target="_blank" rel="noopener noreferrer" href="'+link+'">PDF ansehen ('+str(row['file_pages'])+' S.)</a>'
-        if live_ok:
-            preview += '<p><a href="'+link+'?download=1" class="btn small">PDF herunterladen</a></p>'
-        manually = ['<details><summary>Zuordnung kontrollieren / korrigieren</summary>',
-                    '<form method="post" action="'+url_for('admin_shiftbase_payroll_assign',batch_id=batch_id,page_no=num)+'">',
-                    '<input type="hidden" name="csrf_token" value="'+tok+'">',
-                    '<select name="driver_id" required><option value="">Fahrer auswaehlen</option>']
-        for d in drivers:
-            selected=' selected' if int(d['id']) == did else ''
-            manually.append('<option value="'+str(d['id'])+'"'+selected+'>'+str(_sbpay_escape(d['name']))+' · ID '+str(_sbpay_escape(d['shiftbase_user_id']))+'</option>')
-        manually.extend(['</select><label style="font-size:12px;margin-top:6px">PDF-Namen vollstaendig eingeben',
-                         '<input name="confirmed_pdf_name" required autocomplete="off"></label>',
-                         '<label style="display:flex;gap:6px;align-items:center;font-size:12px">',
-                         '<input name="identity_confirmed" type="checkbox" value="yes" required style="width:auto">',
-                         'Ich habe die Identitaet anhand der Personalunterlagen geprueft.</label>',
-                         '<button style="width:auto">Diese Zuordnung speichern</button></form></details>'])
-        h.append('<tr style="background:'+bgcolor+'"><td>'+str(_sbpay_escape(pages))+'</td>'
-                 '<td><b>'+str(_sbpay_escape(row['employee_name']))+'</b><small style="display:block;color:#667085">Personal-Nr. '+str(_sbpay_escape(row['personal_no']))+'</small></td>'
-                 '<td>'+target+'</td><td>'+preview+'</td><td><b>'+status+'</b></td><td>'+''.join(manually)+'</td></tr>')
-    h.append('</tbody></table></div>'
-             '<script>(function(){const q=document.getElementById("sbpay-find");'
-             'const rows=Array.from(document.querySelectorAll("#sbpay-table tbody tr"));'
-             'if(!q)return;q.addEventListener("input",()=>{const t=q.value.toLocaleLowerCase("de").trim();'
-             'for(const r of rows){r.style.display=!t||r.textContent.toLocaleLowerCase("de").includes(t)?"":"none";}});})();</script>')
-    h.append(_sbpay_delivery_html(batch,rows,drivers,tok))
-    h.append('</div>')
-    return _sbpay_no_cache(make_response(base_page('Lohnzettel – Versanduebersicht',''.join(h),'shiftbase_payroll')))
+            blocked_count += 1
+            status, color = ('Noch nicht mit Shiftbase abgeglichen' if correct and unique
+                             else 'Zuordnung unklar – gesperrt'), '#fff7e8'
+        items.append((row, driver if correct else None, eligible, status, color))
+    token = str(_sbpay_escape(_sb_csrf_token()))
+    period = f'{int(batch["month"]):02d}/{int(batch["year"])}'
+    h = ['<div class="card" style="max-width:1320px">',
+         '<h2>Lohnzettel '+period+' – Mitarbeiter auswaehlen und senden</h2>',
+         '<p>Die Gesamt-PDF wurde automatisch in getrennte Mitarbeiterabrechnungen aufgeteilt. '
+         'Waehle alle oder einzelne gruen markierte Mitarbeiter aus und klicke auf <b>Ausgewaehlte PDFs senden</b>. '
+         'Unklare Zuordnungen sind aus Sicherheitsgruenden nicht auswaehlbar.</p>',
+         '<div class="grid grid-4" style="margin:15px 0">',
+         '<div class="kpi">Originalseiten<b>'+str(batch['page_count'])+'</b></div>',
+         '<div class="kpi">Einzel-PDFs<b>'+str(len(rows))+'</b></div>',
+         '<div class="kpi">Bereit<b>'+str(ready_count)+'</b></div>',
+         '<div class="kpi">Versendet / pruefen<b>'+str(finished_count)+' / '+str(unclear_count)+'</b></div>',
+         '</div>']
+    if not can_upload:
+        h.append('<div class="flash err"><b>Shiftbase-Upload noch nicht einsatzbereit.</b> '
+                 'Bitte die gueltige Browser-Sitzung und Playwright/Chromium auf Render einrichten. '
+                 'Die Einzel-PDFs koennen geprueft werden; es wird nichts gesendet.</div>')
+    if blocked_count:
+        h.append('<div class="muted" style="margin-bottom:12px">'+str(blocked_count)+' nicht versandbereite '
+                 'Abrechnungen bleiben gesperrt. <form method="post" '
+                 'style="display:inline" action="'+url_for('admin_shiftbase_payroll_prepare',batch_id=batch_id)+'">'
+                 '<input type="hidden" name="csrf_token" value="'+token+'">'
+                 '<button type="submit" class="btn small" style="width:auto">Zuordnungen erneut pruefen</button>'
+                 '</form></div>')
+    h.append('<div class="actions" style="margin-bottom:12px;gap:8px">'
+             '<button type="button" id="sbpay-all" style="width:auto">Alle Versandbereiten auswaehlen</button>'
+             '<button type="button" id="sbpay-none" style="width:auto">Auswahl aufheben</button>'
+             '<button type="button" class="primary" id="sbpay-send" '
+             + ('disabled ' if not can_upload or not ready_count else '')
+             + 'style="width:auto">Ausgewaehlte PDFs senden (0)</button></div>')
+    h.append('<div style="margin:12px 0;padding:12px;background:#f6f9ff;border:1px solid #d8e5f8;border-radius:12px">'
+             '<div style="font-size:13px;font-weight:750">Fortschritt</div>'
+             '<progress id="sbpay-meter" max="1" value="0" style="width:100%;height:19px"></progress>'
+             '<p id="sbpay-progress" role="status" aria-live="polite" '
+             'style="margin:4px 0;color:#344054">Noch kein Versand gestartet.</p></div>')
+    h.append('<label style="max-width:460px">Mitarbeiter suchen'
+             '<input id="sbpay-find" type="search" placeholder="Name oder Personalnummer" autocomplete="off">'
+             '</label>')
+    h.append('<div class="table-wrap"><table id="sbpay-table" style="min-width:800px">'
+             '<thead><tr><th style="width:75px">Auswahl</th><th>Mitarbeiter / erkannte PDF</th>'
+             '<th>Shiftbase-Zuordnung</th><th>PDF</th><th>Status</th><th>Unklar?</th>'
+             '</tr></thead><tbody>')
+    for row, driver, eligible, status, color in items:
+        page_no = int(row['page_no'])
+        display_name = str(_sbpay_escape(row['employee_name']))
+        source_pages = ', '.join(str(int(p)) for p in json.loads(row['source_pages']))
+        target = (str(_sbpay_escape(driver['name']))+'<small style="display:block;color:#667085">ID '
+                  +str(_sbpay_escape(row['shiftbase_user_id']))+'</small>') if driver else 'Nicht eindeutig'
+        url = url_for('admin_shiftbase_payroll_pdf',batch_id=batch_id,page_no=page_no)
+        checkbox = ('<input type="checkbox" class="sbpay-choice" value="'+str(page_no)+'" '
+                    'aria-label="'+display_name+' zum Senden auswaehlen" '
+                    'style="width:20px;height:20px"'+('' if eligible and can_upload else ' disabled')+'>')
+        preview = ('<a class="btn small" target="_blank" rel="noopener noreferrer" '
+                   'href="'+url+'">PDF ansehen ('+str(int(row['file_pages']))+' S.)</a>')
+        manual = ''
+        if not eligible and not history.get(page_no):
+            manual = ['<details><summary>Zuordnung korrigieren</summary>',
+                      '<form method="post" action="'+url_for('admin_shiftbase_payroll_assign',batch_id=batch_id,page_no=page_no)+'">',
+                      '<input type="hidden" name="csrf_token" value="'+token+'">',
+                      '<select name="driver_id" required><option value="">Fahrer waehlen</option>']
+            for candidate in drivers:
+                selected = ' selected' if int(candidate['id']) == int(row['driver_id'] or 0) else ''
+                manual.append('<option value="'+str(candidate['id'])+'"'+selected+'>'+str(_sbpay_escape(candidate['name']))
+                              +' · ID '+str(_sbpay_escape(candidate['shiftbase_user_id']))+'</option>')
+            manual.extend(['</select><label style="font-size:12px">PDF-Namen eingeben'
+                           '<input name="confirmed_pdf_name" autocomplete="off" required></label>',
+                           '<label style="display:flex;gap:6px;align-items:center;font-size:12px">'
+                           '<input type="checkbox" name="identity_confirmed" value="yes" required style="width:auto">'
+                           'Identitaet anhand der Personalunterlagen geprueft</label>',
+                           '<button style="width:auto">Zuordnung speichern</button></form></details>'])
+            manual = ''.join(manual)
+        h.append('<tr style="background:'+color+'" data-page="'+str(page_no)+'">'
+                 '<td>'+checkbox+'</td><td><b>'+display_name+'</b>'
+                 '<small style="display:block;color:#667085">Personal-Nr. '+str(_sbpay_escape(row['personal_no']))
+                 +' · Originalseiten '+str(_sbpay_escape(source_pages))+'</small></td>'
+                 '<td>'+target+'</td><td>'+preview+'</td>'
+                 '<td class="sbpay-status"><b>'+str(_sbpay_escape(status))+'</b></td>'
+                 '<td>'+manual+'</td></tr>')
+    h.append('</tbody></table></div>')
+    h.append(_sbpay_simple_send_script(batch_id, token))
+    h.append('<p class="muted" style="font-size:12px;margin-top:12px">'
+             'Es werden nur die ausgewaehlten, eindeutig verifizierten Mitarbeiter-PDFs '
+             'in die jeweilige persoenliche Shiftbase-Dateiablage hochgeladen. '
+             'Bei einem unklaren Ergebnis wird der Versand angehalten; kein automatischer Neuversand.</p>')
+    h.append('<a class="btn small" href="'+url_for('admin_shiftbase_payroll')+'">Weitere PDF hochladen</a></div>')
+    return _sbpay_no_cache(make_response(base_page('Lohnzettel auswaehlen und senden',''.join(h),'shiftbase_payroll')))
 
 
 @app.post('/admin/shiftbase/lohnzettel/<batch_id>/resync')
@@ -9764,118 +9817,84 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
 
 
 
-def _sbpay_delivery_html(batch, rows, drivers, csrf_token):
-    """Bulk and single person upload actions with an explicit progress meter."""
-    contract = _sbpay_upload_contract()
-    with db_conn() as conn:
-        _sbpay_delivery_schema(conn)
-        _sbpay_livecheck_schema(conn)
-        history = {int(r['page_no']):dict(r) for r in conn.execute(
-            'SELECT * FROM shiftbase_payroll_deliveries WHERE batch_id=?',
-            (batch['id'],)).fetchall()}
-        livechecks = {int(r['page_no']):dict(r) for r in conn.execute(
-            'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
-            (batch['id'],)).fetchall()}
-    mapped = {int(d['id']):str(d['shiftbase_user_id']) for d in drivers}
-    def ready(row):
-        did = int(row['driver_id']) if row['driver_id'] else 0
-        page = int(row['page_no'])
-        check = livechecks.get(page,{})
-        return (bool(row['approved']) and did in mapped and
-                mapped[did] == str(row['shiftbase_user_id']) and
-                check.get('status') == 'verified' and
-                check.get('shiftbase_user_id') == str(row['shiftbase_user_id']) and
-                check.get('page_sha256') == row['page_sha256'] and page not in history)
-    eligible = [r for r in rows if ready(r)]
-    confirmed = sum(history.get(int(r['page_no']),{}).get('state') == 'confirmed' for r in rows)
-    seen = sum(history.get(int(r['page_no']),{}).get('state') == 'observed_ui' for r in rows)
-    unresolved = sum(history.get(int(r['page_no']),{}).get('state') in ('unknown','sending','failed') for r in rows)
-    html = ['<div class="card" style="background:#f8fbff;margin-top:18px">',
-            '<h3>Schritt 3: Lohnzettel an die richtigen Mitarbeiter senden</h3>',
-            '<p><b>'+str(len(eligible))+'</b> noch versandbereit · <b>'+str(seen)+'</b> im Mitarbeiterprofil gesehen · '
-            '<b>'+str(confirmed)+'</b> API-bestaetigt · <b>'+str(unresolved)+'</b> zur manuellen Klaerung.</p>']
-    if not contract:
-        html.append('<div class="flash err">Der automatische Shiftbase-Upload ist noch nicht einsatzbereit. '
-                    'Bitte eine gueltige Shiftbase-Browsersitzung in Render hinterlegen und Chromium installieren. '
-                    'Es wird nichts versendet.</div>')
-    else:
-        if contract.get('mode') == 'browser':
-            html.append('<p class="muted">Der Upload nutzt den persoenlichen Dateien-Tab in Shiftbase. '
-                        'Die tatsaechliche Sichtbarkeit im Mitarbeiterkonto kann damit noch nicht abschliessend '
-                        'verifiziert werden. Vor dem Massenversand einen einzelnen Empfaenger kontrollieren.</p>')
-        if eligible:
-            html.append('<div class="actions" style="margin-bottom:12px">'
-                        '<button type="button" class="primary sbpay-start" data-mode="all" '
-                        'data-count="'+str(len(eligible))+'" style="width:auto">'
-                        'Alle '+str(len(eligible))+' sicheren Einzel-PDFs hochladen</button>'
-                        '</div><p class="muted" style="font-size:12px">'
-                        'Nur eindeutig gepruefte Mitarbeiter; gesperrte oder bereits versuchte Dokumente sind ausgeschlossen.</p>')
-        else:
-            html.append('<p>Noch keine versandbereite PDF. Zuerst oben den Empfaengerabgleich starten '
-                        'oder unklare Zuordnungen kontrollieren.</p>')
-        html.append('<div class="table-wrap"><table style="min-width:700px">'
-                    '<thead><tr><th>Einzelversand</th><th>Mitarbeiter</th><th>Originalseiten</th></tr></thead><tbody>')
-        for row in eligible:
-            page=int(row['page_no'])
-            name=str(_sbpay_escape(row['employee_name']))
-            src=', '.join(str(x) for x in json.loads(row['source_pages']))
-            html.append('<tr><td><button type="button" class="sbpay-start" data-mode="single" '
-                        'data-count="1" data-page="'+str(page)+'" style="width:auto">'
-                        'Nur diese Person hochladen</button></td><td>'+name+'</td><td>'+str(_sbpay_escape(src))+'</td></tr>')
-        html.append('</tbody></table></div>')
-        html.append('<div style="margin:14px 0">'
-                    '<label for="sbpay-meter">Fortschritt</label>'
-                    '<progress id="sbpay-meter" max="1" value="0" '
-                    'style="width:100%;height:18px"></progress>'
-                    '<p id="sbpay-progress" role="status" aria-live="polite" class="muted">Noch kein Versand gestartet.</p>'
-                    '</div>')
-        route = url_for('admin_shiftbase_payroll_upload_step',batch_id=batch['id'])
-        js=r"""<script>(function(){
-const buttons=[...document.querySelectorAll('.sbpay-start')];
+def _sbpay_simple_send_script(batch_id, csrf_token):
+    """One visible send action, always one verified recipient per server request."""
+    route = url_for('admin_shiftbase_payroll_upload_step', batch_id=batch_id)
+    script = r"""<script>(function(){
+const boxes=[...document.querySelectorAll('.sbpay-choice:not(:disabled)')];
+const all=document.getElementById('sbpay-all');
+const none=document.getElementById('sbpay-none');
+const send=document.getElementById('sbpay-send');
 const meter=document.getElementById('sbpay-meter');
-const progress=document.getElementById('sbpay-progress');
-if(!buttons.length||!meter||!progress)return;
-let active=false;
-buttons.forEach(btn=>btn.addEventListener('click',async()=>{
- if(active)return;
- const mode=btn.dataset.mode;
- const page=btn.dataset.page||'';
- const target=Number(btn.dataset.count||'1');
- if(mode!=='single'&&mode!=='all')return;
- if(mode==='all'&&!window.confirm('Jetzt '+target+' eindeutig zugeordnete Lohnzettel in die persoenlichen Shiftbase-Mitarbeiterakten hochladen? Vorher die Empfaengerliste kontrollieren.'))return;
- active=true;buttons.forEach(b=>b.disabled=true);
- meter.max=target;meter.value=0;
- let processed=0;
- progress.textContent='Uebertragung gestartet: 0 von '+target+'.';
- try{
-  for(let i=0;i<target+2;i++){
-   const data=new URLSearchParams();data.set('csrf_token',CSRF);data.set('mode',mode);
-   if(mode==='single')data.set('page_no',page);
-   const res=await fetch(ROUTE,{method:'POST',body:data,credentials:'same-origin',cache:'no-store'});
-   const result=await res.json();
-   if(!res.ok){progress.textContent=result.error||'Versand gestoppt. Shiftbase pruefen.';break;}
-   if(result.done){progress.textContent='Versand beendet. Status wird geladen.';window.location.reload();return;}
-   if(result.state==='bereits in Bearbeitung'){
-      progress.textContent='Ein Dokument wird bereits verarbeitet. Bitte Status kontrollieren.';break;
+const info=document.getElementById('sbpay-progress');
+const search=document.getElementById('sbpay-find');
+const rows=[...document.querySelectorAll('#sbpay-table tbody tr')];
+if(!send||!meter||!info)return;
+let sending=false;
+function chosen(){return boxes.filter(b=>b.checked&&!b.disabled);}
+function update(){
+ const n=chosen().length;
+ send.textContent='Ausgewaehlte PDFs senden ('+n+')';
+ send.disabled=sending||n===0||DISABLED;
+ if(all)all.disabled=sending;
+ if(none)none.disabled=sending;
+}
+boxes.forEach(b=>b.addEventListener('change',update));
+if(all)all.addEventListener('click',()=>{boxes.forEach(b=>b.checked=true);update();});
+if(none)none.addEventListener('click',()=>{boxes.forEach(b=>b.checked=false);update();});
+if(search)search.addEventListener('input',()=>{
+ const query=search.value.trim().toLocaleLowerCase('de');
+ rows.forEach(r=>{r.style.display=!query||r.textContent.toLocaleLowerCase('de').includes(query)?'':'none';});
+});
+send.addEventListener('click',async()=>{
+ if(sending)return;
+ const picked=chosen().map(b=>b.value);
+ if(!picked.length)return;
+ sending=true;update();
+ meter.max=picked.length;meter.value=0;
+ info.textContent='0 von '+picked.length+' Mitarbeitern verarbeitet. Bitte diese Seite waehrend des Versands offen lassen.';
+ let complete=0, failed=false;
+ for(const number of picked){
+  const params=new URLSearchParams();
+  params.set('csrf_token',CSRF);params.set('mode','single');params.set('page_no',number);
+  try{
+   const response=await fetch(ROUTE,{method:'POST',body:params,credentials:'same-origin',cache:'no-store'});
+   const result=await response.json();
+   if(!response.ok||result.error||result.done){
+    info.textContent='Gestoppt bei PDF '+number+': '+(result.error||'Unbekannte Antwort')+
+        '. Bereits bearbeitete Personen bitte in Shiftbase kontrollieren.';
+    failed=true;break;
    }
-   processed++;meter.value=Math.min(processed,target);
-   progress.textContent=processed+' von '+target+' bearbeitet. Letzter Status: '+result.state;
-   if(result.state==='unknown'||result.state==='failed'||result.state==='sending'){
-      progress.textContent+=' – Unklares Ergebnis. Bitte Mitarbeiterakte pruefen; kein automatischer Neuversand.';
-      break;
+   if(result.state!=='confirmed'&&result.state!=='observed_ui'){
+    info.textContent='Gestoppt bei PDF '+number+': Status '+(result.state||'unbekannt')+
+        '. Bei unklarem Ergebnis nicht erneut senden!';
+    failed=true;break;
    }
-   if(mode==='single'||processed>=target){
-      progress.textContent+=' Die aktualisierte Liste wird geladen.';
-      window.location.reload();return;
+   const checkbox=boxes.find(b=>b.value===number);
+   if(checkbox){
+    checkbox.checked=false;checkbox.disabled=true;
+    const cell=checkbox.closest('tr')?.querySelector('.sbpay-status');
+    if(cell)cell.textContent=result.state==='confirmed'?'API-bestaetigt':'Im persoenlichen Profil gesehen';
    }
+   complete++;meter.value=complete;
+   info.textContent=complete+' von '+picked.length+' PDFs verarbeitet.';
+  }catch(error){
+   info.textContent='Verbindung unterbrochen bei PDF '+number+
+      '. Keine erneute Uebertragung starten, bevor die persoenliche Shiftbase-Akte kontrolliert wurde.';
+   failed=true;break;
   }
- }catch(error){progress.textContent='Verbindung unterbrochen. Keine erneute Uebertragung starten, bevor die Shiftbase-Akte kontrolliert wurde.';}
- finally{active=false;buttons.forEach(b=>b.disabled=false);}
-}));
+ }
+ sending=false;update();
+ if(!failed){
+  info.textContent='Alle '+complete+' ausgewaehlten PDFs bearbeitet. Der aktuelle Status wird geladen.';
+  window.location.reload();
+ }
+});
+update();
 })();</script>"""
-        html.append(js.replace('CSRF',json.dumps(str(_sb_csrf_token()))).replace('ROUTE',json.dumps(route)))
-    html.append('</div>')
-    return ''.join(html)
+    return script.replace('CSRF', json.dumps(str(_sb_csrf_token())))\
+                 .replace('ROUTE', json.dumps(route))\
+                 .replace('DISABLED', 'false' if _sbpay_upload_contract() else 'true')
 
 
 @app.post('/admin/shiftbase/lohnzettel/<batch_id>/upload-next')
