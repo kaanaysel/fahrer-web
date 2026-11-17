@@ -8923,144 +8923,342 @@ def _sbpay_no_cache(response):
     return response
 
 
-@app.route('/admin/shiftbase/lohnzettel', methods=['GET', 'POST'])
+# Import as small, resumable HTTPS requests. A single Gunicorn request must
+# never parse 70 pages and generate 69 PDFs (Render's default worker timeout
+# can otherwise terminate it before any database commit).
+_SBPAY_IMPORTS = _SBPAY_ROOT / '_imports'
+_SBPAY_IMPORT_CHUNK = 3
+_SBPAY_FINAL_CHUNK = 5
+
+
+def _sbpay_stage_path(job_id):
+    if not re.fullmatch(r'[a-f0-9]{32}', str(job_id or '')):
+        abort(404)
+    return _SBPAY_IMPORTS / job_id
+
+
+def _sbpay_stage_store(parent, data):
+    """Atomically save private metadata so a disconnected browser can resume."""
+    from secrets import token_hex
+    temporary = parent / ('manifest.' + token_hex(8) + '.tmp')
+    try:
+        with open(temporary, 'x', encoding='utf-8') as stream:
+            os.chmod(temporary, 0o600)
+            json.dump(data, stream, ensure_ascii=False, separators=(',', ':'))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, parent / 'manifest.json')
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _sbpay_stage_read(parent):
+    try:
+        with open(parent / 'manifest.json', 'r', encoding='utf-8') as stream:
+            data = json.load(stream)
+        if not isinstance(data, dict) or data.get('state') not in ('reading','finalizing','committing','completed','failed'):
+            raise ValueError('Invalid state')
+        return data
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        abort(404)
+
+
+def _sbpay_stage_purge_files(parent):
+    """After completion/failure remove the source and all sensitive temp pages."""
+    for name in ('source.pdf',):
+        try:
+            (parent / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    for folder in ('pages', 'completed'):
+        _sbpay_shutil.rmtree(parent / folder, ignore_errors=True)
+
+
+def _sbpay_stage_expire():
+    """Purge abandoned private staging data after 24h; never send anything."""
+    import time
+    _sbpay_secure_dir(_SBPAY_IMPORTS)
+    now = time.time()
+    for entry in _SBPAY_IMPORTS.iterdir():
+        try:
+            if (entry.is_dir() and re.fullmatch('[a-f0-9]{32}', entry.name)
+                    and now - entry.stat().st_mtime > 86400):
+                _sbpay_shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _sbpay_stage_progress(meta):
+    state = meta['state']
+    pages = int(meta.get('page_count') or 0)
+    finished_pages = int(meta.get('next_page') or 0)
+    groups = meta.get('groups') or []
+    finished_groups = int(meta.get('next_group') or 0)
+    # In a normal DATEV batch, reading gets 0-75% and creating recipient PDFs
+    # gets 75-95%; committing the private database mapping ends at 100%.
+    if state == 'reading':
+        pct = int(75 * finished_pages / max(1, pages)) if pages else 1
+        info = f'{finished_pages} von {pages or "?"} Seiten erkannt und sicher getrennt'
+    elif state in ('finalizing','committing'):
+        pct = 75 + int(20 * finished_groups / max(1, len(groups)))
+        info = f'{finished_groups} von {len(groups)} Mitarbeiter-PDFs kontrolliert'
+    elif state == 'completed':
+        pct = 100
+        info = 'PDF-Aufteilung abgeschlossen'
+    else:
+        pct = 0
+        info = meta.get('message') or 'PDF-Import nicht abgeschlossen'
+    return {'state':state, 'percent':pct, 'info':info,
+            'page_count':pages, 'page_done':finished_pages,
+            'recipient_count':len(groups)}
+
+
+def _sbpay_stage_parse(parent, meta):
+    if PdfReader is None or _SbpayWriter is None:
+        raise ValueError('PDF-Bibliothek pypdf fehlt auf Render.')
+    source = parent / 'source.pdf'
+    if not source.is_file():
+        raise ValueError('Die temporäre PDF wurde nicht gefunden. Bitte erneut hochladen.')
+    with open(source, 'rb') as stream:
+        try:
+            pdf = PdfReader(stream, strict=True)
+        except Exception as exc:
+            raise ValueError('Die PDF-Datei ist beschädigt oder hat ein nicht unterstütztes Format.') from exc
+        if pdf.is_encrypted:
+            raise ValueError('Passwortgeschützte PDFs werden nicht verarbeitet.')
+        count = len(pdf.pages)
+        if not 1 <= count <= 300:
+            raise ValueError('Erlaubt sind PDF-Dateien mit 1 bis 300 Seiten.')
+        if meta['page_count'] and meta['page_count'] != count:
+            raise ValueError('Die Seitensumme hat sich unerwartet geändert.')
+        meta['page_count'] = count
+        start = int(meta['next_page'])
+        if start < 0 or start > count or len(meta['pages']) != start:
+            raise ValueError('Der Import-Zwischenstand ist widersprüchlich.')
+        _sbpay_secure_dir(parent / 'pages')
+        for index in range(start, min(start + _SBPAY_IMPORT_CHUNK, count)):
+            page = pdf.pages[index]
+            text = page.extract_text() or ''
+            period = _sbpay_period(text)
+            if not period or None in period:
+                raise ValueError(f'Seite {index+1}: Abrechnungsmonat nicht eindeutig.')
+            if meta['period'] is None:
+                meta['period'] = list(period)
+            if list(period) != meta['period']:
+                raise ValueError(f'Seite {index+1}: abweichender Abrechnungsmonat.')
+            name, number = _sbpay_identity_from_page(page)
+            if not name or not number:
+                raise ValueError(f'Seite {index+1}: Name oder Personalnummer nicht eindeutig.')
+            writer = _SbpayWriter()
+            writer.add_page(page)
+            buffer = io.BytesIO()
+            writer.write(buffer)
+            data = buffer.getvalue()
+            if len(data) > 5 * 1024 * 1024:
+                raise ValueError(f'Seite {index+1}: Datei größer als 5 MB.')
+            # The PDF must still contain exactly this person after separation.
+            check = PdfReader(io.BytesIO(data), strict=True)
+            if len(check.pages) != 1:
+                raise ValueError(f'Seite {index+1}: Einzelseiten-Prüfung fehlgeschlagen.')
+            check_name, check_number = _sbpay_identity_from_page(check.pages[0])
+            if check_number != number or _sbpay_norm(check_name) != _sbpay_norm(name):
+                raise ValueError(f'Seite {index+1}: unterschiedliche Empfänger vor/nach Trennung.')
+            dest = parent / 'pages' / f'{index+1:04d}.pdf'
+            temp = parent / 'pages' / f'{index+1:04d}.part'
+            with open(temp, 'wb') as output:
+                os.chmod(temp, 0o600)
+                output.write(data)
+            os.replace(temp, dest)
+            meta['pages'].append([name, number])
+            meta['next_page'] = index + 1
+        if meta['next_page'] == count:
+            from collections import OrderedDict
+            people = OrderedDict()
+            for index, (name, number) in enumerate(meta['pages'], 1):
+                entry = people.get(number)
+                if entry:
+                    if _sbpay_norm(entry['name']) != _sbpay_norm(name):
+                        raise ValueError('Eine DATEV-Personalnummer kommt mit unterschiedlichen Namen vor.')
+                    entry['source_pages'].append(index)
+                else:
+                    people[number] = {'name':name,'personal_no':number,'source_pages':[index]}
+            meta['groups'] = list(people.values())
+            meta['state'] = 'finalizing'
+
+
+def _sbpay_stage_finalize(parent, meta):
+    groups = meta['groups']
+    if not groups or len(meta['pages']) != meta['page_count']:
+        raise ValueError('Die PDF-Aufteilung ist unvollständig.')
+    _sbpay_secure_dir(parent / 'completed')
+    start = int(meta.get('next_group') or 0)
+    if start != len(meta['completed_groups']):
+        raise ValueError('Der PDF-Zwischenstand ist widersprüchlich.')
+    for idx in range(start, min(start + _SBPAY_FINAL_CHUNK, len(groups))):
+        group = groups[idx]
+        numbers = group['source_pages']
+        filename = f'blatt_{numbers[0]:03d}.pdf'
+        if len(numbers) == 1:
+            # This page was already checked on import; no expensive rewrite.
+            data = (parent / 'pages' / f'{numbers[0]:04d}.pdf').read_bytes()
+        else:
+            writer = _SbpayWriter()
+            for page_no in numbers:
+                original = PdfReader(str(parent / 'pages' / f'{page_no:04d}.pdf'), strict=True)
+                writer.add_page(original.pages[0])
+            buffer = io.BytesIO()
+            writer.write(buffer)
+            data = buffer.getvalue()
+        if len(data) > 5 * 1024 * 1024:
+            raise ValueError(f'Seite {numbers[0]}: vollständige Mitarbeiter-PDF größer als 5 MB.')
+        # Double-check *every* page in a multi-page payslip before release.
+        if len(numbers) > 1:
+            proof = PdfReader(io.BytesIO(data), strict=True)
+            if len(proof.pages) != len(numbers):
+                raise ValueError('Eine mehrseitige Mitarbeiter-PDF ist unvollständig.')
+            for part in proof.pages:
+                p_name, p_no = _sbpay_identity_from_page(part)
+                if p_no != group['personal_no'] or _sbpay_norm(p_name) != _sbpay_norm(group['name']):
+                    raise ValueError('Mehrseitige PDF enthält verschiedene Mitarbeiter.')
+        target = parent / 'completed' / filename
+        temporary = target.with_suffix('.part')
+        with open(temporary, 'wb') as f:
+            os.chmod(temporary, 0o600)
+            f.write(data)
+        os.replace(temporary, target)
+        meta['completed_groups'].append({'filename':filename,
+            'page_no':numbers[0], 'file_pages':len(numbers),
+            'page_sha256':_sbpay_hashlib.sha256(data).hexdigest()})
+        meta['next_group'] = idx + 1
+    if meta['next_group'] == len(groups):
+        meta['state'] = 'committing'
+
+
+def _sbpay_stage_commit(parent, meta):
+    """One DB transaction after all split PDFs have been fully validated."""
+    from collections import Counter
+    from secrets import token_hex
+    digest = meta['source_sha256']
+    with db_conn() as conn:
+        _sbpay_schema(conn)
+        previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
+                                (digest,)).fetchone()
+    if previous:
+        return str(previous['id'])
+    batch_id = token_hex(16)
+    final_dir = _SBPAY_ROOT / batch_id
+    _sbpay_secure_dir(final_dir)
+    completed = meta['completed_groups']
+    groups = meta['groups']
+    if len(groups) != len(completed):
+        raise ValueError('Noch nicht alle Mitarbeiter-PDFs erstellt.')
+    try:
+        for file_info in completed:
+            origin = parent / 'completed' / file_info['filename']
+            destination = final_dir / file_info['filename']
+            _sbpay_shutil.copyfile(origin, destination)
+            os.chmod(destination, 0o600)
+            if _sbpay_hashlib.sha256(destination.read_bytes()).hexdigest() != file_info['page_sha256']:
+                raise ValueError('Die PDF-Prüfsumme wurde nach dem Speichern verändert.')
+        name_counts = Counter(_sbpay_norm(g['name']) for g in groups)
+        number_counts = Counter(g['personal_no'] for g in groups)
+        with db_conn() as conn:
+            _sbpay_schema(conn)
+            previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
+                                    (digest,)).fetchone()
+            if previous:
+                _sbpay_shutil.rmtree(final_dir, ignore_errors=True)
+                return str(previous['id'])
+            drivers = _sbpay_drivers(conn)
+            year, month = map(int, meta['period'])
+            conn.execute('INSERT INTO shiftbase_payroll_batches '
+                         '(id,year,month,page_count,source_sha256,created_at) VALUES(?,?,?,?,?,?)',
+                         (batch_id,year,month,int(meta['page_count']),digest,now_iso()))
+            for group, file_info in zip(groups, completed):
+                name, number = group['name'], group['personal_no']
+                driver = _sbpay_matching(name, number, drivers, name_counts, number_counts)
+                mapped = bool(driver)
+                rel = f'{batch_id}/{file_info["filename"]}'
+                conn.execute("""INSERT INTO shiftbase_payroll_pages
+                    (batch_id,page_no,employee_name,personal_no,source_pages,file_pages,
+                     driver_id,shiftbase_user_id,match_type,approved,relative_path,page_sha256)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (batch_id,int(file_info['page_no']),name,number,
+                     json.dumps(group['source_pages']),int(file_info['file_pages']),
+                     int(driver['id']) if mapped else None,
+                     str(driver['shiftbase_user_id']) if mapped else '',
+                     'exact' if mapped else 'blocked',0,rel,file_info['page_sha256']))
+            conn.commit()
+        return batch_id
+    except Exception:
+        # A DB error may mean the transaction was rolled back. Check before
+        # removing files: if committed, never remove the successfully imported PDFs.
+        committed = None
+        try:
+            with db_conn() as conn:
+                _sbpay_schema(conn)
+                committed = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
+                                         (digest,)).fetchone()
+        except Exception:
+            pass
+        if not committed or str(committed['id']) != batch_id:
+            _sbpay_shutil.rmtree(final_dir, ignore_errors=True)
+        raise
+
+
+def _sbpay_stage_complete(parent, meta, batch_id):
+    count, total = len(meta['groups']), int(meta['page_count'])
+    # Immediately wipe sensitive source, per-page intermediates and names.
+    _sbpay_stage_purge_files(parent)
+    safe = {'state':'completed','batch_id':batch_id,'page_count':total,
+            'next_page':total,'groups':[None]*count,'next_group':count,
+            'created_at':meta.get('created_at')}
+    _sbpay_stage_store(parent, safe)
+    return safe
+
+
+@app.route('/admin/shiftbase/lohnzettel', methods=['GET','POST'])
 @admin_login_required
 def admin_shiftbase_payroll():
-    # Import a DATEV batch, split exactly one recipient per PDF, no Shiftbase write.
+    # POST only stages PDF bytes. No heavy page parsing or network API call!
     if request.method == 'POST':
         _sbpay_token_check()
         upload = request.files.get('payroll_pdf')
         if not upload or not str(upload.filename or '').lower().endswith('.pdf'):
-            abort(400, 'Bitte eine PDF-Datei auswählen.')
+            abort(400,'Bitte eine PDF-Datei auswählen.')
         content = upload.stream.read(50 * 1024 * 1024 + 1)
         if len(content) > 50 * 1024 * 1024 or not content.startswith(b'%PDF-'):
-            abort(400, 'Nur eine PDF bis 50 MB ist zulässig.')
+            abort(400,'Nur eine PDF bis 50 MB ist zulässig.')
         if PdfReader is None or _SbpayWriter is None:
-            abort(503, 'Die PDF-Bibliothek pypdf fehlt auf Render. Bitte requirements.txt ergänzen.')
-        try:
-            source = PdfReader(io.BytesIO(content), strict=True)
-            if source.is_encrypted:
-                raise ValueError('Passwortgeschützte PDFs werden nicht automatisch verarbeitet.')
-            if not 1 <= len(source.pages) <= 300:
-                raise ValueError('Der Import muss 1 bis 300 Seiten enthalten.')
-            # Parse each source page only once.  Re-opening one throwaway PDF
-            # for every page used to make large uploads unnecessarily slow and
-            # increased the risk of Gunicorn's default request timeout. The final
-            # *per-recipient* file is still re-opened and its every page checked.
-            details = []
-            first_period = _sbpay_period(source.pages[0].extract_text() or '')
-            if not first_period or None in first_period:
-                raise ValueError('Abrechnungsmonat auf Seite 1 nicht eindeutig erkannt.')
-            for index, page in enumerate(source.pages):
-                extracted = page.extract_text() or ''
-                name, number = _sbpay_identity_from_page(page)
-                period = _sbpay_period(extracted)
-                if period != first_period:
-                    raise ValueError(f'Seite {index + 1}: ein anderer oder unbekannter Abrechnungsmonat.')
-                if not name or not number:
-                    raise ValueError(f'Seite {index + 1}: Empfänger und DATEV-Personalnummer konnten nicht sicher gelesen werden. Bitte die originale Text-PDF statt eines Scans verwenden; nichts wurde importiert.')
-                details.append((name, number))
-            # A payroll recipient can occupy several consecutive DATEV pages.
-            # Group every page belonging to that verified personal number into
-            # a SINGLE file; do not drop follow-up pages with back-pay details.
-            from collections import OrderedDict as _sbpay_ordered
-            people = _sbpay_ordered()
-            for idx, (name, number) in enumerate(details, start=1):
-                found = people.get(number)
-                if found:
-                    if _sbpay_norm(found['name']) != _sbpay_norm(name):
-                        raise ValueError('Eine Personalnummer erscheint mit unterschiedlichen Namen. Import gestoppt.')
-                    found['source_pages'].append(idx)
-                else:
-                    people[number]={'name':name, 'source_pages':[idx]}
-            grouped=[]
-            for number, data in people.items():
-                writer=_SbpayWriter()
-                for original_idx in data['source_pages']:
-                    writer.add_page(source.pages[original_idx - 1])
-                group_stream=io.BytesIO()
-                writer.write(group_stream)
-                merged=group_stream.getvalue()
-                proof=PdfReader(io.BytesIO(merged),strict=True)
-                if len(proof.pages)!=len(data['source_pages']):
-                    raise ValueError('Mehrseitiger Lohnzettel wurde unvollständig zusammengeführt.')
-                for pg in proof.pages:
-                    check_name,check_number=_sbpay_identity_from_page(pg)
-                    if check_number != number or _sbpay_norm(check_name) != _sbpay_norm(data['name']):
-                        raise ValueError('Mehrseitiger Lohnzettel enthält fremde Mitarbeiterdaten.')
-                if len(merged) > 5 * 1024 * 1024:
-                    raise ValueError('Eine vollständige Mitarbeiter-PDF ist größer als 5 MB.')
-                grouped.append((data['name'], number, merged, data['source_pages']))
-            details=grouped
-        except Exception as exc:
-            # No PDF contents, personal details, or tokens are shown in errors.
-            msg = str(exc) if isinstance(exc, ValueError) else 'Die PDF konnte nicht zuverlässig gelesen werden.'
-            flash(msg if len(msg) < 180 else 'Die PDF enthält nicht unterstützte Seiten.', 'err')
-            return redirect(url_for('admin_shiftbase_payroll'))
+            abort(503,'PDF-Bibliothek pypdf fehlt auf Render.')
         digest = _sbpay_hashlib.sha256(content).hexdigest()
         try:
             with db_conn() as conn:
                 _sbpay_schema(conn)
-                previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
-                                        (digest,)).fetchone()
-        except Exception:
-            app.logger.exception('Payroll PDF import: database lookup failed')
-            flash('Datenbankpruefung fehlgeschlagen. Keine Datei wurde gesendet. '
-                  'Bitte Render-Logs (Payroll PDF import) pruefen.', 'err')
-            return redirect(url_for('admin_shiftbase_payroll'))
-        if previous:
-            flash('Diese PDF wurde bereits eingelesen. Die vorhandenen Einzelabrechnungen werden geoeffnet; '
-                  'es wird nichts erneut hochgeladen.', 'ok')
-            return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=previous['id']))
-        from collections import Counter as _sbpay_counter
-        from secrets import token_hex as _sbpay_token_hex
-        names = _sbpay_counter(_sbpay_norm(d[0]) for d in details)
-        numbers = _sbpay_counter(d[1] for d in details)
-        batch_id = _sbpay_token_hex(16)
-        parent = _SBPAY_ROOT / batch_id
-        try:
+                old = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
+                                   (digest,)).fetchone()
+            if old:
+                flash('Diese PDF wurde bereits aufgeteilt. Die vorhandene Empfängerliste wird geöffnet.', 'ok')
+                return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=old['id']))
+            _sbpay_stage_expire()
+            from secrets import token_hex
+            job_id = token_hex(16)
+            parent = _sbpay_stage_path(job_id)
             _sbpay_secure_dir(parent)
-            with db_conn() as conn:
-                _sbpay_schema(conn)
-                drivers = _sbpay_drivers(conn)
-                year, month = first_period
-                conn.execute('INSERT INTO shiftbase_payroll_batches '
-                             '(id, year, month, page_count, source_sha256, created_at) VALUES(?,?,?,?,?,?)',
-                             (batch_id, year, month, len(source.pages), digest, now_iso()))
-                for name, number, data, source_pages in details:
-                    page_no = source_pages[0]
-                    path = parent / f'blatt_{page_no:03d}.pdf'
-                    with open(path, 'xb') as f:
-                        os.chmod(path, 0o600)
-                        f.write(data)
-                    driver = _sbpay_matching(name, number, drivers, names, numbers)
-                    matched = bool(driver)
-                    relative_path = f'{batch_id}/blatt_{page_no:03d}.pdf'
-                    conn.execute('''INSERT INTO shiftbase_payroll_pages
-                        (batch_id,page_no,employee_name,personal_no,source_pages,file_pages,
-                         driver_id,shiftbase_user_id,match_type,approved,relative_path,page_sha256)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-                        (batch_id, page_no, name, number, json.dumps(source_pages), len(source_pages),
-                         int(driver['id']) if matched else None,
-                         str(driver['shiftbase_user_id']) if matched else '',
-                         'exact' if matched else 'blocked', 0, relative_path,
-                         _sbpay_hashlib.sha256(data).hexdigest()))
-                conn.commit()
+            source = parent / 'source.pdf'
+            with open(source, 'xb') as stream:
+                os.chmod(source,0o600)
+                stream.write(content)
+            data = {'state':'reading','source_sha256':digest,'created_at':now_iso(),
+                    'page_count':0,'next_page':0,'period':None,'pages':[],
+                    'groups':[],'next_group':0,'completed_groups':[]}
+            _sbpay_stage_store(parent,data)
+            return redirect(url_for('admin_shiftbase_payroll_import_view',job_id=job_id))
         except Exception:
-            _sbpay_shutil.rmtree(parent, ignore_errors=True)
-            # No employee names, PDF bytes, authentication secrets or personal
-            # numbers are logged; administrators get a generic actionable error.
-            app.logger.exception('Payroll PDF import: secure storage/database step failed')
-            flash('Der PDF-Import konnte nicht sicher gespeichert werden. Keine Datei wurde an '
-                  'Shiftbase gesendet. Bitte Render-Logs (Payroll PDF import) pruefen.', 'err')
+            app.logger.exception('Payroll PDF import: staging failed')
+            flash('Die PDF konnte nicht sicher zwischengespeichert werden. Bitte Render-Logs prüfen.', 'err')
             return redirect(url_for('admin_shiftbase_payroll'))
-        # Read-only Shiftbase recipient verification is started by the following
-        # review page in a SEPARATE request, after the local PDF data are saved.
-        # A slow Shiftbase API must never turn a successful import into HTTP 500.
-        flash(f'{len(details)} Einzelabrechnungen aus {len(source.pages)} Seiten sicher erstellt. '
-              'Der Shiftbase-Empfaengerabgleich startet in der Uebersicht automatisch. '
-              'Noch nichts gesendet.', 'ok')
-        return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
 
     with db_conn() as conn:
         _sbpay_schema(conn)
@@ -9068,18 +9266,20 @@ def admin_shiftbase_payroll():
                                'ORDER BY created_at DESC LIMIT 15').fetchall()
     token = str(_sbpay_escape(_sb_csrf_token()))
     h = ['<div class="card" style="max-width:1150px"><h2>Lohnzettel in Shiftbase hochladen</h2>',
-         '<p>Gesamt-PDF aus DATEV hochladen. Die Cloud trennt alle Mitarbeiterabrechnungen, '
-         'findet die passenden Shiftbase-IDs und zeigt dir danach eine einzige Liste zum Auswaehlen und Senden.</p>',
-         '<p class="muted" style="font-size:13px">Nur eindeutig abgeglichene Mitarbeiter sind auswaehlbar. '
-         'Keine Datei wird vor deinem Klick auf "Ausgewaehlte senden" uebertragen.</p>',
+         '<p>DATEV-Gesamt-PDF auswählen. Die Cloud trennt die Mitarbeiterabrechnungen mit '
+         '<b>Fortschrittsanzeige</b> in mehrere kurze Schritte. Anschließend kannst du '
+         'alle eindeutig zugeordneten Fahrer oder einzelne Fahrer zum Versand auswählen.</p>',
+         '<p class="muted" style="font-size:13px">Der PDF-Import sendet noch nichts an Shiftbase. '
+         'Unklare Empfänger bleiben auch später gesperrt.</p>',
          '<form method="post" enctype="multipart/form-data" class="actions" style="align-items:end">',
          '<input type="hidden" name="csrf_token" value="'+token+'">',
          '<label style="max-width:550px">DATEV-Lohnabrechnung (PDF)'
          '<input type="file" name="payroll_pdf" accept="application/pdf,.pdf" required></label>',
-         '<button class="primary" style="width:auto">PDF hochladen und Empfaenger erkennen</button></form>',
-         '<p class="muted" style="font-size:13px">Der ursprüngliche Gesamtbeleg wird nicht gespeichert. '
-         'Die Einzeldateien liegen getrennt vom öffentlichen Webverzeichnis in einem geschützten '
-         'Datenordner. Für Render sollte ein persistentes, nur administrativ zugängliches Volume verwendet werden.</p></div>',
+         '<button class="primary" style="width:auto">PDF hochladen und aufteilen</button></form>',
+         '<p class="muted" style="font-size:13px">Die Gesamt-PDF wird nur vorübergehend '
+         'in einem geschützten Datenordner gespeichert und nach der Aufteilung gelöscht. '
+         'Abgebrochene Importe werden nach 24 Stunden bereinigt. Das Render-Volume '
+         'muss dauerhaft, privat und für den Webprozess beschreibbar sein.</p></div>',
          '<div class="card" style="max-width:1150px"><h2>Bereits eingelesene Abrechnungen</h2>']
     if batches:
         h.append('<div class="table-wrap"><table style="min-width:650px"><thead><tr>'
@@ -9087,12 +9287,114 @@ def admin_shiftbase_payroll():
         for row in batches:
             link = url_for('admin_shiftbase_payroll_batch',batch_id=row['id'])
             h.append('<tr><td>'+str(row['month']).zfill(2)+'/'+str(row['year'])+'</td><td>'+str(row['page_count'])+'</td>'
-                     '<td>'+str(_sbpay_escape(row['created_at']))+'</td><td><a href="'+link+'">Empfaenger anzeigen</a></td></tr>')
+                     '<td>'+str(_sbpay_escape(row['created_at']))+'</td><td><a href="'+link+'">Empfänger anzeigen</a></td></tr>')
         h.append('</tbody></table></div>')
     else:
         h.append('<p class="muted">Noch keine PDF importiert.</p>')
     h.append('</div>')
-    return _sbpay_no_cache(make_response(base_page('Lohnzettel für Shiftbase', ''.join(h), 'shiftbase_payroll')))
+    return _sbpay_no_cache(make_response(base_page('Lohnzettel für Shiftbase',''.join(h),'shiftbase_payroll')))
+
+
+@app.get('/admin/shiftbase/lohnzettel/import/<job_id>')
+@admin_login_required
+def admin_shiftbase_payroll_import_view(job_id):
+    parent = _sbpay_stage_path(job_id)
+    state = _sbpay_stage_read(parent)
+    if state['state']=='completed':
+        return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=state['batch_id']))
+    progress = _sbpay_stage_progress(state)
+    token = str(_sbpay_escape(_sb_csrf_token()))
+    endpoint = url_for('admin_shiftbase_payroll_import_step',job_id=job_id)
+    initial = json.dumps(progress,ensure_ascii=False)
+    h = ['<div class="card" style="max-width:920px"><h2>PDF wird sicher aufgeteilt</h2>',
+         '<p>Die Mitarbeiter werden seitenweise erkannt und die Einzel-PDFs kontrolliert. '
+         'Bitte lasse diesen Tab geöffnet. Wenn die Verbindung abbricht, kannst du '
+         'diese Seite neu laden und den Import fortsetzen.</p>',
+         '<p style="font-size:1.1rem;font-weight:800" id="sbpay-progress-text"></p>',
+         '<progress id="sbpay-progress-meter" max="100" value="0" '
+         'style="width:100%;height:24px"></progress>',
+         '<p class="muted" id="sbpay-progress-note">Noch nichts an Shiftbase übertragen.</p>',
+         '<button type="button" id="sbpay-resume" style="max-width:220px;display:none" '
+         'class="primary">Import fortsetzen</button>',
+         '<p><a href="'+url_for('admin_shiftbase_payroll')+'">Zurück zur Lohnzettelübersicht</a></p></div>',
+         '<script>(function(){"use strict";const API='+json.dumps(endpoint)+', TOKEN='+json.dumps(token)+
+         ', INITIAL='+initial+';const label=document.getElementById("sbpay-progress-text"),'+
+         'meter=document.getElementById("sbpay-progress-meter"),note=document.getElementById("sbpay-progress-note"),'+
+         'resume=document.getElementById("sbpay-resume");let active=false;'+
+         'function show(s){meter.value=s.percent||0;label.textContent=s.info||"Import läuft";}'+
+         'async function step(){if(active)return;active=true;resume.style.display="none";'+
+         'try{let form=new URLSearchParams();form.set("csrf_token",TOKEN);'+
+         'const response=await fetch(API,{method:"POST",body:form,credentials:"same-origin",cache:"no-store"});'+
+         'const result=await response.json();if(!response.ok||result.state==="failed"){'+
+         'throw new Error(result.message||"Der Import ist fehlgeschlagen.");}show(result);'+
+         'if(result.state==="completed"&&result.url){location.assign(result.url);return;}'+
+         'if(["reading","finalizing","committing"].includes(result.state)){active=false;setTimeout(step,30);return;}'+
+         'throw new Error("Unerwarteter Importstatus.");'+
+         '}catch(err){note.textContent="Import angehalten: "+err.message+'+
+         '" Die PDF wurde nicht an Shiftbase gesendet. Du kannst es erneut versuchen.";'+
+         'resume.style.display="block";}finally{active=false;}}'+
+         'resume.addEventListener("click",step);show(INITIAL);'+
+         'if(INITIAL.state!=="failed")step();else{note.textContent="Dieser Import wurde sicher gestoppt.";}'+
+         '})();</script>']
+    return _sbpay_no_cache(make_response(base_page('Lohnzettel-Import', ''.join(h),'shiftbase_payroll')))
+
+
+@app.post('/admin/shiftbase/lohnzettel/import/<job_id>/step')
+@admin_login_required
+def admin_shiftbase_payroll_import_step(job_id):
+    _sbpay_token_check()
+    parent = _sbpay_stage_path(job_id)
+    lockpath = parent / 'step.lock'
+    if not parent.is_dir():
+        abort(404)
+    # Two Gunicorn workers must not process the same job concurrently.
+    with open(lockpath, 'a+b') as lock:
+        os.chmod(lockpath,0o600)
+        try:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            pass  # Windows offline tests; production Render uses Linux.
+        meta = _sbpay_stage_read(parent)
+        if meta['state']=='completed':
+            data = _sbpay_stage_progress(meta)
+            data['url']=url_for('admin_shiftbase_payroll_batch',batch_id=meta['batch_id'])
+            return _sbpay_no_cache(jsonify(data))
+        if meta['state']=='failed':
+            data = _sbpay_stage_progress(meta)
+            data['message']=meta.get('message','Import fehlgeschlagen. Keine Datei gesendet.')
+            return _sbpay_no_cache(jsonify(data)),422
+        try:
+            if meta['state']=='reading':
+                _sbpay_stage_parse(parent,meta)
+            elif meta['state']=='finalizing':
+                _sbpay_stage_finalize(parent,meta)
+            elif meta['state']=='committing':
+                batch_id = _sbpay_stage_commit(parent,meta)
+                meta = _sbpay_stage_complete(parent,meta,batch_id)
+            _sbpay_stage_store(parent,meta)
+        except ValueError as error:
+            # No DB change and absolutely no Shiftbase write on bad source PDFs.
+            message=str(error)
+            meta={'state':'failed','page_count':int(meta.get('page_count') or 0),
+                  'next_page':int(meta.get('next_page') or 0),
+                  'message':message[:200], 'groups':[]}
+            _sbpay_stage_purge_files(parent)
+            _sbpay_stage_store(parent,meta)
+            data=_sbpay_stage_progress(meta)
+            data['message']=message[:200]
+            return _sbpay_no_cache(jsonify(data)),422
+        except Exception:
+            # Transient storage/database failure: preserve the last committed
+            # manifest so browser reload can safely retry without any PDF upload.
+            app.logger.exception('Payroll PDF staged import: worker step failed')
+            return _sbpay_no_cache(jsonify({'state':'interrupted',
+                'message':'Serverfehler im Verarbeitungsschritt. Bitte Render-Logs prüfen; '
+                          'Import kann über Fortsetzen erneut aufgenommen werden.'})),503
+        data = _sbpay_stage_progress(meta)
+        if meta['state']=='completed':
+            data['url']=url_for('admin_shiftbase_payroll_batch',batch_id=meta['batch_id'])
+        return _sbpay_no_cache(jsonify(data))
 
 
 def _sbpay_batch_data(conn, batch_id):
