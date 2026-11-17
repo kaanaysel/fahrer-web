@@ -806,6 +806,10 @@ class _PgResult:
     def lastrowid(self) -> Optional[int]:
         return self._lastrowid
 
+    @property
+    def rowcount(self) -> int:
+        return int(self.cursor.rowcount)
+
 
 class _PostgresCompatConnection:
     """Small compatibility layer so the existing SQLite-style app code can use PostgreSQL.
@@ -3992,6 +3996,125 @@ def _sb_mapping(conn):
     return {int(r['driver_id']):str(r['shiftbase_user_id']) for r in conn.execute('SELECT driver_id,shiftbase_user_id FROM shiftbase_driver_map').fetchall()}
 
 
+def _sb_verified_directory(users):
+    """Real Shiftbase identities, never inferred from list order or a numeric range.
+
+    Return unique (ID, normalized name) evidence; duplicates invalidate it.
+    The same helper protects the monthly mapping editor and payroll delivery.
+    """
+    from collections import Counter
+    pairs = []
+    for item in users:
+        person = _sb_get(item, 'User')
+        if not isinstance(person, dict):
+            person = item
+        uid = _sb_id(person, 'id', 'user_id')
+        name = _sbpay_norm(_sb_user_display(person))
+        if uid and name:
+            pairs.append((str(uid), name))
+    return (set(pairs), Counter(uid for uid, _ in pairs),
+            Counter(name for _, name in pairs))
+
+
+def _sb_verify_mapping_updates(conn, updates, resulting_map):
+    """Validate *changed* mappings against live Shiftbase before saving anything.
+
+    Existing historical mappings are never silently rewritten; the separate
+    read-only audit identifies those requiring correction. No fuzzy matching.
+    """
+    from collections import Counter
+    if len(set(resulting_map.values())) != len(resulting_map):
+        raise ValueError('Shiftbase-ID mehrfach vergeben. Nichts gespeichert.')
+    proposed = {int(did): str(uid) for did, uid in updates.items() if uid}
+    if not proposed:
+        return
+    cfg = _shiftbase_config()
+    if cfg['mock_dir']:
+        raise ValueError('Im Shiftbase-Testmodus dürfen keine Mitarbeiter-IDs freigegeben werden.')
+    people = [dict(r) for r in conn.execute("""
+        SELECT id,name FROM drivers
+        WHERE is_active=1 AND COALESCE(is_disposition,0)=0""").fetchall()]
+    local = {int(p['id']): _sbpay_norm(p['name']) for p in people}
+    local_name_counts = Counter(local.values())
+    pairs, uid_counts, name_counts = _sb_verified_directory(_shiftbase_get_all('users'))
+    for did, uid in proposed.items():
+        if (not re.fullmatch(r'[0-9]{1,20}', uid) or did not in local or
+                not local[did] or local_name_counts[local[did]] != 1 or
+                uid_counts[uid] != 1 or name_counts[local[did]] != 1 or
+                (uid, local[did]) not in pairs):
+            raise ValueError('Shiftbase-ID/Name nicht eindeutig live bestätigt für Cloud-Fahrer-ID '
+                             +str(did)+'. Nichts gespeichert.')
+
+
+@app.get('/admin/shiftbase/mapping-audit')
+@admin_login_required
+def admin_shiftbase_mapping_audit():
+    """Read-only provenance and conflict report for the shared mapping table."""
+    from collections import Counter
+    with db_conn() as conn:
+        _sb_ensure_mapping_table(conn)
+        people = [dict(r) for r in conn.execute("""
+            SELECT d.id,d.name,d.is_active,m.shiftbase_user_id,m.updated_at
+            FROM drivers d LEFT JOIN shiftbase_driver_map m ON m.driver_id=d.id
+            WHERE COALESCE(d.is_disposition,0)=0
+            ORDER BY d.name COLLATE NOCASE""").fetchall()]
+    try:
+        cfg = _shiftbase_config()
+        if cfg['mock_dir']:
+            raise ShiftbaseIntegrationError('Shiftbase-Testmodus ist für echte Empfänger nicht zulässig.')
+        pairs, uid_counts, remote_name_counts = _sb_verified_directory(_shiftbase_get_all('users'))
+        online = True
+        failure = ''
+    except (ShiftbaseIntegrationError, ValueError):
+        pairs, uid_counts, remote_name_counts = set(), {}, {}
+        online = False
+        failure = 'Shiftbase-Benutzerliste nicht erreichbar; keine ID kann live bestätigt werden.'
+    local_counts = Counter(_sbpay_norm(p['name']) for p in people if p['is_active'])
+    all_ids = Counter(str(p['shiftbase_user_id']) for p in people if p['shiftbase_user_id'])
+    esc = lambda s: str(shiftbase_escape(str(s or '')))
+    html = ['<div class="card"><h2>Shiftbase-Zuordnungen prüfen (nur lesend)</h2>',
+            '<p>Quelle: bestehende Tabelle <code>shiftbase_driver_map</code>. Dieselben '
+            'Zuordnungen werden für Monatsabgleich und Lohnzettel verwendet. '
+            'Die hier aufgeführten Nummern sind keine aus Tabellenpositionen erzeugten IDs.</p>',
+            '<p><a class="btn small" href="'+url_for('admin_shiftbase_abgleich',erweitert=1,laden=1)+'">'
+            'Zur offiziellen Shiftbase-Zuordnung</a></p>']
+    if not online:
+        html.append('<p class="flash err">'+esc(failure)+'</p>')
+    html.append('<div class="table-wrap"><table style="min-width:800px"><thead><tr>'
+                '<th>Cloud-Mitarbeiter</th><th>Gespeicherte Shiftbase-ID</th>'
+                '<th>Letzte Zuordnungsänderung</th><th>Live-Kontrolle</th></tr></thead><tbody>')
+    confirmed = 0
+    blocked = 0
+    for person in people:
+        uid = str(person['shiftbase_user_id'] or '')
+        normalized = _sbpay_norm(person['name'])
+        valid = (online and bool(person['is_active']) and bool(uid) and
+                 all_ids[uid] == 1 and local_counts[normalized] == 1 and
+                 uid_counts[uid] == 1 and remote_name_counts[normalized] == 1 and
+                 (uid, normalized) in pairs)
+        if valid:
+            status = 'ID und Name live eindeutig bestätigt'
+            confirmed += 1
+        elif not uid:
+            status = 'Keine Zuordnung – gesperrt'
+            blocked += 1
+        elif not person['is_active']:
+            status = 'Cloud-Mitarbeiter inaktiv – gesperrt'
+            blocked += 1
+        elif all_ids[uid] > 1 or local_counts[normalized] > 1:
+            status = 'Doppelte Zuordnung / gleicher Cloud-Name – gesperrt'
+            blocked += 1
+        else:
+            status = 'ID oder Name nicht eindeutig bestätigt – gesperrt'
+            blocked += 1
+        html.append('<tr><td>'+esc(person['name'])+'</td><td>'+esc(uid or '–')+'</td><td>'
+                    +esc(person['updated_at'] or '–')+'</td><td>' + esc(status)+'</td></tr>')
+    html.append('</tbody></table></div><p><b>'+str(confirmed)+' bestätigt, '+str(blocked)
+                +' nicht bestätigt.</b> Fehlende oder widersprüchliche IDs nur über '
+                'die Shiftbase-Zuordnung mit Live-Abgleich korrigieren. Hier wird nichts verändert.</p></div>')
+    return _sbpay_no_cache(make_response(base_page('Shiftbase-ID-Prüfung',''.join(html),'shiftbase')))
+
+
 def _sb_local_month(conn,year,month):
     return [dict(r) for r in conn.execute("""
        SELECT d.id AS driver_id, d.external_driver_id,d.name,d.employment_type,
@@ -4084,14 +4207,24 @@ def _sb_report(conn,year,month,users,times,absences):
         if astart and aend and astart<=end and aend>=start:
             absence_by_user[uid].append({'von':max(astart,start),'bis':min(aend,end),'art':_sb_absence_name(ab),'status':str(_sb_value(ab,'status') or 'unbekannt')})
     result=[]
+    from collections import Counter as _SBNamesCount
+    real_name_count = _SBNamesCount(_sbpay_norm(_sb_user_display(u)) for u in known_users.values())
+    local_name_count = _SBNamesCount(_sbpay_norm(r['name']) for r in local)
     for r in local:
         uid=mappings.get(r['driver_id'])
-        selected=entries.get(uid,[]) if uid else []
+        local_name = _sbpay_norm(r['name'])
+        mapping_confirmed = bool(uid and uid in known_users and
+                                 local_name and local_name_count[local_name] == 1 and
+                                 real_name_count[local_name] == 1 and
+                                 _sbpay_norm(_sb_user_display(known_users[uid])) == local_name)
+        # A wrong/stale ID may exist historically. Never attribute its hours to
+        # another Cloud employee, even in the read-only monthly comparison.
+        selected=entries.get(uid,[]) if mapping_confirmed else []
         complete=bool(uid and selected and all(x['hours'] is not None for x in selected))
         tot=sum((x['hours'] for x in selected),Decimal(0)) if complete else None
         csv_source=False
         saved=csv_snapshots.get(r['driver_id'])
-        if tot is None and uid and saved and saved['shiftbase_user_id']==uid:
+        if tot is None and mapping_confirmed and saved and saved['shiftbase_user_id']==uid:
             # This is a dated, Shiftbase-exported snapshot, not live API data.
             # Do not confuse the two data sources or overwrite real timesheet rows.
             try:
@@ -4103,6 +4236,7 @@ def _sb_report(conn,year,month,users,times,absences):
         notes=[]
         if not uid: notes.append('Noch keine eindeutige Shiftbase-Zuordnung')
         elif uid not in known_users: notes.append('Zugeordneter Shiftbase-Benutzer fehlt in der API-Antwort')
+        elif not mapping_confirmed: notes.append('Shiftbase-ID und Mitarbeitername nicht eindeutig bestätigt; Arbeitszeiten gesperrt')
         if not selected and uid: notes.append('Keine Zeiteinträge im ausgewählten Monat')
         if selected and not complete and not csv_source: notes.append('Die API liefert keine berechenbare Arbeitszeit; Shiftbase-CSV importieren')
         if csv_source: notes.append('Arbeitszeit aus Shiftbase-CSV vom '+str(saved['captured_at'])[:10]+'; keine Live-API-Summe')
@@ -4545,23 +4679,29 @@ def admin_shiftbase_mapping():
     uid=str(request.form.get('shiftbase_user_id','')).strip()
     if uid and not re.fullmatch('[0-9]{1,18}',uid):
         abort(400,'Ungültige Shiftbase-ID')
-    with db_conn() as conn:
-        _sb_ensure_mapping_table(conn)
-        if not conn.execute('SELECT id FROM drivers WHERE id=? AND is_active=1',(did,)).fetchone():
-            abort(400,'Fahrer nicht vorhanden')
-        conn.execute('DELETE FROM shiftbase_driver_map WHERE driver_id=?',(did,))
-        if uid:
-            try:
-                conn.execute('INSERT INTO shiftbase_driver_map(driver_id,shiftbase_user_id,updated_at) VALUES(?,?,?)',(did,uid,now_iso()))
+    try:
+        with db_conn() as conn:
+            _sb_ensure_mapping_table(conn)
+            if not conn.execute('SELECT id FROM drivers WHERE id=? AND is_active=1',(did,)).fetchone():
+                abort(400,'Fahrer nicht vorhanden')
+            existing = _sb_mapping(conn)
+            proposed = dict(existing)
+            if uid:
+                proposed[did] = uid
+            else:
+                proposed.pop(did, None)
+            # A same-value save is a no-op, never a fabricated re-verification.
+            if existing.get(did, '') != uid:
+                _sb_verify_mapping_updates(conn, {did: uid}, proposed)
+                conn.execute('DELETE FROM shiftbase_driver_map WHERE driver_id=?',(did,))
+                if uid:
+                    conn.execute('INSERT INTO shiftbase_driver_map(driver_id,shiftbase_user_id,updated_at) VALUES(?,?,?)',
+                                 (did, uid, now_iso()))
                 conn.commit()
-            except Exception:
-                # In case a mapping already exists, do not silently assign one employee twice.
-                conn.raw_conn.rollback() if hasattr(conn,'raw_conn') else conn.rollback()
-                flash('Diese Shiftbase-ID ist bereits einem anderen Fahrer zugeordnet.','err')
-                return redirect(url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1))
-        else:
-            conn.commit()
-    flash('Zuordnung gespeichert.','ok')
+    except (ShiftbaseIntegrationError, ValueError) as exc:
+        flash('Zuordnung NICHT gespeichert: '+str(exc), 'err')
+        return redirect(url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1,erweitert=1))
+    flash('Zuordnung gespeichert; für den Lohnzettelversand zusätzlich live prüfen.','ok')
     return redirect(url_for('admin_shiftbase_abgleich',year=year,month=month,laden=1))
 
 
@@ -4605,6 +4745,7 @@ def admin_shiftbase_mapping_bulk():
             if len(set(result.values())) != len(result):
                 raise ValueError('Eine Shiftbase-ID ist mehrfach ausgewählt. Nichts wurde gespeichert.')
             if changed:
+                _sb_verify_mapping_updates(conn, changed, result)
                 # Delete all changed rows first to support legitimate swaps.
                 for did in changed:
                     conn.execute('DELETE FROM shiftbase_driver_map WHERE driver_id=?', (did,))
@@ -4616,7 +4757,7 @@ def admin_shiftbase_mapping_bulk():
                 conn.commit()
         flash(str(len(changed))+' Zuordnung(en) gemeinsam gespeichert.' if changed
               else 'Keine Zuordnungen verändert.', 'ok')
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, ShiftbaseIntegrationError) as exc:
         flash('Keine Zuordnung gespeichert: '+str(exc), 'err')
     return redirect(url_for('admin_shiftbase_abgleich', year=year if 'year' in locals() and 2020<=year<=2100 else 2026,
                             month=month if 'month' in locals() and 1<=month<=12 else 11,
@@ -8905,6 +9046,22 @@ def _sbpay_drivers(conn):
     ''').fetchall()]
 
 
+def _sbpay_local_identity_ok(row, driver, all_drivers):
+    """No manual PDF can bypass Cloud-name/UID uniqueness."""
+    from collections import Counter
+    if not driver or not row['driver_id']:
+        return False
+    cloud_names = Counter(_sbpay_norm(d['name']) for d in all_drivers)
+    cloud_ids = Counter(str(d['shiftbase_user_id']) for d in all_drivers)
+    name = _sbpay_norm(row['employee_name'])
+    uid = str(row['shiftbase_user_id'] or '')
+    return bool(name and uid and
+                _sbpay_norm(driver['name']) == name and
+                str(driver['shiftbase_user_id']) == uid and
+                cloud_names[name] == 1 and cloud_ids[uid] == 1 and
+                re.fullmatch(r'[0-9]{1,20}',uid))
+
+
 def _sbpay_matching(name, number, drivers, other_names, other_numbers):
     # Name alone never suffices without a valid DATEV personal number and
     # uniqueness of this recipient across all pages in the batch.
@@ -9266,6 +9423,8 @@ def admin_shiftbase_payroll():
                                'ORDER BY created_at DESC LIMIT 15').fetchall()
     token = str(_sbpay_escape(_sb_csrf_token()))
     h = ['<div class="card" style="max-width:1150px"><h2>Lohnzettel in Shiftbase hochladen</h2>',
+         '<p><a class="btn small" href="'+url_for('admin_shiftbase_mapping_audit')+'">Shiftbase-IDs live prüfen</a> '
+         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_browser_check')+'" target="_blank" rel="noopener noreferrer">Chromium-Diagnose (kein Upload)</a></p>',
          '<p>DATEV-Gesamt-PDF auswählen. Die Cloud trennt die Mitarbeiterabrechnungen mit '
          '<b>Fortschrittsanzeige</b> in mehrere kurze Schritte. Anschließend kannst du '
          'alle eindeutig zugeordneten Fahrer oder einzelne Fahrer zum Versand auswählen.</p>',
@@ -9445,12 +9604,12 @@ def _sbpay_prepare_batch_checked(batch_id):
             did = int(row['driver_id']) if row['driver_id'] else 0
             driver = mapped.get(did)
             uid = str(row['shiftbase_user_id'] or '')
-            exact = (row['match_type'] == 'exact' and driver is not None and
-                     _sbpay_norm(driver['name']) == employee_name)
+            exact = (row['match_type'] == 'exact' and
+                     _sbpay_local_identity_ok(row, driver, drivers))
             # Manual review is respected but never accepted on a name mismatch
             # in the current Shiftbase user directory.
             reviewed = bool(row['approved']) or exact
-            ok = (reviewed and driver is not None and
+            ok = (reviewed and _sbpay_local_identity_ok(row, driver, drivers) and
                   uid == str(driver['shiftbase_user_id']) and
                   re.fullmatch(r'[0-9]{1,20}', uid) is not None and
                   pdf_names[employee_name] == 1 and
@@ -9525,9 +9684,7 @@ def admin_shiftbase_payroll_batch(batch_id):
         number = int(row['page_no'])
         did = int(row['driver_id']) if row['driver_id'] else 0
         driver = mapping.get(did)
-        correct = bool(driver and str(driver['shiftbase_user_id']) == str(row['shiftbase_user_id'])
-                       and (row['match_type'] != 'exact' or
-                            _sbpay_norm(driver['name']) == _sbpay_norm(row['employee_name'])))
+        correct = _sbpay_local_identity_ok(row, driver, drivers)
         proof = checked.get(number, {})
         unique = (mapped_ids[did] == 1 and
                   pay_names[_sbpay_norm(row['employee_name'])] == 1 and
@@ -9567,6 +9724,8 @@ def admin_shiftbase_payroll_batch(batch_id):
     period = f'{int(batch["month"]):02d}/{int(batch["year"])}'
     h = ['<div class="card" style="max-width:1320px">',
          '<h2>Lohnzettel '+period+' – Mitarbeiter auswaehlen und senden</h2>',
+         '<p><a class="btn small" href="'+url_for('admin_shiftbase_mapping_audit')+'">Gespeicherte Shiftbase-IDs kontrollieren</a> '
+         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_browser_check')+'" target="_blank" rel="noopener noreferrer">Browser-Vorprüfung ohne Upload</a></p>',
          '<p>Die Gesamt-PDF wurde automatisch in getrennte Mitarbeiterabrechnungen aufgeteilt. '
          'Waehle alle oder einzelne gruen markierte Mitarbeiter aus und klicke auf <b>Ausgewaehlte PDFs senden</b>. '
          'Unklare Zuordnungen sind aus Sicherheitsgruenden nicht auswaehlbar.</p>',
@@ -9617,7 +9776,10 @@ def admin_shiftbase_payroll_batch(batch_id):
         display_name = str(_sbpay_escape(row['employee_name']))
         source_pages = ', '.join(str(int(p)) for p in json.loads(row['source_pages']))
         target = (str(_sbpay_escape(driver['name']))+'<small style="display:block;color:#667085">ID '
-                  +str(_sbpay_escape(row['shiftbase_user_id']))+'</small>') if driver else 'Nicht eindeutig'
+                  +str(_sbpay_escape(row['shiftbase_user_id']))+' · Cloud-Monatsabgleich</small>') if driver else (
+                  'Nicht eindeutig – gesperrt<small style="display:block;color:#b42318">'
+                  'Gespeicherte ID: '+str(_sbpay_escape(row['shiftbase_user_id'] or 'keine'))+
+                  ' (nicht bestaetigt)</small>')
         url = url_for('admin_shiftbase_payroll_pdf',batch_id=batch_id,page_no=page_no)
         checkbox = ('<input type="checkbox" class="sbpay-choice" value="'+str(page_no)+'" '
                     'aria-label="'+display_name+' zum Senden auswaehlen" '
@@ -9735,8 +9897,7 @@ def admin_shiftbase_payroll_approve_exact(batch_id):
             if row['match_type']!='exact' or row['driver_id'] not in mapped:
                 continue
             drv=mapped[row['driver_id']]
-            if (str(drv['shiftbase_user_id']) != row['shiftbase_user_id'] or
-                    _sbpay_norm(drv['name']) != _sbpay_norm(row['employee_name']) or
+            if (not _sbpay_local_identity_ok(row, drv, drivers) or
                     names[_sbpay_norm(row['employee_name'])] != 1 or nums[row['personal_no']] != 1):
                 continue
             conn.execute('UPDATE shiftbase_payroll_pages SET approved=1,approved_at=? WHERE batch_id=? AND page_no=?',
@@ -9770,6 +9931,12 @@ def admin_shiftbase_payroll_assign(batch_id, page_no):
         target=drivers.get(driver_id)
         if not target or not re.fullmatch(r'[0-9]{1,20}',str(target['shiftbase_user_id'])):
             abort(400, 'Nur aktiv zugeordnete Shiftbase-Fahrer können ausgewählt werden.')
+        if _sbpay_norm(target['name']) != _sbpay_norm(row['employee_name']):
+            abort(409, 'PDF-Name und Cloud-Mitarbeiter stimmen nicht exakt überein. Keine Freigabe.')
+        if not _sbpay_local_identity_ok({'driver_id':driver_id,
+                  'shiftbase_user_id':str(target['shiftbase_user_id']),
+                  'employee_name':row['employee_name']},target,list(drivers.values())):
+            abort(409, 'Mitarbeiter oder Shiftbase-ID nicht eindeutig. Keine Freigabe.')
         used=conn.execute('SELECT page_no FROM shiftbase_payroll_pages WHERE batch_id=? AND driver_id=? AND page_no<>?',
                           (batch_id,driver_id,page_no)).fetchone()
         if used:
@@ -9929,8 +10096,8 @@ def _sbpay_verified_pdf(conn, batch_id, page_no):
         raise ShiftbaseIntegrationError('Die aktuelle Mitarbeiter-ID stimmt nicht mehr mit der Freigabe ueberein.')
     # Automated (exact) matches require PDF/Cloud name identity. Manual matches
     # additionally require the earlier individually approved mapping record.
-    if row['match_type'] == 'exact' and _sbpay_norm(drv['name']) != _sbpay_norm(row['employee_name']):
-        raise ShiftbaseIntegrationError('Der Name entspricht nicht mehr der freigegebenen Zuordnung.')
+    if not _sbpay_local_identity_ok(row, drv, list(mapped.values())):
+        raise ShiftbaseIntegrationError('Cloud-, PDF- und Shiftbase-Namen/IDs sind nicht eindeutig gleich. Kein Upload.')
     if row['match_type'] not in ('exact','manual'):
         raise ShiftbaseIntegrationError('Ungepruefte oder unklare Zuordnung.')
     duplicate = conn.execute('''SELECT page_no FROM shiftbase_payroll_pages
@@ -9987,7 +10154,7 @@ def _sbpay_cached_users(force=False):
 
 def _sbpay_assert_shiftbase_recipient(user_id, employee_name):
     """Read the current real Shiftbase account before uploading confidential data."""
-    users = _sbpay_cached_users()
+    users = _sbpay_cached_users(force=True)
     matching = []
     same_named = []
     target_name = _sbpay_norm(employee_name)
@@ -10100,6 +10267,8 @@ def _sbpay_browser_contract():
         state = json.loads(_sbpay_base64.b64decode(encoded, validate=True).decode('utf-8'))
         if not isinstance(state, dict) or not isinstance(state.get('cookies'), list):
             return None
+        if any(not isinstance(cookie, dict) for cookie in state['cookies']):
+            return None
         if len(state['cookies']) == 0:
             return None
         # Shiftbase session state never includes other websites. This prevents
@@ -10112,6 +10281,8 @@ def _sbpay_browser_contract():
         if not isinstance(origins,list):
             return None
         for origin in origins:
+            if not isinstance(origin,dict):
+                return None
             uri = _sbpay_urlparse(str(origin.get('origin','')))
             if uri.scheme != 'https' or (uri.hostname or '').lower() not in ('shiftbase.com','app.shiftbase.com'):
                 return None
@@ -10137,6 +10308,62 @@ def _sbpay_ui_strict_locator(locators, label):
     raise ShiftbaseIntegrationError('Shiftbase-Weboberflaeche: '+label+' nicht eindeutig gefunden. Kein Upload.')
 
 
+def _sbpay_browser_problem(exc):
+    description = str(exc).lower()
+    if ('executable doesn' in description or 'browser was not found' in description or
+            'failed to find browser' in description or 'enoent' in description):
+        return 'CHROMIUM_BINARY_MISSING: Passendes Playwright-Chromium nicht installiert.'
+    if ('host system is missing dependencies' in description or
+            'error while loading shared libraries' in description or
+            'cannot open shared object file' in description):
+        return 'CHROMIUM_LIBS_MISSING: Linux-Systembibliotheken fehlen.'
+    if 'target page, context or browser has been closed' in description:
+        return 'CHROMIUM_CLOSED: Browser hat sich unerwartet beendet (RAM/Logs prüfen).'
+    return 'CHROMIUM_START_FAILED: Browserstart fehlgeschlagen (Render-Logs prüfen).'
+
+
+def _sbpay_browser_diagnostic():
+    """No Shiftbase login, navigation, personal data or upload; admin-only check."""
+    from importlib import metadata
+    try:
+        installed = metadata.version('playwright')
+    except metadata.PackageNotFoundError:
+        installed = 'nicht installiert'
+    status = {'ok':False,'playwright_version':installed,
+              'browser_path_config':os.environ.get('PLAYWRIGHT_BROWSERS_PATH','(Playwright-Standard)'),
+              'session_config_valid':_sbpay_browser_contract() is not None,
+              'message':'Playwright-Browser noch nicht geprüft'}
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as engine:
+            executable = engine.chromium.executable_path
+            # No secrets or PDF data are ever processed here.
+            if not Path(executable).is_file():
+                status['message'] = 'CHROMIUM_BINARY_MISSING: Browserdatei fehlt.'
+                return status
+            browser = engine.chromium.launch(headless=True,
+                     args=['--no-sandbox','--disable-dev-shm-usage'], timeout=20_000)
+            try:
+                page = browser.new_page()
+                page.goto('about:blank')
+                status['ok'] = True
+                status['message'] = 'Chromium kann unter Render/Linux ohne Shiftbase-Zugriff starten.'
+            finally:
+                browser.close()
+    except ImportError:
+        status['message'] = 'PLAYWRIGHT_NOT_INSTALLED'
+    except Exception as exc:
+        status['message'] = _sbpay_browser_problem(exc)
+        app.logger.warning('Payroll Chromium diagnostic: %s',status['message'])
+    return status
+
+
+@app.get('/admin/shiftbase/lohnzettel/browser-check')
+@admin_login_required
+def admin_shiftbase_payroll_browser_check():
+    return _sbpay_no_cache(jsonify(_sbpay_browser_diagnostic()))
+
+
 def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None):
     """Exactly one page-scope employee upload. No retries and no hidden API calls.
 
@@ -10160,7 +10387,9 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
         try:
             browser = engine.chromium.launch(headless=True, args=['--no-sandbox','--disable-dev-shm-usage'])
         except Exception as exc:
-            raise ShiftbaseIntegrationError('Chromium steht auf Render nicht zur Verfuegung.') from exc
+            code = _sbpay_browser_problem(exc)
+            app.logger.warning('Payroll browser startup: %s', code)
+            raise ShiftbaseIntegrationError(code) from exc
         try:
             context = browser.new_context(storage_state=contract['state'], accept_downloads=False,
                                           service_workers='block')
@@ -10236,27 +10465,33 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
             uploads = page.locator('input[type="file"]')
             if uploads.count() != 1:
                 raise ShiftbaseIntegrationError('Der persönliche Upload-Dialog enthaelt kein eindeutiges Dateifeld.')
-            # Never click save before the exact PDF contents have been assigned.
-            uploads.set_input_files({'name':file_name, 'mimeType':'application/pdf','buffer':content})
+            # An input change may send the file immediately. Establish the
+            # recipient-specific title and visibility BEFORE assigning bytes.
+            # If Shiftbase only exposes these controls after selecting a file,
+            # stop safely rather than risk a premature or invisible upload.
             title_field = _sbpay_ui_strict_locator([
                 page.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
                 page.locator('input[name="title"]'),
-            ],'Dokumenttitel')
+            ],'Dokumenttitel VOR Dateiauswahl')
             title_field.fill(title)
             visible = _sbpay_ui_strict_locator([
                 page.get_by_role('checkbox',name=re.compile(r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I)),
-            ], 'Sichtbarkeit fuer Mitarbeiter')
+            ], 'Sichtbarkeit fuer Mitarbeiter VOR Dateiauswahl')
             if not visible.is_checked():
                 visible.check()
             if not visible.is_checked() or title_field.input_value() != title:
-                raise ShiftbaseIntegrationError('Mitarbeitersichtbarkeit oder Dokumenttitel vor dem Upload ungueltig.')
+                raise ShiftbaseIntegrationError('Mitarbeitersichtbarkeit oder Titel nicht vor Dateiauswahl festlegbar.')
+            # Durable at-most-once state before the first possible remote write.
+            if before_submit is None:
+                raise ShiftbaseIntegrationError('Vor dem Upload fehlt die persistente Schreibsperre.')
+            before_submit()       # durable 'sending' before ANY possible browser write
+            uploads.set_input_files({'name':file_name, 'mimeType':'application/pdf','buffer':content})
+            if not visible.is_checked() or title_field.input_value() != title:
+                raise ShiftbaseIntegrationError('Uploadstatus unklar: Titel/Sichtbarkeit nach Dateiauswahl veraendert.')
             save_button = _sbpay_ui_strict_locator([
                 page.get_by_role('button', name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I)),
             ],'Speichern im Mitarbeiterprofil')
-            if before_submit is None:
-                raise ShiftbaseIntegrationError('Vor dem Upload fehlt die persistente Schreibsperre.')
-            before_submit()       # Persist 'sending' BEFORE network-changing action
-            save_button.click()   # The ONLY external write in this operation
+            save_button.click()   # Could be second step after automatic file upload
             try:
                 page.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
             except Exception as exc:
@@ -10387,6 +10622,12 @@ def admin_shiftbase_payroll_upload_step(batch_id):
         livechecks = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
             (batch_id,)).fetchall()}
+        from collections import Counter as _SendingCounts
+        recipient_counts = _SendingCounts(int(r['driver_id']) for r in rows if r['driver_id'])
+        pdf_name_counts = _SendingCounts(_sbpay_norm(r['employee_name']) for r in rows)
+        pdf_num_counts = _SendingCounts(str(r['personal_no']) for r in rows)
+        drivers = _sbpay_drivers(conn)
+        driver_map = {int(d['id']):d for d in drivers}
         def allowed(row):
             page = int(row['page_no'])
             did = row['driver_id']
@@ -10395,6 +10636,11 @@ def admin_shiftbase_payroll_upload_step(batch_id):
             if mode == 'single' and page != requested_page:
                 return False
             if current.get(int(did)) != str(row['shiftbase_user_id']):
+                return False
+            if (not _sbpay_local_identity_ok(row,driver_map.get(int(did)),drivers) or
+                    recipient_counts[int(did)] != 1 or
+                    pdf_name_counts[_sbpay_norm(row['employee_name'])] != 1 or
+                    pdf_num_counts[str(row['personal_no'])] != 1):
                 return False
             live = livechecks.get(page, {})
             return (live.get('status') == 'verified' and
@@ -10434,7 +10680,7 @@ def admin_shiftbase_payroll_upload_step(batch_id):
                       AND attempt_id=? AND state='preparing' ''',
                       (now_iso(),batch_id,page_no,attempt_id))
                     wconn.commit()
-                    if getattr(changed,'rowcount',1) == 0:
+                    if getattr(changed,'rowcount',None) != 1:
                         raise ShiftbaseIntegrationError('Schreibsperre nicht mehr gueltig.')
             document_id = _sbpay_browser_upload_once(contract,batch,row,content,
                                                        before_submit=mark_before_browser_save)
@@ -10448,8 +10694,9 @@ def admin_shiftbase_payroll_upload_step(batch_id):
         safe_preflight = (str(exc)[:250] if isinstance(exc, ShiftbaseIntegrationError)
                           else 'Unbekannter Browserfehler. Render-Logs auf Fehlertyp pruefen.')
         app.logger.warning('Payroll Shiftbase browser send interrupted: type=%s',type(exc).__name__)
-        # Before Save, a browser attempt is provably write-free. Remove only
-        # that preflight claim so an expired session can be fixed safely.
+        # BEFORE set_input_files, a browser attempt is provably write-free.
+        # Once file bytes enter the DOM, upload may already have started even
+        # without clicking Save. Keep that claim forever until manual review.
         if contract.get('mode') == 'browser':
             with db_conn() as rconn:
                 current_state = rconn.execute('''SELECT state FROM shiftbase_payroll_deliveries
@@ -10486,49 +10733,15 @@ def _sbpay_livecheck_schema(conn):
 @app.post('/admin/shiftbase/lohnzettel/<batch_id>/livecheck')
 @admin_login_required
 def admin_shiftbase_payroll_livecheck(batch_id):
-    """Read-only comparison against the real Shiftbase users resource."""
+    """One strict, shared PDF ↔ Cloud ↔ live Shiftbase identity validation."""
     _sbpay_token_check()
-    with db_conn() as conn:
-        batch, rows = _sbpay_batch_data(conn,batch_id)
-        current = _sb_mapping(conn)
     try:
-        users = _shiftbase_get_all('users')
-        from collections import Counter as _sbpay_counter_users
-        normalized = []
-        for entry in users:
-            person = _sb_get(entry,'User')
-            if not isinstance(person,dict):
-                person = entry
-            normalized.append((_sb_id(person,'id','user_id'),_sbpay_norm(_sb_user_display(person))))
-        id_counts = _sbpay_counter_users(uid for uid, name in normalized if uid)
-        name_counts = _sbpay_counter_users(name for uid, name in normalized if name)
-        pairs = set(normalized)
-    except ShiftbaseIntegrationError:
-        flash('Shiftbase-Benutzer konnten nicht gelesen werden. Nichts wurde hochgeladen.', 'err')
-        return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=batch_id))
-    passed = 0
-    with db_conn() as conn:
-        _sbpay_livecheck_schema(conn)
-        for row in rows:
-            uid = str(row['shiftbase_user_id'] or '')
-            name = _sbpay_norm(row['employee_name'])
-            did = int(row['driver_id']) if row['driver_id'] else 0
-            ok = (bool(row['approved']) and current.get(did) == uid and
-                  re.fullmatch(r'[0-9]{1,20}',uid) is not None and
-                  id_counts[uid] == 1 and name_counts[name] == 1 and
-                  (uid,name) in pairs)
-            status = 'verified' if ok else 'blocked'
-            passed += int(ok)
-            conn.execute('''INSERT INTO shiftbase_payroll_livechecks
-              (batch_id,page_no,shiftbase_user_id,page_sha256,status,checked_at)
-              VALUES(?,?,?,?,?,?) ON CONFLICT(batch_id,page_no) DO UPDATE SET
-                shiftbase_user_id=excluded.shiftbase_user_id,
-                page_sha256=excluded.page_sha256,
-                status=excluded.status,checked_at=excluded.checked_at''',
-                (batch_id,int(row['page_no']),uid,str(row['page_sha256']),status,now_iso()))
-        conn.commit()
-    flash(f'{passed} von {len(rows)} freigegebenen Abrechnungen anhand der aktuellen Shiftbase-Benutzerliste eindeutig bestätigt. Kein Datei-Upload.', 'ok')
-    return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=batch_id))
+        passed, blocked = _sbpay_prepare_batch_checked(batch_id)
+    except (ShiftbaseIntegrationError, ValueError):
+        flash('Shiftbase-Liveabgleich nicht verfügbar. Keine PDF freigegeben oder gesendet.', 'err')
+        return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
+    flash(f'{passed} eindeutig bestätigt, {blocked} gesperrt. Kein Upload gestartet.', 'ok')
+    return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
 
 
 # ========== Ende vertrauliche DATEV-Lohnzettel ==========
@@ -10547,6 +10760,7 @@ if __name__ == "__main__":
         recalc_all(conn); conn.commit()
     port = int(os.environ.get("PORT", "5050"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
