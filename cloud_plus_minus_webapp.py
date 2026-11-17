@@ -8943,35 +8943,29 @@ def admin_shiftbase_payroll():
                 raise ValueError('Passwortgeschützte PDFs werden nicht automatisch verarbeitet.')
             if not 1 <= len(source.pages) <= 300:
                 raise ValueError('Der Import muss 1 bis 300 Seiten enthalten.')
+            # Parse each source page only once.  Re-opening one throwaway PDF
+            # for every page used to make large uploads unnecessarily slow and
+            # increased the risk of Gunicorn's default request timeout. The final
+            # *per-recipient* file is still re-opened and its every page checked.
             details = []
+            first_period = _sbpay_period(source.pages[0].extract_text() or '')
+            if not first_period or None in first_period:
+                raise ValueError('Abrechnungsmonat auf Seite 1 nicht eindeutig erkannt.')
             for index, page in enumerate(source.pages):
                 extracted = page.extract_text() or ''
                 name, number = _sbpay_identity_from_page(page)
                 period = _sbpay_period(extracted)
-                if not period or None in period:
-                    raise ValueError(f'Abrechnungsmonat auf Seite {index + 1} nicht eindeutig erkannt.')
-                if period != _sbpay_period(source.pages[0].extract_text() or ''):
-                    raise ValueError('Verschiedene Abrechnungsmonate in einer Datei.')
+                if period != first_period:
+                    raise ValueError(f'Seite {index + 1}: ein anderer oder unbekannter Abrechnungsmonat.')
                 if not name or not number:
                     raise ValueError(f'Seite {index + 1}: Empfänger und DATEV-Personalnummer konnten nicht sicher gelesen werden. Bitte die originale Text-PDF statt eines Scans verwenden; nichts wurde importiert.')
-                writer = _SbpayWriter()
-                writer.add_page(page)
-                buffer = io.BytesIO()
-                writer.write(buffer)
-                individual = buffer.getvalue()
-                test_reader = PdfReader(io.BytesIO(individual), strict=True)
-                test_name, test_no = _sbpay_identity_from_page(test_reader.pages[0])
-                if len(test_reader.pages) != 1 or test_name != name or test_no != number:
-                    raise ValueError(f'Der isolierte Einzelseiten-Test für Seite {index + 1} ist fehlgeschlagen.')
-                if len(individual) > 5 * 1024 * 1024:
-                    raise ValueError(f'Seite {index+1} ist größer als die 5-MB-Grenze von Shiftbase.')
-                details.append((name, number, individual))
+                details.append((name, number))
             # A payroll recipient can occupy several consecutive DATEV pages.
             # Group every page belonging to that verified personal number into
             # a SINGLE file; do not drop follow-up pages with back-pay details.
             from collections import OrderedDict as _sbpay_ordered
             people = _sbpay_ordered()
-            for idx, (name, number, _single) in enumerate(details, start=1):
+            for idx, (name, number) in enumerate(details, start=1):
                 found = people.get(number)
                 if found:
                     if _sbpay_norm(found['name']) != _sbpay_norm(name):
@@ -9004,16 +8998,19 @@ def admin_shiftbase_payroll():
             flash(msg if len(msg) < 180 else 'Die PDF enthält nicht unterstützte Seiten.', 'err')
             return redirect(url_for('admin_shiftbase_payroll'))
         digest = _sbpay_hashlib.sha256(content).hexdigest()
-        with db_conn() as conn:
-            _sbpay_schema(conn)
-            previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
-                                    (digest,)).fetchone()
+        try:
+            with db_conn() as conn:
+                _sbpay_schema(conn)
+                previous = conn.execute('SELECT id FROM shiftbase_payroll_batches WHERE source_sha256=?',
+                                        (digest,)).fetchone()
+        except Exception:
+            app.logger.exception('Payroll PDF import: database lookup failed')
+            flash('Datenbankpruefung fehlgeschlagen. Keine Datei wurde gesendet. '
+                  'Bitte Render-Logs (Payroll PDF import) pruefen.', 'err')
+            return redirect(url_for('admin_shiftbase_payroll'))
         if previous:
-            try:
-                verified, blocked = _sbpay_prepare_batch_checked(previous['id'])
-                flash(f'Bekannte PDF geoeffnet: {verified} Empfaenger versandbereit, {blocked} gesperrt.', 'ok')
-            except Exception:
-                flash('Bekannte PDF geoeffnet. Shiftbase-Abgleich aktuell nicht erreichbar; bei Bedarf unten erneut pruefen.', 'err')
+            flash('Diese PDF wurde bereits eingelesen. Die vorhandenen Einzelabrechnungen werden geoeffnet; '
+                  'es wird nichts erneut hochgeladen.', 'ok')
             return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=previous['id']))
         from collections import Counter as _sbpay_counter
         from secrets import token_hex as _sbpay_token_hex
@@ -9021,12 +9018,12 @@ def admin_shiftbase_payroll():
         numbers = _sbpay_counter(d[1] for d in details)
         batch_id = _sbpay_token_hex(16)
         parent = _SBPAY_ROOT / batch_id
-        _sbpay_secure_dir(parent)
         try:
+            _sbpay_secure_dir(parent)
             with db_conn() as conn:
                 _sbpay_schema(conn)
                 drivers = _sbpay_drivers(conn)
-                year, month = _sbpay_period(source.pages[0].extract_text() or '')
+                year, month = first_period
                 conn.execute('INSERT INTO shiftbase_payroll_batches '
                              '(id, year, month, page_count, source_sha256, created_at) VALUES(?,?,?,?,?,?)',
                              (batch_id, year, month, len(source.pages), digest, now_iso()))
@@ -9051,15 +9048,18 @@ def admin_shiftbase_payroll():
                 conn.commit()
         except Exception:
             _sbpay_shutil.rmtree(parent, ignore_errors=True)
-            raise
-        try:
-            verified, blocked = _sbpay_prepare_batch_checked(batch_id)
-            flash(f'{len(details)} Einzelabrechnungen aus {len(source.pages)} Seiten erstellt. '
-                  f'{verified} eindeutig zugeordnet und auswählbar, {blocked} gesperrt. Noch nichts gesendet.', 'ok')
-        except Exception:
-            flash(f'{len(details)} Einzelabrechnungen aus {len(source.pages)} Seiten erstellt. '
-                  'Der automatische Shiftbase-Abgleich war nicht erreichbar. '
-                  'Nichts versendet; Zuordnungen koennen erneut geprueft werden.', 'err')
+            # No employee names, PDF bytes, authentication secrets or personal
+            # numbers are logged; administrators get a generic actionable error.
+            app.logger.exception('Payroll PDF import: secure storage/database step failed')
+            flash('Der PDF-Import konnte nicht sicher gespeichert werden. Keine Datei wurde an '
+                  'Shiftbase gesendet. Bitte Render-Logs (Payroll PDF import) pruefen.', 'err')
+            return redirect(url_for('admin_shiftbase_payroll'))
+        # Read-only Shiftbase recipient verification is started by the following
+        # review page in a SEPARATE request, after the local PDF data are saved.
+        # A slow Shiftbase API must never turn a successful import into HTTP 500.
+        flash(f'{len(details)} Einzelabrechnungen aus {len(source.pages)} Seiten sicher erstellt. '
+              'Der Shiftbase-Empfaengerabgleich startet in der Uebersicht automatisch. '
+              'Noch nichts gesendet.', 'ok')
         return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
 
     with db_conn() as conn:
@@ -9178,11 +9178,17 @@ def _sbpay_prepare_batch_checked(batch_id):
 def admin_shiftbase_payroll_prepare(batch_id):
     """Optional recheck if Shiftbase was unavailable during upload."""
     _sbpay_token_check()
+    as_json = 'application/json' in str(request.headers.get('Accept', ''))
     try:
         passed, blocked = _sbpay_prepare_batch_checked(batch_id)
     except Exception:
+        app.logger.warning('Payroll recipient check failed (no upload initiated)')
+        if as_json:
+            return _sbpay_no_cache(jsonify({'ok':False,'error':'Shiftbase-Abgleich derzeit nicht erreichbar'})), 503
         flash('Shiftbase-Benutzerliste derzeit nicht erreichbar. Nichts freigegeben oder gesendet.', 'err')
         return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
+    if as_json:
+        return _sbpay_no_cache(jsonify({'ok':True,'verified':passed,'blocked':blocked}))
     flash(f'{passed} eindeutig zugeordnet, {blocked} gesperrt. Noch nichts hochgeladen.', 'ok')
     return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
 
@@ -9202,6 +9208,9 @@ def admin_shiftbase_payroll_batch(batch_id):
         checked = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
             (batch_id,)).fetchall()}
+    # Auto-verify exactly once after import (read-only and no file transfer).
+    # It runs in a separate browser request to avoid the 30s upload timeout.
+    auto_verify = bool(rows) and not checked
     mapping = {int(d['id']): d for d in drivers}
     from collections import Counter as _sbpay_count
     mapped_ids = _sbpay_count(int(r['driver_id']) for r in rows if r['driver_id'])
@@ -9258,6 +9267,10 @@ def admin_shiftbase_payroll_batch(batch_id):
          '<div class="kpi">Bereit<b>'+str(ready_count)+'</b></div>',
          '<div class="kpi">Versendet / pruefen<b>'+str(finished_count)+' / '+str(unclear_count)+'</b></div>',
          '</div>']
+    if auto_verify:
+        h.append('<div class="flash ok" id="sbpay-auto-check">Die PDFs wurden getrennt. '
+                 'Die Shiftbase-Empfaengerzuordnung wird jetzt automatisch und nur lesend geprueft. '
+                 'Es wird noch nichts gesendet.</div>')
     if not can_upload:
         h.append('<div class="flash err"><b>Shiftbase-Upload noch nicht einsatzbereit.</b> '
                  'Bitte die gueltige Browser-Sitzung und Playwright/Chromium auf Render einrichten. '
@@ -9325,6 +9338,32 @@ def admin_shiftbase_payroll_batch(batch_id):
                  '<td>'+manual+'</td></tr>')
     h.append('</tbody></table></div>')
     h.append(_sbpay_simple_send_script(batch_id, token))
+    if auto_verify:
+        prepare_url = url_for('admin_shiftbase_payroll_prepare', batch_id=batch_id)
+        # The server returns JSON for the automated request and a regular
+        # redirect for the manual 'recheck' button, maintaining compatibility.
+        h.append('''<script>(async function(){
+        const message=document.getElementById('sbpay-auto-check');
+        if(!message)return;
+        try{
+          const form=new URLSearchParams();form.set('csrf_token', CSRF);
+          const response=await fetch(ENDPOINT,{method:'POST',body:form,
+               headers:{'Accept':'application/json'},credentials:'same-origin',cache:'no-store'});
+          const result=await response.json();
+          if(!response.ok||!result.ok){
+             message.textContent='Shiftbase-Abgleich derzeit nicht verfuegbar. Einzel-PDFs sind '
+             +'gespeichert, aber kein Dokument ist automatisch zum Versand freigegeben. '
+             +'Bitte spaeter Zuordnungen erneut pruefen.';
+             message.className='flash err';return;
+          }
+          window.location.reload();
+        }catch(e){
+          message.textContent='Empfaengerabgleich unterbrochen. Keine PDFs versendet. '
+             +'Zum erneuten Versuch auf "Zuordnungen erneut pruefen" klicken.';
+          message.className='flash err';
+        }
+        })();</script>'''.replace('CSRF',json.dumps(token))
+                          .replace('ENDPOINT',json.dumps(prepare_url)))
     h.append('<p class="muted" style="font-size:12px;margin-top:12px">'
              'Es werden nur die ausgewaehlten, eindeutig verifizierten Mitarbeiter-PDFs '
              'in die jeweilige persoenliche Shiftbase-Dateiablage hochgeladen. '
