@@ -1,3 +1,4 @@
+# Bestehende Plus/Minus-Cloud-Abhaengigkeiten; nicht durch eine neue App ersetzt.
 Flask>=3.0.0
 Werkzeug>=3.0.0
 gunicorn>=22.0.0
@@ -5,5 +6,6 @@ requests>=2.32.0
 reportlab>=4.0.0
 psycopg[binary]>=3.2.0
 psycopg2-binary
-pypdf
+pypdf==5.9.0
+# MUSS der offiziellen Playwright-Docker-Image-Version exakt entsprechen.
 playwright==1.57.0
