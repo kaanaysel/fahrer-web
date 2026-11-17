@@ -8779,24 +8779,100 @@ def _sbpay_period(text):
     return (int(m.group(2)), _SBPAY_MONTHS.get(month_key))
 
 
-def _sbpay_identity(text):
-    # The DATEV output used here puts recipient, postal code and *Pers.-Nr.*
-    # on a single text-extraction line. Never guess from the employer heading.
-    identifiers = re.findall(r'\*Pers\.-Nr\.\s*(\d{1,10})\s*\*', text)
-    candidates = []
-    for line in text.splitlines():
-        if '*Pers.-Nr.' not in line:
-            continue
-        head = line.split('B/N*Pers.-Nr.', 1)[0]
-        head = head.split('*Pers.-Nr.', 1)[0]
-        match = re.match(r'^\s*([^\d\n]{4,110}?)(?=\d{5}\b)', head)
-        if match:
-            value = ' '.join(match.group(1).split())
-            if len(value.split()) >= 2 and not value.lower().startswith('hasan  aysel taxi'):
-                candidates.append(value)
-    if len(identifiers) != 1 or len(candidates) != 1:
+def _sbpay_identity(text, layout_text=None):
+    """Find one unambiguous DATEV recipient and payroll personnel number.
+
+    A DATEV PDF's reading order can differ across pypdf versions and PDF
+    producers. In some files the recipient, postal code and *Pers.-Nr.* are
+    concatenated; in others they are separate layout lines. Both variants
+    must identify the SAME person, otherwise fail closed. In particular,
+    neither the employer's address nor a fuzzy name match is accepted.
+    """
+    texts = [str(text or '')]
+    if layout_text and layout_text not in texts:
+        texts.append(str(layout_text))
+
+    personal_numbers = set()
+    for body in texts:
+        # The starred field identifies the RECIPIENT, not the personnel
+        # numbers in other areas of the payroll statement.
+        personal_numbers.update(re.findall(
+            r'\*\s*Pers\s*\.?\s*[-–]?\s*Nr\s*\.?\s*(\d{1,10})\s*\*', body, re.I))
+    if len(personal_numbers) != 1:
         return '', ''
-    return candidates[0], identifiers[0]
+
+    candidates = set()
+    for body in texts:
+        lines = body.splitlines()
+        for line in lines:
+            if not re.search(r'\*\s*Pers\s*\.?\s*[-–]?\s*Nr\s*\.', line, re.I):
+                continue
+            # DATEV's compact extraction combines recipient+ZIP+address
+            # before the *Pers.-Nr.* marker on a single line.
+            marker = re.search(r'\*\s*Pers\s*\.?\s*[-–]?\s*Nr\s*\.', line, re.I)
+            prefix = line[:marker.start()]
+            prefix = re.split(r'B\s*/\s*N\s*$', prefix, maxsplit=1, flags=re.I)[0]
+            match = re.match(r'^\s*([^\d\n]{4,110}?)(?=\d{5}\b)', prefix)
+            if match:
+                candidate = ' '.join(match.group(1).split())
+                if _sbpay_recipient_name_ok(candidate):
+                    candidates.add(candidate)
+
+        # DATEV's spatial layout instead has the recipient/address block
+        # *below* the personal-number field, usually: NAME, STREET, ZIP CITY.
+        # Require all three lines to avoid mistaking the employer, headings,
+        # pay types, or other people for the recipient.
+        marker_indices = [i for i, line in enumerate(lines)
+                          if re.search(r'\*\s*Pers\s*\.?\s*[-–]?\s*Nr\s*\.', line, re.I)]
+        for marker_i in marker_indices:
+            stop = min(len(lines), marker_i + 45)
+            for i in range(marker_i + 1, stop - 2):
+                first = lines[i].strip()
+                if re.search(r'^(Brutto[ -]Bez[uü]ge|Lohnart\b)', first, re.I):
+                    break
+                second = lines[i+1].strip()
+                third = lines[i+2].strip()
+                if (re.match(r'^\d{5}\s+\S', third) and
+                        re.search(r'\d', second) and
+                        not re.search(r'\b(B/N|Hinweise|Pers[. -]*Nr)\b', second, re.I) and
+                        _sbpay_recipient_name_ok(first)):
+                    candidates.add(' '.join(first.split()))
+
+    # Accept formatting differences, but never two different identities.
+    normalized = {_sbpay_norm(value) for value in candidates}
+    if len(normalized) != 1:
+        return '', ''
+    # Prefer a clean layout name; both methods must have agreed above.
+    chosen = min(candidates, key=lambda v: (len(v), v))
+    return chosen, next(iter(personal_numbers))
+
+
+def _sbpay_recipient_name_ok(candidate):
+    value = ' '.join(str(candidate or '').split())
+    words = value.split()
+    if not 2 <= len(words) <= 7 or not 4 <= len(value) <= 95:
+        return False
+    if re.search(r'[\d@*/:=<>]', value):
+        return False
+    if re.search(r'\b(Taxiunternehmen|Abrechnung|Gesamt|Hinweise|Bezeichnungen|Personal|Kirchensteuer)\b', value, re.I):
+        return False
+    # Accept accented, hyphenated and apostrophized names, but no address or
+    # alphanumeric pay codes. This is not a similarity-based match.
+    return all(re.fullmatch(r"[^\W\d_][^\d@*/:=<>]*", word, re.UNICODE) is not None
+               for word in words)
+
+
+def _sbpay_identity_from_page(page):
+    """Use one identical fail-closed parser for import, previews and sends."""
+    raw = page.extract_text() or ''
+    name, number = _sbpay_identity(raw)
+    if name and number:
+        return name, number
+    try:
+        layout = page.extract_text(extraction_mode='layout') or ''
+    except (TypeError, ValueError, NotImplementedError):
+        layout = ''
+    return _sbpay_identity(raw, layout)
 
 
 def _sbpay_schema(conn):
@@ -8870,21 +8946,21 @@ def admin_shiftbase_payroll():
             details = []
             for index, page in enumerate(source.pages):
                 extracted = page.extract_text() or ''
-                name, number = _sbpay_identity(extracted)
+                name, number = _sbpay_identity_from_page(page)
                 period = _sbpay_period(extracted)
                 if not period or None in period:
                     raise ValueError(f'Abrechnungsmonat auf Seite {index + 1} nicht eindeutig erkannt.')
                 if period != _sbpay_period(source.pages[0].extract_text() or ''):
                     raise ValueError('Verschiedene Abrechnungsmonate in einer Datei.')
                 if not name or not number:
-                    raise ValueError(f'Empfängername oder Personalnummer auf Seite {index + 1} nicht eindeutig. Import gestoppt.')
+                    raise ValueError(f'Seite {index + 1}: Empfänger und DATEV-Personalnummer konnten nicht sicher gelesen werden. Bitte die originale Text-PDF statt eines Scans verwenden; nichts wurde importiert.')
                 writer = _SbpayWriter()
                 writer.add_page(page)
                 buffer = io.BytesIO()
                 writer.write(buffer)
                 individual = buffer.getvalue()
                 test_reader = PdfReader(io.BytesIO(individual), strict=True)
-                test_name, test_no = _sbpay_identity(test_reader.pages[0].extract_text() or '')
+                test_name, test_no = _sbpay_identity_from_page(test_reader.pages[0])
                 if len(test_reader.pages) != 1 or test_name != name or test_no != number:
                     raise ValueError(f'Der isolierte Einzelseiten-Test für Seite {index + 1} ist fehlgeschlagen.')
                 if len(individual) > 5 * 1024 * 1024:
@@ -8915,7 +8991,7 @@ def admin_shiftbase_payroll():
                 if len(proof.pages)!=len(data['source_pages']):
                     raise ValueError('Mehrseitiger Lohnzettel wurde unvollständig zusammengeführt.')
                 for pg in proof.pages:
-                    check_name,check_number=_sbpay_identity(pg.extract_text() or '')
+                    check_name,check_number=_sbpay_identity_from_page(pg)
                     if check_number != number or _sbpay_norm(check_name) != _sbpay_norm(data['name']):
                         raise ValueError('Mehrseitiger Lohnzettel enthält fremde Mitarbeiterdaten.')
                 if len(merged) > 5 * 1024 * 1024:
@@ -9388,7 +9464,7 @@ def admin_shiftbase_payroll_pdf(batch_id, page_no):
         if reader.is_encrypted or len(reader.pages)!=int(row['file_pages']):
             abort(409, 'Die Anzahl der Mitarbeiterseiten ist nicht korrekt.')
         for page in reader.pages:
-            actual_name,actual_number=_sbpay_identity(page.extract_text() or '')
+            actual_name,actual_number=_sbpay_identity_from_page(page)
             if actual_name!=row['employee_name'] or actual_number!=row['personal_no']:
                 abort(409, 'Eine Mitarbeiterseite enthält einen abweichenden Empfänger.')
     except (OSError, ValueError) as exc:
@@ -9528,7 +9604,7 @@ def _sbpay_verified_pdf(conn, batch_id, page_no):
     if pdf.is_encrypted or len(pdf.pages) != int(row['file_pages']):
         raise ShiftbaseIntegrationError('Die PDF-Seiten stimmen nicht mit der Freigabe ueberein.')
     for page in pdf.pages:
-        name, personal_no = _sbpay_identity(page.extract_text() or '')
+        name, personal_no = _sbpay_identity_from_page(page)
         if (name != row['employee_name'] or personal_no != row['personal_no']):
             raise ShiftbaseIntegrationError('Die PDF enthaelt eine andere Mitarbeiter-Identitaet.')
     return batch, row, dict(drv), content
