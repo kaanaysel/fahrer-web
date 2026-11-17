@@ -1,10 +1,13 @@
+# Das BESTEHENDE Service-Namen und das Daten-Volume beibehalten.
+# Bei einem bereits vorhandenen Render-Service Runtime auf Docker umstellen;
+# KEINEN neuen Blueprint/Service erstellen.
 services:
   - type: web
     name: fahrer-cloud-portal
-    runtime: python
+    runtime: docker
     plan: starter
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
-    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT cloud_plus_minus_webapp:app
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: PORTAL_SECRET_KEY
@@ -15,6 +18,13 @@ services:
         value: /var/data
       - key: DATABASE_URL
         sync: false
+      # Geheimnisse NICHT in dieser Datei hinterlegen!
+      - key: SHIFTBASE_API_TOKEN
+        sync: false
+      - key: SHIFTBASE_PAYROLL_WEB_SESSION_B64
+        sync: false
+      - key: SHIFTBASE_PAYROLL_WEB_ENABLED
+        value: "1"
     disk:
       name: fahrer-cloud-data
       mountPath: /var/data
