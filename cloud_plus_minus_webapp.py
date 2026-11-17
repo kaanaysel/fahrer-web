@@ -9553,8 +9553,15 @@ def admin_shiftbase_payroll_batch(batch_id):
             status, color = 'Ergebnis pruefen – nicht erneut senden', '#fff0ed'
         else:
             blocked_count += 1
-            status, color = ('Noch nicht mit Shiftbase abgeglichen' if correct and unique
-                             else 'Zuordnung unklar – gesperrt'), '#fff7e8'
+            if not driver:
+                status = 'Kein eindeutiger Cloud-Fahrer / keine gueltige Shiftbase-ID – gesperrt'
+            elif not unique:
+                status = 'Mehrdeutige Mitarbeiter- oder PDF-Zuordnung – gesperrt'
+            elif proof.get('status') == 'blocked':
+                status = 'Shiftbase-Liveabgleich: ID und Name nicht eindeutig bestaetigt'
+            else:
+                status = 'Noch nicht mit Shiftbase live abgeglichen'
+            color = '#fff7e8'
         items.append((row, driver if correct else None, eligible, status, color))
     token = str(_sbpay_escape(_sb_csrf_token()))
     period = f'{int(batch["month"]):02d}/{int(batch["year"])}'
@@ -9579,7 +9586,10 @@ def admin_shiftbase_payroll_batch(batch_id):
                  'Die Einzel-PDFs koennen geprueft werden; es wird nichts gesendet.</div>')
     if blocked_count:
         h.append('<div class="muted" style="margin-bottom:12px">'+str(blocked_count)+' nicht versandbereite '
-                 'Abrechnungen bleiben gesperrt. <form method="post" '
+                 'Abrechnungen bleiben gesperrt. Grund siehe Status je Person. '
+                 'Bitte zuerst fehlende Cloud-Shiftbase-Zuordnungen korrekt hinterlegen; '
+                 'ein erneuter Liveabgleich kann nur vorhandene eindeutige Zuordnungen pruefen. '
+                 '<form method="post" '
                  'style="display:inline" action="'+url_for('admin_shiftbase_payroll_prepare',batch_id=batch_id)+'">'
                  '<input type="hidden" name="csrf_token" value="'+token+'">'
                  '<button type="submit" class="btn small" style="width:auto">Zuordnungen erneut pruefen</button>'
@@ -10161,6 +10171,10 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
             current = _sbpay_urlparse(page.url)
             if current.scheme != 'https' or current.hostname != 'app.shiftbase.com':
                 raise ShiftbaseIntegrationError('Browser wurde zu einer anderen Domain umgeleitet. Kein Upload.')
+            if 'login' in current.path.casefold():
+                raise ShiftbaseIntegrationError(
+                    'Die gespeicherte Shiftbase-Browsersitzung ist abgelaufen oder nicht angemeldet. '
+                    'Sitzung lokal neu exportieren und in Render ersetzen; kein Upload.')
             # Deep link is officially documented. Its target must not silently
             # become a different employee or a generic company files area.
             if (not re.search(r'(?<![0-9])'+regex_escape(user_id)+r'(?![0-9])',current.path) or
@@ -10175,23 +10189,49 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                 raise ShiftbaseIntegrationError('Der Name ist im Mitarbeiterprofil nicht sichtbar; kein Upload.') from exc
             if name.count() < 1 or not name.first.is_visible():
                 raise ShiftbaseIntegrationError('Der Mitarbeitername ist auf der Zielseite nicht exakt sichtbar.')
-            files_tab = _sbpay_ui_strict_locator([
+            # Shiftbase supports both a dedicated 'Dateien' tab and (in its
+            # documented employee view) a personal-files block on 'Uebersicht'.
+            # Never use the global/company files area as a fallback.
+            profile_files_tab = None
+            for candidate in (
                 page.get_by_role('tab', name=re.compile(r'^(Dateien|Files)$',re.I)),
                 page.get_by_role('link', name=re.compile(r'^(Dateien|Files)$',re.I)),
                 page.get_by_role('button', name=re.compile(r'^(Dateien|Files)$',re.I)),
-            ],'persoenlicher Dateien-Tab')
-            files_tab.click()
-            page.wait_for_load_state('domcontentloaded')
-            # Abort on another employee after changing tabs.
-            if name.count() < 1 or not name.first.is_visible():
-                raise ShiftbaseIntegrationError('Mitarbeiterprofil nach Tabwechsel nicht mehr identifizierbar.')
+            ):
+                try:
+                    if candidate.count() == 1 and candidate.is_visible():
+                        profile_files_tab = candidate
+                        break
+                except Exception:
+                    continue
+            if profile_files_tab is not None:
+                profile_files_tab.click()
+            else:
+                # This fallback requires an explicit personal-files heading,
+                # never a generic file control on the Shiftbase dashboard.
+                personal_heading = page.get_by_text(
+                    re.compile(r'^(Mitarbeiterdateien|Pers[oö]nliche Dateien|Personal files|Employee files)$',re.I))
+                if personal_heading.count() != 1 or not personal_heading.first.is_visible():
+                    raise ShiftbaseIntegrationError(
+                        'Persoenlicher Dateien-Tab bzw. Mitarbeiterdateien-Bereich nicht gefunden. '
+                        'Shiftbase-Oberflaeche pruefen; kein Upload.')
+            # Confirm the employee identity and exact profile ID again after navigation.
+            current = _sbpay_urlparse(page.url)
+            if (current.hostname != 'app.shiftbase.com' or
+                    not re.search(r'(?<![0-9])'+regex_escape(user_id)+r'(?![0-9])', current.path) or
+                    'login' in current.path.casefold()):
+                raise ShiftbaseIntegrationError(
+                    'Die persoenliche Mitarbeiterseite wurde beim Tabwechsel verlassen. Kein Upload.')
+            if not page.get_by_text(employee_name, exact=True).first.is_visible():
+                raise ShiftbaseIntegrationError(
+                    'Mitarbeitername nach Wechsel zur Dateiablage nicht sichtbar. Kein Upload.')
             # A matching title may indicate a previous upload. Never silently
             # overwrite or duplicate a payslip for this month.
             if page.get_by_text(title, exact=True).count():
                 raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits im Profil sichtbar; vor neuem Versand pruefen.')
             add_button = _sbpay_ui_strict_locator([
-                page.get_by_role('button', name=re.compile(r'^(Datei hinzufuegen|Datei hinzufügen|Add file)$',re.I)),
-            ], 'Datei-hinzufuegen-Schaltflaeche')
+                page.get_by_role('button', name=re.compile(r'^(Datei hinzufuegen|Datei hinzufügen|Add file|Datei hochladen)$',re.I)),
+            ], 'persoenliche Datei-hinzufuegen-Schaltflaeche')
             add_button.click()
             uploads = page.locator('input[type="file"]')
             if uploads.count() != 1:
@@ -10402,7 +10442,12 @@ def admin_shiftbase_payroll_upload_step(batch_id):
         else:
             document_id = _sbpay_upload_once(contract,batch,row,content)
             state='confirmed'
-    except Exception:
+    except Exception as exc:
+        # Return only our own fixed, non-secret preflight diagnostics. Unexpected
+        # browser errors can include private URLs/cookies in their exception text.
+        safe_preflight = (str(exc)[:250] if isinstance(exc, ShiftbaseIntegrationError)
+                          else 'Unbekannter Browserfehler. Render-Logs auf Fehlertyp pruefen.')
+        app.logger.warning('Payroll Shiftbase browser send interrupted: type=%s',type(exc).__name__)
         # Before Save, a browser attempt is provably write-free. Remove only
         # that preflight claim so an expired session can be fixed safely.
         if contract.get('mode') == 'browser':
@@ -10416,8 +10461,8 @@ def admin_shiftbase_payroll_upload_step(batch_id):
                       (batch_id,page_no,attempt_id))
                     rconn.commit()
                     return _sbpay_no_cache(jsonify({'done':False,'error':
-                        'Browser-Vorpruefung fehlgeschlagen. Kein Upload gestartet. '
-                        'Shiftbase-Anmeldung, Browser und Mitarbeiterseite pruefen.'})), 409
+                        'Browser-Vorpruefung: '+safe_preflight+' Kein Upload gestartet. '
+                        'Nur diesen Einzelversand nach Behebung erneut versuchen.'})), 409
         # After Save could have started, never retry this employee automatically.
         state='unknown'
     with db_conn() as conn:
