@@ -10430,27 +10430,111 @@ def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
     return name
 
 
-def _sbpay_personal_file_tab_add_button(page, user_id, timeout_ms=10000):
-    """The add-file button is allowed ONLY on the exact verified file-tab URL.
+# The actual employee Files view can render Add as a link, a real button,
+# or a custom ARIA button. Playwright's role="button" alone misses links.
+# Only the verified /employees/<id>/files route is ever authorized.
+_SBPAY_ADD_FILE_TEXT_ANYWHERE = re.compile(
+    r'(?:Datei(?:en)?\s+hinzuf(?:u|ü|ue)gen|Add\s+file|Upload\s+file|Bestand\s+toevoegen)', re.I)
+_SBPAY_FILES_TAB_LABEL = re.compile(r'^(?:Dateien|Files|Bestanden)$', re.I)
 
-    The 2026 employee layout has a 'Dateien' tab with 'Datei hinzufügen'
-    in the top bar, rather than the legacy 'Mitarbeiterdateien' card.
+
+def _sbpay_add_visible_controls(page):
+    """Find actual clickable elements, never broad text labels or div wrappers.
+
+    A full accessible-name match is preferred, but a nested SVG/icon may modify
+    the accessible name while leaving the real displayed button text intact.
+    No navigation, click, upload or dynamic script injection occurs here.
     """
+    candidates = []
+    visible_controls = page.locator('button, a, [role="button"]').filter(
+        has_text=_SBPAY_ADD_FILE_TEXT_ANYWHERE).filter(visible=True)
+    for i in range(min(visible_controls.count(), 20)):
+        item = visible_controls.nth(i)
+        try:
+            text = re.sub(r'\s+', ' ', item.inner_text(timeout=1000)).strip()
+            aria = re.sub(r'\s+', ' ', (item.get_attribute('aria-label') or '')).strip()
+            # The rendered text or aria label must be ONLY the upload action.
+            if not (_SBPAY_ADD_PERSONAL_FILE_NAME.fullmatch(text)
+                    or _SBPAY_ADD_PERSONAL_FILE_NAME.fullmatch(aria)):
+                continue
+            if not item.is_enabled():
+                continue
+            # A global navigation or sidebar action is never accepted.
+            in_nav = item.evaluate("""(el) => {
+                for (let node = el; node; node = node.parentElement) {
+                    if (node.tagName === 'NAV' || node.tagName === 'ASIDE'
+                        || node.getAttribute('role') === 'navigation') return true;
+                }
+                return false;
+            }""")
+            if in_nav:
+                continue
+            candidates.append(item)
+        except Exception:
+            continue
+    return candidates
+
+
+def _sbpay_employee_files_ui_signals(page):
+    """Non-sensitive diagnostics. Never expose page content, cookies or PDFs."""
+    def present(locator):
+        try:
+            return locator.filter(visible=True).count() > 0
+        except Exception:
+            return False
+    return {
+        'files_tab_visible': present(page.get_by_role('tab', name=_SBPAY_FILES_TAB_LABEL))
+                             or present(page.get_by_role('link', name=_SBPAY_FILES_TAB_LABEL))
+                             or present(page.get_by_text(_SBPAY_FILES_TAB_LABEL)),
+        'files_heading_visible': present(page.get_by_role('heading', name=_SBPAY_FILES_TAB_LABEL)),
+        'add_text_visible': present(page.get_by_text(_SBPAY_ADD_FILE_TEXT_ANYWHERE)),
+        'add_button_role_visible': present(page.get_by_role('button', name=_SBPAY_ADD_PERSONAL_FILE_NAME)),
+        'add_link_role_visible': present(page.get_by_role('link', name=_SBPAY_ADD_PERSONAL_FILE_NAME)),
+        'add_clickable_element_visible': bool(_sbpay_add_visible_controls(page)),
+    }
+
+
+def _sbpay_personal_file_tab_add_button(page, user_id, timeout_ms=18000):
+    """Select exactly one Add-file action in the verified employee's Files tab.
+
+    Never use a text-only div, the global company files page, another employee,
+    an arbitrary first()/nth() choice, or an unrelated upload control.
+    """
+    from time import monotonic
     if not _sbpay_is_exact_employee_files_url(page.url, user_id):
         raise ShiftbaseIntegrationError('Keine persoenliche Mitarbeiter-Dateien-Seite. Kein Upload.')
-    button = page.get_by_role('button', name=_SBPAY_ADD_PERSONAL_FILE_NAME)
-    try:
-        button.first.wait_for(state='visible', timeout=timeout_ms)
-    except Exception as exc:
-        raise ShiftbaseIntegrationError(
-            'Persoenliche Datei-hinzufuegen-Schaltflaeche im Mitarbeiter-Reiter Dateien nicht sichtbar. Kein Upload.') from exc
-    button = _sbpay_unique_visible(button)
-    if button is None:
-        raise ShiftbaseIntegrationError(
-            'Mehrdeutige Datei-hinzufuegen-Schaltflaechen im Mitarbeiter-Reiter Dateien. Kein Upload.')
-    if not _sbpay_is_exact_employee_files_url(page.url, user_id):
-        raise ShiftbaseIntegrationError('Mitarbeiterdateien-URL vor dem Hinzufuegen verlassen. Kein Upload.')
-    return button
+    deadline = monotonic() + max(1, timeout_ms) / 1000
+    while True:
+        if not _sbpay_is_exact_employee_files_url(page.url, user_id):
+            raise ShiftbaseIntegrationError('Mitarbeiterdateien-URL vor dem Hinzufuegen verlassen. Kein Upload.')
+        candidates = _sbpay_add_visible_controls(page)
+        if len(candidates) > 1:
+            raise ShiftbaseIntegrationError('Mehrere Datei-hinzufuegen-Aktionen erkannt. Kein Upload.')
+        if len(candidates) == 1:
+            return candidates[0]
+        # Fall back only to a unique semantic button/link by *exact* label.
+        # This catches icon-only labels where innerText is empty.
+        button = _sbpay_unique_visible(page.get_by_role('button', name=_SBPAY_ADD_PERSONAL_FILE_NAME))
+        link = _sbpay_unique_visible(page.get_by_role('link', name=_SBPAY_ADD_PERSONAL_FILE_NAME))
+        semantic = [loc for loc in (button, link) if loc is not None]
+        if len(semantic) > 1:
+            raise ShiftbaseIntegrationError('Mehrere Datei-hinzufuegen-Aktionen erkannt. Kein Upload.')
+        if len(semantic) == 1:
+            item = semantic[0]
+            if not item.evaluate("""(el) => {
+                for (let node = el; node; node = node.parentElement) {
+                    if (node.tagName === 'NAV' || node.tagName === 'ASIDE'
+                        || node.getAttribute('role') === 'navigation') return true;
+                }
+                return false;
+            }"""):
+                return item
+        if monotonic() >= deadline:
+            break
+        page.wait_for_timeout(300)
+    raise ShiftbaseIntegrationError(
+        'Datei hinzufuegen im verifizierten Mitarbeiter-Dateien-Reiter nicht gefunden. '
+        'Bitte UI-Diagnose pruefen (Seite/Sitzung/Berechtigung). Kein Upload.')
 
 
 def _sbpay_browser_problem(exc):
@@ -10540,12 +10624,19 @@ def admin_shiftbase_payroll_ui_check():
             browser = engine.chromium.launch(headless=True, args=['--no-sandbox','--disable-dev-shm-usage'])
             try:
                 context = browser.new_context(storage_state=contract['state'], accept_downloads=False,
-                                              service_workers='block')
+                                              service_workers='block', viewport={'width':1600,'height':900})
                 page = context.new_page()
                 page.set_default_timeout(12_000)
                 _sbpay_open_verified_employee_files(page, contract['origin'], uid, employee_name)
                 results['profile_url_verified'] = True
-                add = _sbpay_personal_file_tab_add_button(page, uid)
+                results.update(_sbpay_employee_files_ui_signals(page))
+                try:
+                    add = _sbpay_personal_file_tab_add_button(page, uid)
+                except ShiftbaseIntegrationError:
+                    # Report the DOM after the wait, not only immediately on navigation.
+                    results.update(_sbpay_employee_files_ui_signals(page))
+                    raise
+                results.update(_sbpay_employee_files_ui_signals(page))
                 results['add_button_found'] = True
                 add.click()  # Opens a form only; no bytes, no POST, no Save.
                 if not _sbpay_is_exact_employee_files_url(page.url, uid):
@@ -10606,7 +10697,7 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
             raise ShiftbaseIntegrationError(code) from exc
         try:
             context = browser.new_context(storage_state=contract['state'], accept_downloads=False,
-                                          service_workers='block')
+                                          service_workers='block', viewport={'width':1600,'height':900})
             page = context.new_page()
             page.set_default_timeout(14_000)
             # IMPORTANT: on the current Shiftbase UI, the personal files are
