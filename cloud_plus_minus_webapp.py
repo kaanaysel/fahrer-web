@@ -10487,6 +10487,97 @@ def _sbpay_detail_save_button(scope):
     return button
 
 
+
+# Exact Shiftbase UI option seen in the employee-specific file-details dialog.
+# Never substitute other categories when saving confidential payroll PDFs.
+_SBPAY_PAYROLL_FILE_CATEGORY = 'Gehaltsabrechnung und Gehalt'
+
+
+def _sbpay_details_select_payroll_category(scope, page, user_id):
+    """Set and verify the required payroll category in the employee FILE DETAILS.
+
+    Shiftbase's November 2026 UI requires Kategorie, but it may be a native
+    <select> or an accessible custom dropdown. No selection or unverified
+    selection means we must NOT click the final 'Datei hinzufuegen'. The caller
+    has already set a durable at-most-once upload claim before file selection.
+    """
+    if _sbpay_employee_file_stage(page.url, user_id) != 'details':
+        raise ShiftbaseIntegrationError('Kategorie nur im bestaetigten Mitarbeiter-Dateidialog zulässig. Nicht speichern.')
+    label = _sbpay_unique_visible(scope.get_by_text(re.compile(r'^\s*Kategorie\s*$', re.I)))
+    if label is None:
+        raise ShiftbaseIntegrationError('Pflichtfeld Kategorie im Mitarbeiter-Dateidialog nicht eindeutig. Nicht speichern.')
+
+    # Find a bounded field group containing the visible category label and
+    # its input. Do not select any generic dropdown elsewhere on the page.
+    field_group = None
+    from_group_native = None
+    for depth in range(1, 6):
+        candidate = label.locator('xpath=..' + '/..' * (depth - 1))
+        try:
+            if candidate.count() != 1:
+                break
+            tag = candidate.evaluate('(el) => el.tagName.toLowerCase()')
+            if tag in ('body', 'html', 'main', 'form'):
+                break
+            native = _sbpay_unique_visible(candidate.locator('select'))
+            placeholder = _sbpay_unique_visible(candidate.get_by_text(
+                re.compile(r'^\s*Kategorie ausw[aä]hlen\s*$', re.I)))
+            combo = _sbpay_unique_visible(candidate.get_by_role('combobox'))
+            if native is not None or placeholder is not None or combo is not None:
+                field_group = candidate
+                from_group_native = native
+                break
+        except Exception:
+            break
+    if field_group is None:
+        raise ShiftbaseIntegrationError('Kategorie-Auswahlfeld nicht eindeutig zum Pflichtfeld zuordenbar. Nicht speichern.')
+
+    expected = _SBPAY_PAYROLL_FILE_CATEGORY
+    if from_group_native is not None:
+        # Native selects require the exact *displayed label*, not guessed IDs.
+        try:
+            from_group_native.select_option(label=expected, timeout=8000)
+            chosen = from_group_native.evaluate(
+                '(el) => el.selectedOptions && el.selectedOptions.length === 1 '
+                '? el.selectedOptions[0].textContent.trim() : ""')
+        except Exception as exc:
+            raise ShiftbaseIntegrationError('Lohnzettel-Kategorie in Shiftbase nicht auswählbar. Nicht speichern.') from exc
+        if chosen != expected:
+            raise ShiftbaseIntegrationError('Kategorie nach Auswahl nicht exakt bestätigt. Nicht speichern.')
+    else:
+        # Custom dropdown: restrict the trigger to the labelled field group.
+        trigger = _sbpay_unique_visible(field_group.get_by_role('combobox'))
+        if trigger is None:
+            trigger = _sbpay_unique_visible(field_group.get_by_role(
+                'button', name=re.compile(r'^\s*Kategorie ausw[aä]hlen\s*$', re.I)))
+        if trigger is None:
+            trigger = _sbpay_unique_visible(field_group.get_by_text(
+                re.compile(r'^\s*Kategorie ausw[aä]hlen\s*$', re.I)))
+        if trigger is None:
+            raise ShiftbaseIntegrationError('Kategorie-Dropdown nicht eindeutig. Nicht speichern.')
+        trigger.click()
+        if _sbpay_employee_file_stage(page.url, user_id) != 'details':
+            raise ShiftbaseIntegrationError('Mitarbeiter-Dateidialog bei Kategorie-Auswahl verlassen. Nicht speichern.')
+        # Some custom select popovers are mounted outside the modal DOM.
+        # The exact known payroll label is required in a single visible item.
+        option = _sbpay_unique_visible(page.get_by_role('option', name=expected, exact=True))
+        if option is None:
+            option = _sbpay_unique_visible(page.get_by_role('menuitem', name=expected, exact=True))
+        if option is None:
+            option = _sbpay_unique_visible(page.get_by_text(expected, exact=True))
+        if option is None:
+            raise ShiftbaseIntegrationError('Kategorie Gehaltsabrechnung und Gehalt fehlt/ist mehrfach vorhanden. Nicht speichern.')
+        option.click()
+        if _sbpay_employee_file_stage(page.url, user_id) != 'details':
+            raise ShiftbaseIntegrationError('Mitarbeiter-Dateidialog nach Kategorie-Auswahl verlassen. Nicht speichern.')
+        # A merely clicked option does not prove selection. The exact text must
+        # now be shown INSIDE the original labelled field group, not just as an
+        # open menu item elsewhere in the page.
+        confirmation = _sbpay_unique_visible(field_group.get_by_text(expected, exact=True))
+        if confirmation is None:
+            raise ShiftbaseIntegrationError('Lohnzettel-Kategorie nicht als Feldwert bestätigt. Nicht speichern.')
+    return expected
+
 def _sbpay_details_visibility_control(scope):
     """Optional employee-visibility checkbox; an absent toggle is NOT proof.
 
@@ -10748,6 +10839,7 @@ def admin_shiftbase_payroll_ui_check():
                 results['stage'] = 'file_selection'
                 results['detail_fields_pending_selection'] = True
                 results['details_stage_verified'] = False
+                results['category_pending_file_selection'] = True
                 # These are deliberately false because no file was selected.
                 results['title_field_found'] = False
                 results['employee_visibility_found'] = False
@@ -10861,6 +10953,9 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                     visibility.check()
                 if not visibility.is_checked():
                     raise ShiftbaseIntegrationError('Mitarbeitersichtbarkeit konnte nicht aktiviert werden. Uploadstatus unklar.')
+            # Category is a REQUIRED field in the Nov 2026 Shiftbase form.
+            # This must succeed before clicking the final confirmation button.
+            _sbpay_details_select_payroll_category(detail_scope, page, user_id)
             # Screenshot of current UI has no checkbox: preserve this fact and
             # require a manual employee-view verification after saving one file.
             save_button = _sbpay_detail_save_button(detail_scope)
