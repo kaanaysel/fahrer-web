@@ -10314,7 +10314,7 @@ _SBPAY_PERSONAL_FILES_NAME = re.compile(
     r'^(?:Mitarbeiterdateien|Pers[oö]nliche Dateien|Personal files|Employee files|'
     r'Persoonlijke bestanden|Medewerkersbestanden)$', re.I)
 _SBPAY_ADD_PERSONAL_FILE_NAME = re.compile(
-    r'^\s*(?:\+\s*)?(?:Datei hinzuf[uü]gen|Dateien hinzuf[uü]gen|'
+    r'^\s*(?:\+\s*)?(?:Datei hinzuf(?:u|ü|ue)gen|Dateien hinzuf(?:u|ü|ue)gen|'
     r'Add file|Upload file|Bestand toevoegen)\s*$', re.I)
 _SBPAY_OVERVIEW_NAME = re.compile(r'^(?:[UÜ]bersicht|Overview|Overzicht)$', re.I)
 
@@ -10384,6 +10384,75 @@ def _sbpay_personal_files_action(page, timeout_s=9.0):
         'Mitarbeiter-Uebersicht nicht eindeutig gefunden. Kein Upload.')
 
 
+def _sbpay_is_exact_employee_files_url(url, user_id):
+    """Only a private employee's files tab; NEVER a global/company files page.
+
+    The live Shiftbase UI in November 2026 uses /employees/<id>/files.
+    A URL containing the ID in another parameter or route is not sufficient.
+    """
+    parsed = _sbpay_urlparse(str(url))
+    uid = str(user_id)
+    return bool(
+        re.fullmatch(r'[0-9]{1,20}', uid)
+        and parsed.scheme == 'https'
+        and (parsed.hostname or '').lower() == 'app.shiftbase.com'
+        and parsed.username is None and parsed.password is None
+        and (parsed.port is None or parsed.port == 443)
+        and re.fullmatch(r'/employees/' + re.escape(uid) + r'/files/?', parsed.path)
+    )
+
+
+def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
+    """Open the exact employee-private files tab and prove visible profile name.
+
+    This function is read-only: it never clicks 'add', selects a file or saves.
+    URL + current Shiftbase API ID/name check together authorize subsequent UI.
+    """
+    uid = str(user_id)
+    if not re.fullmatch(r'[0-9]{1,20}', uid):
+        raise ShiftbaseIntegrationError('Ungueltige Shiftbase-Mitarbeiter-ID. Kein Upload.')
+    target = origin + '/employees/' + uid + '/files'
+    page.goto(target, wait_until='domcontentloaded', timeout=25_000)
+    if not _sbpay_is_exact_employee_files_url(page.url, uid):
+        raise ShiftbaseIntegrationError(
+            'Shiftbase hat die persoenliche Mitarbeiter-Dateien-URL verlassen '
+            '(moeglicherweise Sitzung abgelaufen). Kein Upload.')
+    name = page.get_by_text(employee_name, exact=True)
+    try:
+        name.first.wait_for(state='visible', timeout=20_000)
+    except Exception as exc:
+        raise ShiftbaseIntegrationError(
+            'Der exakte Mitarbeitername ist im persoenlichen Dateien-Profil nicht sichtbar. Kein Upload.') from exc
+    if not _sbpay_is_exact_employee_files_url(page.url, uid):
+        raise ShiftbaseIntegrationError('Mitarbeiterprofil nach Laden verlassen. Kein Upload.')
+    if not name.first.is_visible():
+        raise ShiftbaseIntegrationError('Mitarbeitername ist nicht mehr sichtbar. Kein Upload.')
+    return name
+
+
+def _sbpay_personal_file_tab_add_button(page, user_id, timeout_ms=10000):
+    """The add-file button is allowed ONLY on the exact verified file-tab URL.
+
+    The 2026 employee layout has a 'Dateien' tab with 'Datei hinzufügen'
+    in the top bar, rather than the legacy 'Mitarbeiterdateien' card.
+    """
+    if not _sbpay_is_exact_employee_files_url(page.url, user_id):
+        raise ShiftbaseIntegrationError('Keine persoenliche Mitarbeiter-Dateien-Seite. Kein Upload.')
+    button = page.get_by_role('button', name=_SBPAY_ADD_PERSONAL_FILE_NAME)
+    try:
+        button.first.wait_for(state='visible', timeout=timeout_ms)
+    except Exception as exc:
+        raise ShiftbaseIntegrationError(
+            'Persoenliche Datei-hinzufuegen-Schaltflaeche im Mitarbeiter-Reiter Dateien nicht sichtbar. Kein Upload.') from exc
+    button = _sbpay_unique_visible(button)
+    if button is None:
+        raise ShiftbaseIntegrationError(
+            'Mehrdeutige Datei-hinzufuegen-Schaltflaechen im Mitarbeiter-Reiter Dateien. Kein Upload.')
+    if not _sbpay_is_exact_employee_files_url(page.url, user_id):
+        raise ShiftbaseIntegrationError('Mitarbeiterdateien-URL vor dem Hinzufuegen verlassen. Kein Upload.')
+    return button
+
+
 def _sbpay_browser_problem(exc):
     description = str(exc).lower()
     if ('executable doesn' in description or 'browser was not found' in description or
@@ -10440,6 +10509,77 @@ def admin_shiftbase_payroll_browser_check():
     return _sbpay_no_cache(jsonify(_sbpay_browser_diagnostic()))
 
 
+@app.get('/admin/shiftbase/lohnzettel/ui-check')
+@admin_login_required
+def admin_shiftbase_payroll_ui_check():
+    """Read-only navigation/form check for an existing mapped employee.
+
+    Never loads PDF bytes, sets a file input, fills personal data, or clicks Save.
+    The response contains only booleans and fixed diagnostics, never session data.
+    """
+    uid = (request.args.get('user_id') or '').strip()
+    if not re.fullmatch(r'[0-9]{1,20}', uid):
+        return _sbpay_no_cache(jsonify({'ok':False,'message':'Bitte gueltige Shiftbase-ID als user_id angeben.'})), 400
+    contract = _sbpay_browser_contract()
+    if contract is None:
+        return _sbpay_no_cache(jsonify({'ok':False,'message':'Browsersitzung nicht konfiguriert.'})), 503
+    with db_conn() as conn:
+        drivers = _sbpay_drivers(conn)
+        matches = [d for d in drivers if str(d['shiftbase_user_id']) == uid]
+        if len(matches) != 1 or sum(1 for d in drivers if _sbpay_norm(d['name']) == _sbpay_norm(matches[0]['name'])) != 1:
+            return _sbpay_no_cache(jsonify({'ok':False,'message':'Keine eindeutige vorhandene Cloud-Shiftbase-Zuordnung.'})), 409
+        employee_name = str(matches[0]['name'])
+    results = {'ok':False,'profile_url_verified':False,'add_button_found':False,
+               'file_field_found':False,'title_field_found':False,
+               'employee_visibility_found':False,'save_button_found':False,
+               'message':'Kein Upload gestartet.'}
+    try:
+        _sbpay_assert_shiftbase_recipient(uid, employee_name)
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as engine:
+            browser = engine.chromium.launch(headless=True, args=['--no-sandbox','--disable-dev-shm-usage'])
+            try:
+                context = browser.new_context(storage_state=contract['state'], accept_downloads=False,
+                                              service_workers='block')
+                page = context.new_page()
+                page.set_default_timeout(12_000)
+                _sbpay_open_verified_employee_files(page, contract['origin'], uid, employee_name)
+                results['profile_url_verified'] = True
+                add = _sbpay_personal_file_tab_add_button(page, uid)
+                results['add_button_found'] = True
+                add.click()  # Opens a form only; no bytes, no POST, no Save.
+                if not _sbpay_is_exact_employee_files_url(page.url, uid):
+                    raise ShiftbaseIntegrationError('Dateien-Seite beim Dialogoeffnen verlassen. Kein Upload.')
+                try:
+                    page.locator('input[type="file"]').first.wait_for(state='attached', timeout=6_000)
+                except Exception:
+                    pass
+                dialog = _sbpay_unique_visible(page.get_by_role('dialog'))
+                scope = dialog if dialog is not None else page
+                results['file_field_found'] = scope.locator('input[type="file"]').count() == 1
+                results['title_field_found'] = any(
+                    _sbpay_unique_visible(c) is not None for c in (
+                        scope.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
+                        scope.locator('input[name="title"]')))
+                results['employee_visibility_found'] = (_sbpay_unique_visible(
+                    scope.get_by_role('checkbox',name=re.compile(
+                        r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I))) is not None)
+                results['save_button_found'] = (_sbpay_unique_visible(
+                    scope.get_by_role('button',name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I))) is not None)
+                results['ok'] = all(results[k] for k in (
+                    'profile_url_verified','add_button_found','file_field_found',
+                    'title_field_found','employee_visibility_found','save_button_found'))
+                results['message'] = ('Uploadformular ohne PDF-Pruefung vorbereitet. KEIN Upload gestartet.'
+                                      if results['ok'] else 'Ein oder mehrere Formularfelder fehlen; KEIN Upload gestartet.')
+            finally:
+                browser.close()
+    except ShiftbaseIntegrationError as exc:
+        results['message'] = str(exc)[:220]
+    except Exception:
+        results['message'] = 'Unbekannte Abweichung beim Formularcheck. Kein Upload. Render-Logs kontrollieren.'
+    return _sbpay_no_cache(jsonify(results))
+
+
 def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None):
     """Exactly one page-scope employee upload. No retries and no hidden API calls.
 
@@ -10454,10 +10594,8 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise ShiftbaseIntegrationError('Playwright fehlt. Bitte Render-Build um Chromium erweitern.') from exc
-    from re import escape as regex_escape
     title = f'Lohnabrechnung {int(batch["month"]):02d}/{int(batch["year"])}'
-    # Never include the employee name, amount or personal number in the remote
-    # filename. They are already inside the protected PDF.
+    # The employee's name, amount and personnel number never appear in the remote filename.
     file_name = f'Lohnabrechnung_{int(batch["year"])}_{int(batch["month"]):02d}.pdf'
     with sync_playwright() as engine:
         try:
@@ -10471,58 +10609,23 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                                           service_workers='block')
             page = context.new_page()
             page.set_default_timeout(14_000)
-            target = contract['origin'] + '/universal/employees/' + user_id
-            page.goto(target, wait_until='domcontentloaded', timeout=25_000)
-            current = _sbpay_urlparse(page.url)
-            if current.scheme != 'https' or current.hostname != 'app.shiftbase.com':
-                raise ShiftbaseIntegrationError('Browser wurde zu einer anderen Domain umgeleitet. Kein Upload.')
-            if 'login' in current.path.casefold():
-                raise ShiftbaseIntegrationError(
-                    'Die gespeicherte Shiftbase-Browsersitzung ist abgelaufen oder nicht angemeldet. '
-                    'Sitzung lokal neu exportieren und in Render ersetzen; kein Upload.')
-            # Deep link is officially documented. Its target must not silently
-            # become a different employee or a generic company files area.
-            if (not re.search(r'(?<![0-9])'+regex_escape(user_id)+r'(?![0-9])',current.path) or
-                    'login' in current.path.casefold()):
-                raise ShiftbaseIntegrationError('Mitarbeiter-ID fehlt nach der Profilnavigation; Sitzung moeglicherweise abgelaufen. Kein Upload.')
-            # Confirm the exact name exists on the employee profile; the REST
-            # user-list validation happened immediately before browser open.
-            name = page.get_by_text(employee_name, exact=True)
-            try:
-                name.first.wait_for(state='visible', timeout=20_000)
-            except Exception as exc:
-                raise ShiftbaseIntegrationError('Der Name ist im Mitarbeiterprofil nicht sichtbar; kein Upload.') from exc
-            if name.count() < 1 or not name.first.is_visible():
-                raise ShiftbaseIntegrationError('Der Mitarbeitername ist auf der Zielseite nicht exakt sichtbar.')
-            # Shiftbase's published employee-file instructions put the private
-            # files card at the bottom of the employee OVERVIEW, not in the
-            # general company files area. Never click a generic 'Dateien' tab.
-            # If the personal area is not yet visible, switch to an unambiguous
-            # profile Overview tab and wait for the personal section.
-            personal_heading = _sbpay_unique_visible(
-                page.get_by_text(_SBPAY_PERSONAL_FILES_NAME))
-            if personal_heading is None:
-                overview = _sbpay_unique_visible(
-                    page.get_by_role('tab', name=_SBPAY_OVERVIEW_NAME))
-                if overview is not None:
-                    overview.click()
-            # The action must be inside the same bounded personal-files card.
-            personal_files_area, add_button = _sbpay_personal_files_action(page)
-            # Confirm the employee identity and exact profile ID again after navigation.
-            current = _sbpay_urlparse(page.url)
-            if (current.hostname != 'app.shiftbase.com' or
-                    not re.search(r'(?<![0-9])'+regex_escape(user_id)+r'(?![0-9])', current.path) or
-                    'login' in current.path.casefold()):
-                raise ShiftbaseIntegrationError(
-                    'Die persoenliche Mitarbeiterseite wurde beim Tabwechsel verlassen. Kein Upload.')
-            if not page.get_by_text(employee_name, exact=True).first.is_visible():
-                raise ShiftbaseIntegrationError(
-                    'Mitarbeitername nach Wechsel zur Dateiablage nicht sichtbar. Kein Upload.')
+            # IMPORTANT: on the current Shiftbase UI, the personal files are
+            # /employees/<uid>/files, NOT /universal/employees/<uid> / Overview.
+            # Never fall back to company files or another employee profile.
+            name = _sbpay_open_verified_employee_files(
+                page, contract['origin'], user_id, employee_name)
+            personal_files_area = page
+            add_button = _sbpay_personal_file_tab_add_button(page, user_id)
+            if not name.first.is_visible() or not _sbpay_is_exact_employee_files_url(page.url, user_id):
+                raise ShiftbaseIntegrationError('Empfaenger/Dateien-URL vor dem Upload nicht mehr bestaetigt.')
             # A matching title may indicate a previous upload. Never silently
             # overwrite or duplicate a payslip for this month.
             if personal_files_area.get_by_text(title, exact=True).count():
                 raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits in den persoenlichen Mitarbeiterdateien sichtbar; vor neuem Versand pruefen.')
             add_button.click()
+            if not _sbpay_is_exact_employee_files_url(page.url, user_id):
+                raise ShiftbaseIntegrationError(
+                    'Die persoenliche Dateiablage wurde beim Oeffnen des Upload-Dialogs verlassen. Kein Upload.')
             # Once opened, prefer the one visible modal as the only permitted
             # upload scope. Never select a hidden global file input when the
             # page has other upload controls.
@@ -10570,6 +10673,8 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                 personal_files_area.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
             except Exception as exc:
                 raise ShiftbaseIntegrationError('Upload-Ergebnis unklar: Dokumenttitel danach nicht sichtbar. Nicht erneut senden.') from exc
+            if not _sbpay_is_exact_employee_files_url(page.url, user_id):
+                raise ShiftbaseIntegrationError('Nach Upload befindet sich der Browser nicht mehr im verifizierten Mitarbeiterprofil.')
             if name.count() < 1 or not name.first.is_visible():
                 raise ShiftbaseIntegrationError('Nach Upload kann das Mitarbeiterprofil nicht erneut bestaetigt werden.')
             # No provider file-ID or verified REST GET is available. Explicit
