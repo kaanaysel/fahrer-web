@@ -10308,6 +10308,82 @@ def _sbpay_ui_strict_locator(locators, label):
     raise ShiftbaseIntegrationError('Shiftbase-Weboberflaeche: '+label+' nicht eindeutig gefunden. Kein Upload.')
 
 
+# Personal files are documented inside the employee's *Overview* tab.
+# A generic "Add file" button on the company-files screen is NOT sufficient.
+_SBPAY_PERSONAL_FILES_NAME = re.compile(
+    r'^(?:Mitarbeiterdateien|Pers[oö]nliche Dateien|Personal files|Employee files|'
+    r'Persoonlijke bestanden|Medewerkersbestanden)$', re.I)
+_SBPAY_ADD_PERSONAL_FILE_NAME = re.compile(
+    r'^\s*(?:\+\s*)?(?:Datei hinzuf[uü]gen|Dateien hinzuf[uü]gen|'
+    r'Add file|Upload file|Bestand toevoegen)\s*$', re.I)
+_SBPAY_OVERVIEW_NAME = re.compile(r'^(?:[UÜ]bersicht|Overview|Overzicht)$', re.I)
+
+
+def _sbpay_unique_visible(locator):
+    """Only accept exactly one visible node; hidden templates do not count."""
+    try:
+        visible = locator.filter(visible=True)
+        return visible if visible.count() == 1 else None
+    except Exception:
+        return None
+
+
+def _sbpay_personal_files_action(page, timeout_s=9.0):
+    """Locate the ADD control in the *personal* files section only.
+
+    No click, no upload and no fallback to a company-wide or unlabelled region.
+    Heading+action must share a bounded ancestor on the verified employee page.
+    """
+    from time import monotonic
+    deadline = monotonic() + timeout_s
+    while True:
+        heading = _sbpay_unique_visible(page.get_by_text(_SBPAY_PERSONAL_FILES_NAME))
+        if heading is not None:
+            ancestor = heading
+            # Start with the nearest parent and stop before the document body.
+            # Shiftbase may wrap the title and action in several nested divs.
+            for _ in range(10):
+                ancestor = ancestor.locator('xpath=..')
+                if ancestor.count() != 1:
+                    break
+                tag = ancestor.evaluate('(el) => el.tagName.toLowerCase()')
+                if tag in ('body', 'html', 'main', 'nav', 'aside'):
+                    break
+                # Do not leave the scoped personal-files area to reach another
+                # similarly named control in a different (company) section.
+                boundary = (tag in ('section', 'article', 'fieldset') or
+                            ancestor.get_attribute('role') == 'region')
+                if ancestor.get_by_text(re.compile(
+                        r'^(?:Firmendateien|Unternehmensdateien|Company files)$', re.I)).count():
+                    break
+                if not boundary and ancestor.locator(
+                        'h1,h2,h3,h4,h5,h6,[role="heading"]').count() > 1:
+                    break
+                actions = []
+                for role in ('button', 'link'):
+                    match = _sbpay_unique_visible(
+                        ancestor.get_by_role(role, name=_SBPAY_ADD_PERSONAL_FILE_NAME))
+                    if match is not None:
+                        actions.append(match)
+                # If multiple candidate actions exist in this same container,
+                # never choose one arbitrarily. Try no broader parent.
+                if len(actions) > 1:
+                    raise ShiftbaseIntegrationError(
+                        'Mehrdeutige Datei-hinzufuegen-Aktionen im Mitarbeiterdateien-Bereich. Kein Upload.')
+                if len(actions) == 1:
+                    # The scope is as narrow as possible and contains the
+                    # employee-specific heading. Never select page-wide.
+                    return ancestor, actions[0]
+                if boundary:
+                    break
+        if monotonic() >= deadline:
+            break
+        page.wait_for_timeout(250)
+    raise ShiftbaseIntegrationError(
+        'Persoenliche Mitarbeiterdateien / Datei-hinzufuegen in der '
+        'Mitarbeiter-Uebersicht nicht eindeutig gefunden. Kein Upload.')
+
+
 def _sbpay_browser_problem(exc):
     description = str(exc).lower()
     if ('executable doesn' in description or 'browser was not found' in description or
@@ -10418,32 +10494,20 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                 raise ShiftbaseIntegrationError('Der Name ist im Mitarbeiterprofil nicht sichtbar; kein Upload.') from exc
             if name.count() < 1 or not name.first.is_visible():
                 raise ShiftbaseIntegrationError('Der Mitarbeitername ist auf der Zielseite nicht exakt sichtbar.')
-            # Shiftbase supports both a dedicated 'Dateien' tab and (in its
-            # documented employee view) a personal-files block on 'Uebersicht'.
-            # Never use the global/company files area as a fallback.
-            profile_files_tab = None
-            for candidate in (
-                page.get_by_role('tab', name=re.compile(r'^(Dateien|Files)$',re.I)),
-                page.get_by_role('link', name=re.compile(r'^(Dateien|Files)$',re.I)),
-                page.get_by_role('button', name=re.compile(r'^(Dateien|Files)$',re.I)),
-            ):
-                try:
-                    if candidate.count() == 1 and candidate.is_visible():
-                        profile_files_tab = candidate
-                        break
-                except Exception:
-                    continue
-            if profile_files_tab is not None:
-                profile_files_tab.click()
-            else:
-                # This fallback requires an explicit personal-files heading,
-                # never a generic file control on the Shiftbase dashboard.
-                personal_heading = page.get_by_text(
-                    re.compile(r'^(Mitarbeiterdateien|Pers[oö]nliche Dateien|Personal files|Employee files)$',re.I))
-                if personal_heading.count() != 1 or not personal_heading.first.is_visible():
-                    raise ShiftbaseIntegrationError(
-                        'Persoenlicher Dateien-Tab bzw. Mitarbeiterdateien-Bereich nicht gefunden. '
-                        'Shiftbase-Oberflaeche pruefen; kein Upload.')
+            # Shiftbase's published employee-file instructions put the private
+            # files card at the bottom of the employee OVERVIEW, not in the
+            # general company files area. Never click a generic 'Dateien' tab.
+            # If the personal area is not yet visible, switch to an unambiguous
+            # profile Overview tab and wait for the personal section.
+            personal_heading = _sbpay_unique_visible(
+                page.get_by_text(_SBPAY_PERSONAL_FILES_NAME))
+            if personal_heading is None:
+                overview = _sbpay_unique_visible(
+                    page.get_by_role('tab', name=_SBPAY_OVERVIEW_NAME))
+                if overview is not None:
+                    overview.click()
+            # The action must be inside the same bounded personal-files card.
+            personal_files_area, add_button = _sbpay_personal_files_action(page)
             # Confirm the employee identity and exact profile ID again after navigation.
             current = _sbpay_urlparse(page.url)
             if (current.hostname != 'app.shiftbase.com' or
@@ -10456,26 +10520,36 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                     'Mitarbeitername nach Wechsel zur Dateiablage nicht sichtbar. Kein Upload.')
             # A matching title may indicate a previous upload. Never silently
             # overwrite or duplicate a payslip for this month.
-            if page.get_by_text(title, exact=True).count():
-                raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits im Profil sichtbar; vor neuem Versand pruefen.')
-            add_button = _sbpay_ui_strict_locator([
-                page.get_by_role('button', name=re.compile(r'^(Datei hinzufuegen|Datei hinzufügen|Add file|Datei hochladen)$',re.I)),
-            ], 'persoenliche Datei-hinzufuegen-Schaltflaeche')
+            if personal_files_area.get_by_text(title, exact=True).count():
+                raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits in den persoenlichen Mitarbeiterdateien sichtbar; vor neuem Versand pruefen.')
             add_button.click()
-            uploads = page.locator('input[type="file"]')
+            # Once opened, prefer the one visible modal as the only permitted
+            # upload scope. Never select a hidden global file input when the
+            # page has other upload controls.
+            try:
+                page.get_by_role('dialog').first.wait_for(state='visible', timeout=4_000)
+            except Exception:
+                pass  # Some Shiftbase layouts use an inline form, not a dialog.
+            dialog = _sbpay_unique_visible(page.get_by_role('dialog'))
+            upload_scope = dialog if dialog is not None else page
+            uploads = upload_scope.locator('input[type="file"]')
+            try:
+                uploads.first.wait_for(state='attached', timeout=6_000)
+            except Exception:
+                pass
             if uploads.count() != 1:
-                raise ShiftbaseIntegrationError('Der persönliche Upload-Dialog enthaelt kein eindeutiges Dateifeld.')
+                raise ShiftbaseIntegrationError('Der persoenliche Upload-Dialog enthaelt kein eindeutiges Dateifeld. Kein Upload.')
             # An input change may send the file immediately. Establish the
             # recipient-specific title and visibility BEFORE assigning bytes.
             # If Shiftbase only exposes these controls after selecting a file,
             # stop safely rather than risk a premature or invisible upload.
             title_field = _sbpay_ui_strict_locator([
-                page.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
-                page.locator('input[name="title"]'),
+                upload_scope.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
+                upload_scope.locator('input[name="title"]'),
             ],'Dokumenttitel VOR Dateiauswahl')
             title_field.fill(title)
             visible = _sbpay_ui_strict_locator([
-                page.get_by_role('checkbox',name=re.compile(r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I)),
+                upload_scope.get_by_role('checkbox',name=re.compile(r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I)),
             ], 'Sichtbarkeit fuer Mitarbeiter VOR Dateiauswahl')
             if not visible.is_checked():
                 visible.check()
@@ -10489,11 +10563,11 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
             if not visible.is_checked() or title_field.input_value() != title:
                 raise ShiftbaseIntegrationError('Uploadstatus unklar: Titel/Sichtbarkeit nach Dateiauswahl veraendert.')
             save_button = _sbpay_ui_strict_locator([
-                page.get_by_role('button', name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I)),
+                upload_scope.get_by_role('button', name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I)),
             ],'Speichern im Mitarbeiterprofil')
             save_button.click()   # Could be second step after automatic file upload
             try:
-                page.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
+                personal_files_area.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
             except Exception as exc:
                 raise ShiftbaseIntegrationError('Upload-Ergebnis unklar: Dokumenttitel danach nicht sichtbar. Nicht erneut senden.') from exc
             if name.count() < 1 or not name.first.is_visible():
