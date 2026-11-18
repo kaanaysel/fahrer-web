@@ -9704,7 +9704,10 @@ def admin_shiftbase_payroll_batch(batch_id):
             status, color = 'Uebertragung bestaetigt', '#e8f8ef'
         elif state == 'observed_ui':
             finished_count += 1
-            status, color = 'Im Mitarbeiterprofil gesehen', '#e8f8ef'
+            status, color = 'Im Mitarbeiterprofil gesehen; Mitarbeitersicht bitte pruefen', '#e8f8ef'
+        elif state == 'observed_ui_visibility_unverified':
+            unclear_count += 1
+            status, color = 'Datei im Profil gesehen – Mitarbeitersichtbarkeit UNBESTAETIGT. Vor weiteren Uploads pruefen', '#fff0ed'
         elif state:
             unclear_count += 1
             status, color = 'Ergebnis pruefen – nicht erneut senden', '#fff0ed'
@@ -10384,22 +10387,114 @@ def _sbpay_personal_files_action(page, timeout_s=9.0):
         'Mitarbeiter-Uebersicht nicht eindeutig gefunden. Kein Upload.')
 
 
-def _sbpay_is_exact_employee_files_url(url, user_id):
-    """Only a private employee's files tab; NEVER a global/company files page.
+def _sbpay_employee_file_stage(url, user_id):
+    """Allow only one employee's private-files page and its two known modals.
 
-    The live Shiftbase UI in November 2026 uses /employees/<id>/files.
-    A URL containing the ID in another parameter or route is not sufficient.
+    The current (Nov 2026) Shiftbase UI uses Angular auxiliary routes:
+      /employees/ID/files
+      /employees/ID/files(modal:employee-file-upload/ID)
+      /employees/ID/files(modal:employee-file-details/ID)
+    Both ID occurrences MUST equal the previously verified recipient. Never
+    accept company files or generic employee/search routes.
     """
-    parsed = _sbpay_urlparse(str(url))
+    from urllib.parse import unquote
     uid = str(user_id)
-    return bool(
-        re.fullmatch(r'[0-9]{1,20}', uid)
-        and parsed.scheme == 'https'
-        and (parsed.hostname or '').lower() == 'app.shiftbase.com'
-        and parsed.username is None and parsed.password is None
-        and (parsed.port is None or parsed.port == 443)
-        and re.fullmatch(r'/employees/' + re.escape(uid) + r'/files/?', parsed.path)
-    )
+    parsed = _sbpay_urlparse(str(url))
+    if (not re.fullmatch(r'[0-9]{1,20}', uid) or parsed.scheme != 'https' or
+        (parsed.hostname or '').lower() != 'app.shiftbase.com' or
+        parsed.username is not None or parsed.password is not None or
+        parsed.port not in (None, 443)):
+        return None
+    path = unquote(parsed.path)
+    base = '/employees/' + uid + '/files'
+    if path in (base, base + '/'):
+        return 'files'
+    for stage in ('upload', 'details'):
+        if path == base + '(modal:employee-file-' + stage + '/' + uid + ')':
+            return stage
+    return None
+
+
+def _sbpay_is_exact_employee_files_url(url, user_id):
+    """Strictly match the closed modal personal files page only."""
+    return _sbpay_employee_file_stage(url, user_id) == 'files'
+
+
+def _sbpay_wait_for_employee_file_stage(page, user_id, stage, timeout_ms=25000):
+    """Poll the page URL without relying on Playwright's URL predicate type.
+
+    Unexpected employee/company routes abort immediately; only the known
+    file/modal stages may appear while a Shiftbase SPA transitions.
+    """
+    from time import monotonic
+    deadline = monotonic() + timeout_ms / 1000
+    while monotonic() < deadline:
+        found = _sbpay_employee_file_stage(page.url, user_id)
+        if found == stage:
+            return
+        if found not in ('files', 'upload', 'details'):
+            raise ShiftbaseIntegrationError('Die persoenliche Mitarbeiterdatei-Seite wurde verlassen. Kein weiterer Schreibversuch.')
+        page.wait_for_timeout(200)
+    raise ShiftbaseIntegrationError('Shiftbase-Dialogschritt wurde nicht rechtzeitig angezeigt; Status pruefen.')
+
+
+def _sbpay_upload_dialog_scope(page, user_id, stage):
+    """Require the correct employee modal; never use another page's inputs.
+
+    A single accessible modal is preferred. With a custom SPA modal that does
+    not expose dialog semantics, only one matching input on a verified modal
+    route is allowed; ambiguous DOM controls always stop the operation.
+    """
+    if _sbpay_employee_file_stage(page.url, user_id) != stage:
+        raise ShiftbaseIntegrationError(
+            'Falscher Shiftbase-Mitarbeiter oder Dialogschritt. Kein Upload.')
+    dialogs = page.get_by_role('dialog').filter(visible=True)
+    try:
+        count = dialogs.count()
+    except Exception:
+        count = 0
+    if count > 1:
+        raise ShiftbaseIntegrationError('Mehrere Uploaddialoge sichtbar; kein Upload.')
+    return dialogs if count == 1 else page
+
+
+def _sbpay_detail_title_field(scope):
+    """Find the explicit Title field in the new document-details dialog."""
+    label = re.compile(r'^\s*(?:Titel|Title|Titel van bestand)\s*$', re.I)
+    return _sbpay_ui_strict_locator([
+        scope.get_by_role('textbox', name=label),
+        scope.get_by_label(label),
+        scope.locator('input[name="title"]'),
+        scope.locator('input[id="title"]'),
+    ], 'Titel in den Mitarbeiter-Dateianhaengen')
+
+
+def _sbpay_detail_save_button(scope):
+    """Save button has the same label as the first-stage Add action.
+
+    It is only selected after the *details* route is verified, and only when
+    there is one visible, enabled control in the modal. Never pick .last().
+    """
+    button_label = re.compile(
+        r'^\s*(?:Datei hinzuf(?:u|ü|ue)gen|Add file|Bestand toevoegen|Speichern|Save)\s*$', re.I)
+    button = _sbpay_unique_visible(scope.get_by_role('button', name=button_label))
+    if button is None:
+        # Some Shiftbase releases use a custom clickable link for their actions.
+        button = _sbpay_unique_visible(scope.get_by_role('link', name=button_label))
+    if button is None or not button.is_enabled():
+        raise ShiftbaseIntegrationError(
+            'Datei-hinzufuegen-Abschluss im Mitarbeiter-Dateidialog nicht eindeutig. Kein Speichern.')
+    return button
+
+
+def _sbpay_details_visibility_control(scope):
+    """Optional employee-visibility checkbox; an absent toggle is NOT proof.
+
+    The new Sep 2026 details UI may have no visibility setting. Never claim
+    employee access merely because the file appears in the admin file list.
+    """
+    return _sbpay_unique_visible(scope.get_by_role('checkbox', name=re.compile(
+        r'(?:F[uü]r Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)', re.I)))
 
 
 def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
@@ -10638,30 +10733,33 @@ def admin_shiftbase_payroll_ui_check():
                     raise
                 results.update(_sbpay_employee_files_ui_signals(page))
                 results['add_button_found'] = True
-                add.click()  # Opens a form only; no bytes, no POST, no Save.
-                if not _sbpay_is_exact_employee_files_url(page.url, uid):
-                    raise ShiftbaseIntegrationError('Dateien-Seite beim Dialogoeffnen verlassen. Kein Upload.')
+                add.click()  # Opens only stage 1: no PDF bytes or save operation.
+                if _sbpay_employee_file_stage(page.url, uid) not in ('upload', 'files'):
+                    raise ShiftbaseIntegrationError('Dateiauswahl hat die Mitarbeiterakte verlassen. Kein Upload.')
+                # Modern Shiftbase intentionally exposes title / save only AFTER
+                # file selection. This diagnostic NEVER selects any PDF.
                 try:
                     page.locator('input[type="file"]').first.wait_for(state='attached', timeout=6_000)
                 except Exception:
                     pass
-                dialog = _sbpay_unique_visible(page.get_by_role('dialog'))
-                scope = dialog if dialog is not None else page
+                modal_stage = _sbpay_employee_file_stage(page.url, uid)
+                scope = _sbpay_upload_dialog_scope(page, uid, modal_stage) if modal_stage == 'upload' else page
                 results['file_field_found'] = scope.locator('input[type="file"]').count() == 1
-                results['title_field_found'] = any(
-                    _sbpay_unique_visible(c) is not None for c in (
-                        scope.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
-                        scope.locator('input[name="title"]')))
-                results['employee_visibility_found'] = (_sbpay_unique_visible(
-                    scope.get_by_role('checkbox',name=re.compile(
-                        r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I))) is not None)
-                results['save_button_found'] = (_sbpay_unique_visible(
-                    scope.get_by_role('button',name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I))) is not None)
-                results['ok'] = all(results[k] for k in (
-                    'profile_url_verified','add_button_found','file_field_found',
-                    'title_field_found','employee_visibility_found','save_button_found'))
-                results['message'] = ('Uploadformular ohne PDF-Pruefung vorbereitet. KEIN Upload gestartet.'
-                                      if results['ok'] else 'Ein oder mehrere Formularfelder fehlen; KEIN Upload gestartet.')
+                results['stage'] = 'file_selection'
+                results['detail_fields_pending_selection'] = True
+                results['details_stage_verified'] = False
+                # These are deliberately false because no file was selected.
+                results['title_field_found'] = False
+                results['employee_visibility_found'] = False
+                results['save_button_found'] = False
+                results['ok'] = (results['profile_url_verified'] and
+                                 results['add_button_found'] and results['file_field_found'])
+                results['message'] = (
+                    'Persoenliche Dateiauswahl bereit. Titel/Sichtbarkeit/Speichern '
+                    'erscheinen erst nach Dateiauswahl und wurden NICHT geprueft. '
+                    'KEIN Upload gestartet.' if results['ok'] else
+                    'Dateifeld in der persoenlichen Dateiauswahl fehlt. Kein Upload.')
+
             finally:
                 browser.close()
     except ShiftbaseIntegrationError as exc:
@@ -10713,64 +10811,83 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
             # overwrite or duplicate a payslip for this month.
             if personal_files_area.get_by_text(title, exact=True).count():
                 raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits in den persoenlichen Mitarbeiterdateien sichtbar; vor neuem Versand pruefen.')
+            if len(content) > 5 * 1024 * 1024:
+                raise ShiftbaseIntegrationError('PDF ist groesser als das Shiftbase-Limit von 5 MB. Kein Upload.')
             add_button.click()
-            if not _sbpay_is_exact_employee_files_url(page.url, user_id):
-                raise ShiftbaseIntegrationError(
-                    'Die persoenliche Dateiablage wurde beim Oeffnen des Upload-Dialogs verlassen. Kein Upload.')
-            # Once opened, prefer the one visible modal as the only permitted
-            # upload scope. Never select a hidden global file input when the
-            # page has other upload controls.
             try:
-                page.get_by_role('dialog').first.wait_for(state='visible', timeout=4_000)
-            except Exception:
-                pass  # Some Shiftbase layouts use an inline form, not a dialog.
-            dialog = _sbpay_unique_visible(page.get_by_role('dialog'))
-            upload_scope = dialog if dialog is not None else page
+                _sbpay_wait_for_employee_file_stage(page, user_id, 'upload', timeout_ms=10000)
+            except ShiftbaseIntegrationError as exc:
+                raise ShiftbaseIntegrationError('Persoenliche Dateiauswahl nicht geoeffnet. Kein Upload.') from exc
+            upload_scope = _sbpay_upload_dialog_scope(page, user_id, 'upload')
             uploads = upload_scope.locator('input[type="file"]')
             try:
                 uploads.first.wait_for(state='attached', timeout=6_000)
             except Exception:
                 pass
             if uploads.count() != 1:
-                raise ShiftbaseIntegrationError('Der persoenliche Upload-Dialog enthaelt kein eindeutiges Dateifeld. Kein Upload.')
-            # An input change may send the file immediately. Establish the
-            # recipient-specific title and visibility BEFORE assigning bytes.
-            # If Shiftbase only exposes these controls after selecting a file,
-            # stop safely rather than risk a premature or invisible upload.
-            title_field = _sbpay_ui_strict_locator([
-                upload_scope.get_by_role('textbox', name=re.compile(r'^(Titel|Title)$',re.I)),
-                upload_scope.locator('input[name="title"]'),
-            ],'Dokumenttitel VOR Dateiauswahl')
-            title_field.fill(title)
-            visible = _sbpay_ui_strict_locator([
-                upload_scope.get_by_role('checkbox',name=re.compile(r'(Für Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)',re.I)),
-            ], 'Sichtbarkeit fuer Mitarbeiter VOR Dateiauswahl')
-            if not visible.is_checked():
-                visible.check()
-            if not visible.is_checked() or title_field.input_value() != title:
-                raise ShiftbaseIntegrationError('Mitarbeitersichtbarkeit oder Titel nicht vor Dateiauswahl festlegbar.')
-            # Durable at-most-once state before the first possible remote write.
+                raise ShiftbaseIntegrationError('Dateifeld in der persoenlichen Dateiauswahl nicht eindeutig. Kein Upload.')
+            # The new Shiftbase flow presents Title/Save only after selection.
+            # Selection MAY already transmit PDF bytes. Persist the at-most-once
+            # claim BEFORE selecting a file. An error thereafter is 'unknown'.
             if before_submit is None:
-                raise ShiftbaseIntegrationError('Vor dem Upload fehlt die persistente Schreibsperre.')
-            before_submit()       # durable 'sending' before ANY possible browser write
+                raise ShiftbaseIntegrationError('Vor der Dateiauswahl fehlt die persistente Schreibsperre.')
+            if not name.first.is_visible() or _sbpay_employee_file_stage(page.url, user_id) != 'upload':
+                raise ShiftbaseIntegrationError('Empfaenger vor Dateiauswahl nicht mehr eindeutig. Kein Upload.')
+            _sbpay_assert_shiftbase_recipient(user_id, employee_name)
+            before_submit()
             uploads.set_input_files({'name':file_name, 'mimeType':'application/pdf','buffer':content})
-            if not visible.is_checked() or title_field.input_value() != title:
-                raise ShiftbaseIntegrationError('Uploadstatus unklar: Titel/Sichtbarkeit nach Dateiauswahl veraendert.')
-            save_button = _sbpay_ui_strict_locator([
-                upload_scope.get_by_role('button', name=re.compile(r'^(Speichern|Save|Hochladen|Upload)$',re.I)),
-            ],'Speichern im Mitarbeiterprofil')
-            save_button.click()   # Could be second step after automatic file upload
             try:
-                personal_files_area.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
+                _sbpay_wait_for_employee_file_stage(page, user_id, 'details', timeout_ms=25000)
+            except ShiftbaseIntegrationError as exc:
+                raise ShiftbaseIntegrationError(
+                    'Dateiauswahl erfolgt; Dokument-Detaildialog nicht bestaetigt. '
+                    'Uploadstatus unklar, nicht erneut senden.') from exc
+            detail_scope = _sbpay_upload_dialog_scope(page, user_id, 'details')
+            # Explicitly identify the new details view from the user's UI.
+            try:
+                detail_scope.get_by_text(re.compile(r'^Dateianh[aä]nge$|^File attachments$', re.I)).first.wait_for(
+                    state='visible', timeout=10_000)
             except Exception as exc:
-                raise ShiftbaseIntegrationError('Upload-Ergebnis unklar: Dokumenttitel danach nicht sichtbar. Nicht erneut senden.') from exc
-            if not _sbpay_is_exact_employee_files_url(page.url, user_id):
-                raise ShiftbaseIntegrationError('Nach Upload befindet sich der Browser nicht mehr im verifizierten Mitarbeiterprofil.')
-            if name.count() < 1 or not name.first.is_visible():
-                raise ShiftbaseIntegrationError('Nach Upload kann das Mitarbeiterprofil nicht erneut bestaetigt werden.')
-            # No provider file-ID or verified REST GET is available. Explicit
-            # UI-only state is used by the caller. Never treat as GET-confirmed.
-            return 'ui:'+_sbpay_uuid.uuid4().hex
+                raise ShiftbaseIntegrationError(
+                    'Dateianhaenge nicht eindeutig sichtbar. Uploadstatus unklar.') from exc
+            title_field = _sbpay_detail_title_field(detail_scope)
+            title_field.fill(title)
+            if title_field.input_value().strip() != title:
+                raise ShiftbaseIntegrationError('Dokumenttitel konnte nicht eindeutig gesetzt werden. Uploadstatus unklar.')
+            visibility = _sbpay_details_visibility_control(detail_scope)
+            visibility_control_verified = visibility is not None
+            if visibility is not None:
+                if not visibility.is_checked():
+                    visibility.check()
+                if not visibility.is_checked():
+                    raise ShiftbaseIntegrationError('Mitarbeitersichtbarkeit konnte nicht aktiviert werden. Uploadstatus unklar.')
+            # Screenshot of current UI has no checkbox: preserve this fact and
+            # require a manual employee-view verification after saving one file.
+            save_button = _sbpay_detail_save_button(detail_scope)
+            if (_sbpay_employee_file_stage(page.url, user_id) != 'details' or
+                    not name.first.is_visible() or not save_button.is_enabled()):
+                raise ShiftbaseIntegrationError('Empfaenger oder Speichern-Dialog nicht mehr eindeutig. Nicht speichern.')
+            _sbpay_assert_shiftbase_recipient(user_id, employee_name)
+            save_button.click()
+            try:
+                _sbpay_wait_for_employee_file_stage(page, user_id, 'files', timeout_ms=25000)
+            except ShiftbaseIntegrationError as exc:
+                raise ShiftbaseIntegrationError(
+                    'Speichern wurde ausgeloest; Rueckkehr zur persoenlichen Dateiablage unklar. '
+                    'Nicht erneut senden.') from exc
+            if not name.first.is_visible():
+                raise ShiftbaseIntegrationError('Mitarbeitername nach Speichern nicht mehr sichtbar. Nicht erneut senden.')
+            try:
+                page.get_by_text(title, exact=True).first.wait_for(state='visible',timeout=20_000)
+            except Exception as exc:
+                raise ShiftbaseIntegrationError(
+                    'Speichern ausgeloest, Dokumenttitel nicht im persoenlichen Profil sichtbar. '
+                    'Nicht erneut senden.') from exc
+            # This is NOT a provider-confirmed document ID. In the current UI,
+            # employee visibility cannot be proven when no checkbox is shown.
+            return {'document_id':'ui:'+_sbpay_uuid.uuid4().hex,
+                    'visibility_control_verified':visibility_control_verified}
+
         finally:
             try:
                 browser.close()
@@ -10828,7 +10945,7 @@ send.addEventListener('click',async()=>{
     failed=true;break;
    }
    if(result.state!=='confirmed'&&result.state!=='observed_ui'){
-    info.textContent='Gestoppt bei PDF '+number+': Status '+(result.state||'unbekannt')+
+    info.textContent='Gestoppt bei PDF '+number+': Status '+(result.state==='observed_ui_visibility_unverified'?'Datei im Profil gesehen, Mitarbeitersichtbarkeit nicht bestaetigt – manuell pruefen':(result.state||'unbekannt'))+
         '. Bei unklarem Ergebnis nicht erneut senden!';
     failed=true;break;
    }
@@ -10952,9 +11069,11 @@ def admin_shiftbase_payroll_upload_step(batch_id):
                     wconn.commit()
                     if getattr(changed,'rowcount',None) != 1:
                         raise ShiftbaseIntegrationError('Schreibsperre nicht mehr gueltig.')
-            document_id = _sbpay_browser_upload_once(contract,batch,row,content,
-                                                       before_submit=mark_before_browser_save)
-            state='observed_ui'
+            uploaded = _sbpay_browser_upload_once(contract,batch,row,content,
+                                                    before_submit=mark_before_browser_save)
+            document_id = uploaded['document_id']
+            state = ('observed_ui' if uploaded['visibility_control_verified']
+                     else 'observed_ui_visibility_unverified')
         else:
             document_id = _sbpay_upload_once(contract,batch,row,content)
             state='confirmed'
