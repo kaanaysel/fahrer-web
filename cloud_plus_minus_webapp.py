@@ -9424,7 +9424,8 @@ def admin_shiftbase_payroll():
     token = str(_sbpay_escape(_sb_csrf_token()))
     h = ['<div class="card" style="max-width:1150px"><h2>Lohnzettel in Shiftbase hochladen</h2>',
          '<p><a class="btn small" href="'+url_for('admin_shiftbase_mapping_audit')+'">Shiftbase-IDs live prüfen</a> '
-         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_browser_check')+'" target="_blank" rel="noopener noreferrer">Chromium-Diagnose (kein Upload)</a></p>',
+         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_browser_check')+'" target="_blank" rel="noopener noreferrer">Chromium-Diagnose (kein Upload)</a> '
+         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_neutral_test')+'">Neutralen Browserupload testen</a></p>',
          '<p>DATEV-Gesamt-PDF auswählen. Die Cloud trennt die Mitarbeiterabrechnungen mit '
          '<b>Fortschrittsanzeige</b> in mehrere kurze Schritte. Anschließend kannst du '
          'alle eindeutig zugeordneten Fahrer oder einzelne Fahrer zum Versand auswählen.</p>',
@@ -10983,7 +10984,8 @@ def admin_shiftbase_payroll_ui_check():
     return _sbpay_no_cache(jsonify(results))
 
 
-def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None):
+def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None,
+                               document_title=None, document_filename=None):
     """Exactly one page-scope employee upload. No retries and no hidden API calls.
 
     Does not claim GET/API confirmation: result means that the file is visible
@@ -10998,9 +11000,17 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
     except ImportError as exc:
         raise ShiftbaseIntegrationError('Playwright fehlt. Bitte Render-Build um Chromium erweitern.') from exc
     stage = 'BROWSER_START'
-    title = f'Lohnabrechnung {int(batch["month"]):02d}/{int(batch["year"])}'
+    title = (document_title if document_title is not None else
+             f'Lohnabrechnung {int(batch["month"]):02d}/{int(batch["year"])}')
+    # A neutral, explicitly authorized browser self-test may override the title.
+    # The production payroll path still uses the fixed month/year title.
+    if not re.fullmatch(r'[A-Za-z0-9ÄÖÜäöüß ./_-]{1,100}', title):
+        raise ShiftbaseIntegrationError('Ungueltiger Dokumenttitel. Kein Upload.')
     # The employee's name, amount and personnel number never appear in the remote filename.
-    file_name = f'Lohnabrechnung_{int(batch["year"])}_{int(batch["month"]):02d}.pdf'
+    file_name = (document_filename if document_filename is not None else
+                 f'Lohnabrechnung_{int(batch["year"])}_{int(batch["month"]):02d}.pdf')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,90}\.pdf', file_name):
+        raise ShiftbaseIntegrationError('Ungueltiger Dateiname. Kein Upload.')
     with sync_playwright() as engine:
         try:
             browser = engine.chromium.launch(headless=True, args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -11135,6 +11145,245 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
             except Exception:
                 pass
 
+
+
+# -----------------------------------------------------------------------------
+# EXPLICIT NEUTRAL PLAYWRIGHT UPLOAD TEST (NO DATEV DATA)
+# This is a diagnostic inside the EXISTING Flask app, not a second application.
+# Uses the same tested two-stage browser routine as actual payroll deliveries.
+# There is never an automatic retry, even for a synthetic test document.
+# -----------------------------------------------------------------------------
+def _sbpay_neutral_test_schema(conn):
+    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_payroll_neutral_tests (
+        shiftbase_user_id TEXT PRIMARY KEY,
+        attempt_id TEXT NOT NULL UNIQUE,
+        employee_name TEXT NOT NULL,
+        title TEXT NOT NULL,
+        state TEXT NOT NULL,
+        diagnostic TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL)''')
+
+
+def _sbpay_neutral_test_pdf():
+    """Always generate new anonymous data; never read or reuse a real payslip."""
+    from reportlab.pdfgen import canvas as _Canvas
+    out = io.BytesIO()
+    c = _Canvas.Canvas(out, pagesize=A4)
+    c.setTitle('Shiftbase Browser Test - KEINE LOHNABRECHNUNG')
+    c.setFont('Helvetica-Bold', 21)
+    c.drawString(48, 755, 'SHIFTBASE UPLOAD TEST')
+    c.setFont('Helvetica-Bold', 15)
+    c.drawString(48, 715, 'KEINE LOHNABRECHNUNG - KEINE PERSONENDATEN')
+    c.setFont('Helvetica', 12)
+    c.drawString(48, 665, 'Technischer Test des Browser-Uploads der Plus/Minus Cloud.')
+    c.drawString(48, 645, 'Dieses Dokument enthaelt keine Mitarbeiterdaten und keine Lohnwerte.')
+    c.drawString(48, 625, 'Nach erfolgreicher Kontrolle manuell aus Shiftbase entfernen.')
+    c.showPage()
+    c.save()
+    return out.getvalue()
+
+
+def _sbpay_neutral_test_page():
+    from collections import Counter
+    with db_conn() as conn:
+        _sbpay_neutral_test_schema(conn)
+        drivers = _sbpay_drivers(conn)
+        attempts = [dict(x) for x in conn.execute(
+            'SELECT * FROM shiftbase_payroll_neutral_tests ORDER BY started_at DESC').fetchall()]
+    id_counts = Counter(str(d['shiftbase_user_id']) for d in drivers)
+    name_counts = Counter(_sbpay_norm(d['name']) for d in drivers)
+    eligible = [d for d in drivers if re.fullmatch(r'[0-9]{1,20}', str(d['shiftbase_user_id']))
+                and id_counts[str(d['shiftbase_user_id'])] == 1
+                and name_counts[_sbpay_norm(d['name'])] == 1]
+    token = str(_sbpay_escape(_sb_csrf_token()))
+    ready = _sbpay_browser_contract() is not None
+    h = ['<div class="card" style="max-width:970px">'
+         '<h2>Neutraler Test des Shiftbase-Browseruploads</h2>'
+         '<p><b>Keine DATEV-Abrechnung wird verwendet.</b> Die Anwendung erzeugt '
+         'eine anonyme einseitige Test-PDF. Dieser Test verwendet denselben '
+         'persoenlichen Shiftbase-Dateien-Dialog wie der Lohnzettelversand, '
+         'kann aber eine echte Testdatei in die Mitarbeiterakte uebertragen.</p>'
+         '<p style="color:#b42318;font-weight:800">Nur dein eigenes oder '
+         'ausdruecklich freigegebenes Test-Mitarbeiterprofil auswaehlen. '
+         'Die Datei kann fuer den Mitarbeiter sichtbar werden. '
+         'Nach Erfolg in der richtigen Akte kontrollieren und manuell loeschen.</p>']
+    if not ready:
+        h.append('<div class="flash err">Browser-Sitzung nicht eingerichtet. '
+                 'Es kann kein Testversand stattfinden.</div>')
+    h.extend(['<form method="post" style="max-width:620px">'
+              '<input type="hidden" name="csrf_token" value="'+token+'">'
+              '<label>Freigegebenes persoenliches Testprofil'
+              '<select name="shiftbase_user_id" required><option value="">Bitte waehlen</option>'])
+    for d in eligible:
+        uid = str(_sbpay_escape(d['shiftbase_user_id']))
+        display = str(_sbpay_escape(d['name']))
+        h.append('<option value="'+uid+'">'+display+' (Shiftbase-ID '+uid+')</option>')
+    h.extend(['</select></label>',
+              '<label style="margin:12px 0"><input type="checkbox" '
+              'name="explicit_test_consent" value="yes" required style="width:auto"> '
+              'Ich habe dieses Profil fuer den neutralen Uploadtest freigegeben; '
+              'ich weiss, dass die Datei bei Shiftbase erscheinen kann.</label>',
+              '<button type="submit" class="primary" style="width:auto"'
+              +('' if ready else ' disabled')
+              +'>Eine neutrale Test-PDF automatisch hochladen</button></form>',
+              '<p><a href="'+url_for('admin_shiftbase_payroll')+'">Zur Lohnzettel-Uebersicht</a></p></div>'])
+    h.append('<div class="card" style="max-width:970px"><h3>Testversuche</h3>')
+    if not attempts:
+        h.append('<p>Noch kein neutraler Browserupload versucht.</p>')
+    for a in attempts:
+        uid = str(a['shiftbase_user_id'])
+        title = str(_sbpay_escape(a['title']))
+        state = str(_sbpay_escape(a['state']))
+        diagnostic = str(_sbpay_escape(a['diagnostic'] or ''))
+        h.append('<div style="border-top:1px solid #ddd;padding:12px 0">'
+                 '<p><b>'+str(_sbpay_escape(a['employee_name']))+'</b>, '
+                 'Shiftbase-ID '+str(_sbpay_escape(uid))+'</p>'
+                 '<p>Titel: <b>'+title+'</b></p><p>Status: <b>'+state+'</b></p>')
+        if diagnostic:
+            h.append('<p>Diagnose: '+diagnostic+'</p>')
+        h.append('<p><a target="_blank" rel="noopener noreferrer" '
+                 'href="https://app.shiftbase.com/employees/'+uid+'/files">'
+                 'Persoenliche Shiftbase-Dateien kontrollieren</a></p>')
+        if a['state'] == 'unknown':
+            h.append('<p style="color:#b42318">Ergebnis unklar. Nicht erneut senden. '
+                     'Erst in Shiftbase kontrollieren, ob die Testdatei dort liegt.</p>'
+                     '<details><summary>Unklaren neutralen Test nach Aktenkontrolle freigeben</summary>'
+                     '<form method="post" action="'+url_for('admin_shiftbase_payroll_neutral_reset')+'">'
+                     '<input type="hidden" name="csrf_token" value="'+token+'">'
+                     '<input type="hidden" name="shiftbase_user_id" value="'+uid+'">'
+                     '<label><input type="checkbox" required name="checked_personal_files" '
+                     'value="yes" style="width:auto"> Persoenliche Akte kontrolliert: '
+                     'Diese Testdatei ist NICHT vorhanden.</label>'
+                     '<label>Zur Bestaetigung exakt eingeben: TEST NICHT VORHANDEN '+uid+
+                     '<input name="confirmation" required autocomplete="off"></label>'
+                     '<button type="submit">Nur die Testsperre aufheben, kein Upload</button>'
+                     '</form></details>')
+        elif a['state'].startswith('observed_'):
+            h.append('<p style="color:#b54708">Datei im persoenlichen Profil gesehen; '
+                     'Mitarbeitersichtbarkeit separat pruefen und Testdatei danach loeschen. '
+                     'Dies ist kein automatisch bestaetigter Zugriff des Mitarbeiters.</p>')
+        elif a['state'] in ('sending', 'preparing'):
+            h.append('<p>Versuch laeuft oder wurde unterbrochen. '
+                     'Nicht automatisch erneut versuchen.</p>')
+        h.append('</div>')
+    h.append('</div>')
+    return _sbpay_no_cache(make_response(base_page(
+        'Shiftbase – neutraler Browsertest', ''.join(h), 'shiftbase_payroll')))
+
+
+@app.route('/admin/shiftbase/lohnzettel/neutraler-test', methods=['GET', 'POST'])
+@admin_login_required
+def admin_shiftbase_payroll_neutral_test():
+    if request.method != 'POST':
+        return _sbpay_neutral_test_page()
+    _sbpay_token_check()
+    if request.form.get('explicit_test_consent') != 'yes':
+        abort(400, 'Ausdrueckliche Testfreigabe erforderlich.')
+    uid = str(request.form.get('shiftbase_user_id') or '').strip()
+    if not re.fullmatch(r'[0-9]{1,20}', uid):
+        abort(400, 'Ungueltige Mitarbeiter-ID.')
+    contract = _sbpay_browser_contract()
+    if contract is None:
+        abort(503, 'Kein gueltiger Browser-Sitzungsvertrag.')
+    with db_conn() as conn:
+        drivers = _sbpay_drivers(conn)
+    matches = [d for d in drivers if str(d['shiftbase_user_id']) == uid]
+    if (len(matches) != 1 or sum(1 for d in drivers
+          if _sbpay_norm(d['name']) == _sbpay_norm(matches[0]['name'])) != 1):
+        abort(409, 'Nur eindeutig gemappte Mitarbeiter duerfen Testempfaenger sein.')
+    name = str(matches[0]['name'])
+    # The shared browser routine performs a fresh live ID+name lookup immediately
+    # before its first possible remote write. Do not request the full staff API twice.
+    attempt_id = _sbpay_uuid.uuid4().hex
+    test_title = 'Shiftbase TEST keine Lohnabrechnung ' + attempt_id[:12]
+    file_name = 'SHIFTBASE_TEST_OHNE_PERSONENDATEN_' + attempt_id[:12] + '.pdf'
+    with db_conn() as conn:
+        _sbpay_neutral_test_schema(conn)
+        conn.execute('''INSERT INTO shiftbase_payroll_neutral_tests
+             (shiftbase_user_id, attempt_id, employee_name, title, state, started_at, updated_at)
+             VALUES(?,?,?,?,?,?,?) ON CONFLICT (shiftbase_user_id) DO NOTHING''',
+             (uid, attempt_id, name, test_title, 'preparing', now_iso(), now_iso()))
+        conn.commit()
+        owned = conn.execute('''SELECT attempt_id FROM shiftbase_payroll_neutral_tests
+                                  WHERE shiftbase_user_id=?''', (uid,)).fetchone()
+        if not owned or owned['attempt_id'] != attempt_id:
+            abort(409, 'Es gibt bereits einen Testversuch fuer diesen Mitarbeiter. '
+                  'Zuerst persoenliche Dateien und den bisherigen Status pruefen.')
+    state = 'unknown'
+    diagnostic = ''
+    try:
+        def mark_before_file_selection():
+            with db_conn() as conn:
+                changed = conn.execute('''UPDATE shiftbase_payroll_neutral_tests
+                  SET state='sending',updated_at=? WHERE shiftbase_user_id=? AND
+                  attempt_id=? AND state='preparing' ''', (now_iso(), uid, attempt_id))
+                conn.commit()
+                if getattr(changed, 'rowcount', None) != 1:
+                    raise ShiftbaseIntegrationError('Neutrale Upload-Schreibsperre verloren.')
+        data = _sbpay_neutral_test_pdf()
+        result = _sbpay_browser_upload_once(
+            contract, {'month':3,'year':2026},
+            {'shiftbase_user_id':uid,'employee_name':name}, data,
+            before_submit=mark_before_file_selection,
+            document_title=test_title, document_filename=file_name)
+        state = ('observed_ui' if result['visibility_control_verified'] else
+                 'observed_ui_visibility_unverified')
+        diagnostic = ('Testdatei in persoenlichen Mitarbeiterdateien gesehen. '
+                      'Mitarbeitersichtbarkeit gesondert pruefen.')
+    except Exception as exc:
+        if isinstance(exc, ShiftbaseIntegrationError):
+            diagnostic = str(exc)[:240]
+        else:
+            diagnostic = 'Unbekannte Browseraktion. Render-Logs auf SBPAY_UPLOAD_ABORT pruefen.'
+        app.logger.warning('SBPAY_NEUTRAL_TEST_ABORT type=%s', type(exc).__name__)
+        with db_conn() as conn:
+            current = conn.execute('''SELECT state FROM shiftbase_payroll_neutral_tests
+                    WHERE shiftbase_user_id=? AND attempt_id=?''', (uid, attempt_id)).fetchone()
+            if current and current['state'] == 'preparing':
+                conn.execute('''DELETE FROM shiftbase_payroll_neutral_tests
+                  WHERE shiftbase_user_id=? AND attempt_id=? AND state='preparing' ''',
+                  (uid, attempt_id))
+                conn.commit()
+                # Browser never got PDF bytes; safe to retry after fixing preflight.
+                flash('Neutrale Browser-Vorpruefung abgebrochen: '+diagnostic+
+                      '. Keine PDF ausgewaehlt.', 'err')
+                return redirect(url_for('admin_shiftbase_payroll_neutral_test'))
+        state = 'unknown'
+    with db_conn() as conn:
+        conn.execute('''UPDATE shiftbase_payroll_neutral_tests
+           SET state=?,diagnostic=?,updated_at=?
+           WHERE shiftbase_user_id=? AND attempt_id=?''',
+           (state,diagnostic,now_iso(),uid,attempt_id))
+        conn.commit()
+    return redirect(url_for('admin_shiftbase_payroll_neutral_test'))
+
+
+@app.post('/admin/shiftbase/lohnzettel/neutraler-test/freigeben')
+@admin_login_required
+def admin_shiftbase_payroll_neutral_reset():
+    """No upload. Explicit manual release only when neutral test file is absent."""
+    _sbpay_token_check()
+    uid = (request.form.get('shiftbase_user_id') or '').strip()
+    if (not re.fullmatch(r'[0-9]{1,20}', uid) or
+            request.form.get('checked_personal_files') != 'yes' or
+            not request.form.get('confirmation', '').strip()):
+        abort(400, 'Testdatei muss in Shiftbase nachweislich fehlen.')
+    with db_conn() as conn:
+        _sbpay_neutral_test_schema(conn)
+        test = conn.execute('SELECT title FROM shiftbase_payroll_neutral_tests '
+                            'WHERE shiftbase_user_id=? AND state=?',
+                            (uid, 'unknown')).fetchone()
+        if not test or request.form.get('confirmation', '').strip() != (
+                'TEST NICHT VORHANDEN '+uid+' '+str(test['title'])):
+            abort(400, 'Der exakte Testtitel muss nach der Aktenkontrolle bestaetigt werden.')
+        removed = conn.execute('''DELETE FROM shiftbase_payroll_neutral_tests
+            WHERE shiftbase_user_id=? AND state='unknown' ''',(uid,))
+        conn.commit()
+        if getattr(removed,'rowcount',0) != 1:
+            abort(409, 'Keine ungeklaerte Testsperre fuer diese ID gefunden.')
+    flash('Nur die neutrale Testsperre geloescht. Kein Upload gestartet.', 'ok')
+    return redirect(url_for('admin_shiftbase_payroll_neutral_test'))
 
 
 def _sbpay_simple_send_script(batch_id, csrf_token):
