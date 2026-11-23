@@ -8914,28 +8914,32 @@ def _sbpay_norm(name):
 
 
 def _sbpay_shiftbase_name_key(display_name):
-    """Compare a *Shiftbase* display name with the unnumbered Cloud/PDF name.
+    """Normalize a real Shiftbase profile display name, not its immutable ID.
 
-    Some Shiftbase profiles display an administrative two-digit label before
-    the actual name (e.g. '04 Claudia Schmäler'). This label is NOT a user ID,
-    personnel number or position-based association. Strip it only when it is a
-    separate 1- or 2-digit prefix followed by an otherwise plausible two-part
-    name. Identity still requires the exact real Shiftbase API user ID and a
-    unique name on both sides; collisions are always blocked.
+    Shiftbase can add an administrative *display-only* prefix in the users API,
+    e.g. '04 Claudia Schmäler' or 'A Manuela Heling'. It must be a separate
+    token followed by at least two name tokens. Only the observed 'A' letter
+    is accepted (not arbitrary initials such as 'J' in 'J R Smith'). Never
+    extract a user ID from this prefix or accept a similar name as identity.
+    The caller must still verify the exact remote user ID and uniqueness.
     """
     raw = ' '.join(str(display_name or '').split())
-    prefixed = re.fullmatch(r'[0-9]{1,2}\s+(.+)', raw)
+    prefixed = re.fullmatch(r'(?:[0-9]{1,2}|A)\s+(.+)', raw)
     if prefixed and len(prefixed.group(1).split()) >= 2:
         raw = prefixed.group(1)
     return _sbpay_norm(raw)
 
 
 def _sbpay_profile_name_pattern(cloud_name):
-    """The visible Shiftbase profile can show the same display-only prefix."""
+    """Match a verified person's display name within the exact personal files URL.
+
+    The optional Shiftbase UI label ('A ' / one or two digits) is permitted,
+    but cannot authorize a different name or a different employee ID.
+    """
     value = ' '.join(str(cloud_name or '').split())
     if not value or len(value) > 100:
         raise ShiftbaseIntegrationError('Ungueltiger Cloud-Mitarbeitername. Kein Upload.')
-    return re.compile(r'^\s*(?:[0-9]{1,2}\s+)?' + re.escape(value) + r'\s*$', re.I)
+    return re.compile(r'^\s*(?:(?:[0-9]{1,2}|A)\s+)?' + re.escape(value) + r'\s*$', re.I)
 
 
 def _sbpay_period(text):
@@ -9109,6 +9113,12 @@ def _sbpay_name_variant_plausible(pdf_name, other_name):
     if len(pdf) < 2 or len(other) < 2:
         return False
     if pdf == other:
+        return True
+    # Extra or missing MIDDLE given names are a common Shiftbase/DATEV
+    # transcription difference. A manually selected candidate may be reviewed
+    # when the FIRST and LAST tokens agree, regardless of the middle tokens.
+    # This does not create a mapping; ID/name uniqueness is checked separately.
+    if len(pdf) >= 2 and len(other) >= 2 and pdf[0] == other[0] and pdf[-1] == other[-1]:
         return True
     # In some payroll exports a two-token name is printed in reversed order.
     # This is useful as a *candidate*, never as standalone identity proof.
