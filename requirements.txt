@@ -9,3 +9,6 @@ psycopg2-binary
 pypdf==5.9.0
 # MUSS der offiziellen Playwright-Docker-Image-Version exakt entsprechen.
 playwright==1.57.0
+
+# Verschluesselte Speicherung der Shiftbase-Browsersitzung in der Cloud.
+cryptography>=44,<50
