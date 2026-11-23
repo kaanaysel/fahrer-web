@@ -9120,7 +9120,8 @@ def _sbpay_name_variant_plausible(pdf_name, other_name):
     first_a, first_b = pdf[0], other[0]
     if min(len(first_a),len(first_b)) >= 4 and (
             first_a.startswith(first_b) or first_b.startswith(first_a)):
-        return any(len(t) >= 4 for t in (set(pdf[1:]) & set(other[1:])))
+        if any(len(t) >= 4 for t in (set(pdf[1:]) & set(other[1:]))):
+            return True
     # Known transcription/transliteration variants such as
     # "Sabahuddin Ahmed" / "Sabadin Ahmed" have the SAME full surname,
     # substantially similar long first names, and the same initial prefix.
@@ -9131,6 +9132,25 @@ def _sbpay_name_variant_plausible(pdf_name, other_name):
             and first_a[:3] == first_b[:3]
             and SequenceMatcher(None, first_a, first_b).ratio() >= 0.82):
         return True
+    # In an EXPLICIT administrator selection only, also suggest/accept a
+    # single-letter surname transcription variant if the first names agree.
+    # This is NOT an ID matcher and cannot authorize a send by itself:
+    # the calling code still verifies one real Shiftbase user ID, no other
+    # plausible profile, no duplicate Cloud/PDF mapping, and then stores a
+    # reviewed immutable personal-number/name/ID alias.
+    if len(pdf) == len(other) == 2 and first_a == first_b:
+        a, b = pdf[1], other[1]
+        if len(a) >= 5 and len(b) >= 5 and a[:2] == b[:2] and abs(len(a)-len(b)) <= 1:
+            # Edit distance at most one (one replacement, insertion or deletion).
+            if a == b:
+                return True
+            if len(a) == len(b) and sum(x != y for x, y in zip(a, b)) == 1:
+                return True
+            if len(a) != len(b):
+                short, long = sorted((a, b), key=len)
+                for j in range(len(long)):
+                    if long[:j] + long[j+1:] == short:
+                        return True
     return False
 
 
@@ -10707,9 +10727,16 @@ def admin_shiftbase_payroll_assign(batch_id, page_no):
             raise ShiftbaseIntegrationError('Shiftbase-ID/Name nicht live eindeutig bestaetigt.')
         remote_display=matches[0]
         if not _sbpay_name_variant_plausible(driver['name'], remote_display):
+            # Return ONLY to the logged-in admin; do not log employee identities.
+            # The previously generic message hid the actual Shiftbase name,
+            # making a wrong mapping impossible to diagnose in the UI.
             raise ShiftbaseIntegrationError(
-                'Cloud-Name und echter Shiftbase-Profilname weichen zu stark voneinander ab. '
-                'Bitte das Profil und die gespeicherte ID pruefen; keine Zuordnung gespeichert.')
+                'Shiftbase meldet fuer ID ' + uid + ' den Profilnamen "' +
+                remote_display[:100] + '"; Cloud-Name: "' +
+                str(driver['name'])[:100] + '". Die beiden Namen sind nicht '
+                'eindeutig als dieselbe Person bestaetigt. Bitte das Profil '
+                'unter app.shiftbase.com/employees/' + uid + '/files pruefen '
+                'und gegebenenfalls die gespeicherte ID korrigieren. Kein Upload.')
         # A similar spelling is never sufficient when the live directory has
         # *another* plausible person. Even an explicit manual choice is blocked
         # until this ambiguity has been resolved outside the payroll importer.
