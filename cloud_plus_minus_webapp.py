@@ -9108,8 +9108,21 @@ def _sbpay_name_variant_plausible(pdf_name, other_name):
     Names are never used to invent IDs or to choose a recipient automatically.
     """
     from difflib import SequenceMatcher
-    pdf = _sbpay_norm(pdf_name).split()
-    other = _sbpay_shiftbase_name_key(other_name).split()
+
+    def strip_cloud_only_label(value):
+        # A *known* non-name suffix in the Cloud employee display field,
+        # e.g. 'Gökhan Can Begleitperson!!', is not part of the person's name.
+        # This is used ONLY when proposing/reviewing a named match, never to
+        # derive an employee ID, identify the DATEV recipient, or skip the
+        # remote API identity/uniqueness checks before any upload.
+        raw = ' '.join(str(value or '').split())
+        marked = re.fullmatch(r'(.+?)\s+Begleitperson\s*!{1,3}\s*', raw, re.I)
+        if marked and len(marked.group(1).split()) >= 2:
+            return marked.group(1)
+        return raw
+
+    pdf = _sbpay_norm(strip_cloud_only_label(pdf_name)).split()
+    other = _sbpay_shiftbase_name_key(strip_cloud_only_label(other_name)).split()
     if len(pdf) < 2 or len(other) < 2:
         return False
     if pdf == other:
