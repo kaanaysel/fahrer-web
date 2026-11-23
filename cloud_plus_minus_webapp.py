@@ -9644,7 +9644,8 @@ def admin_shiftbase_payroll():
     h = ['<div class="card" style="max-width:1150px"><h2>Lohnzettel in Shiftbase hochladen</h2>',
          '<p><a class="btn small" href="'+url_for('admin_shiftbase_mapping_audit')+'">Shiftbase-IDs live prüfen</a> '
          '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_browser_check')+'" target="_blank" rel="noopener noreferrer">Chromium-Diagnose (kein Upload)</a> '
-         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_neutral_test')+'">Neutralen Browserupload testen</a></p>',
+         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_neutral_test')+'">Neutralen Browserupload testen</a> '
+         '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_session')+'">Shiftbase verbinden / Sitzung erneuern</a></p>',
          '<p>DATEV-Gesamt-PDF auswählen. Vorangestellte DATEV-Sozialversicherungsmeldungen '
          'werden erkannt und separat gezählt, aber <b>nicht</b> als Lohnabrechnungen versendet. '
          'Die Cloud trennt die Mitarbeiterabrechnungen mit '
@@ -10033,8 +10034,28 @@ def admin_shiftbase_payroll_batch(batch_id):
                  'Es wird noch nichts gesendet.</div>')
     if not can_upload:
         h.append('<div class="flash err"><b>Shiftbase-Upload noch nicht einsatzbereit.</b> '
-                 'Bitte die gueltige Browser-Sitzung und Playwright/Chromium auf Render einrichten. '
+                 'Bitte die Browser-Sitzung in der Cloud erneuern; bei Chromium-Fehlern die Browserdiagnose pruefen. '
                  'Die Einzel-PDFs koennen geprueft werden; es wird nichts gesendet.</div>')
+    session_missing = (_sbpay_browser_contract() is None and not can_upload)
+    session_url=url_for('admin_shiftbase_payroll_session',batch_id=batch_id)
+    h.append('<p><a class="btn small" href="'+session_url+'">Shiftbase verbinden / Sitzung erneuern</a></p>')
+    h.append('<section id="sbpay-session-renew" role="status" aria-live="polite" '
+             'style="border:1px solid #e8b86c;border-radius:12px;padding:14px;margin:12px 0;background:#fff7e8"'
+             + ('' if session_missing else ' hidden') + '>'
+             '<b>Shiftbase-Sitzung erneuern</b><p id="sbpay-session-message">'
+             'Die gespeicherte Browsersitzung ist nicht verfuegbar. Keine automatische Wiederholung.</p>'
+             '<p>Melde dich im vorhandenen Windows-Exportprogramm direkt bei Shiftbase an '
+             'und fuege den neuen Export in die Cloud ein. Kein Render-Aufruf erforderlich. '
+             'Unklare Uploads zuerst mit Dateien pruefen kontrollieren.</p>'
+             '<a class="btn primary small" href="'+session_url+'">Jetzt Shiftbase-Sitzung erneuern</a></section>')
+    h.append("""<script>(function(){
+      window.addEventListener('sbpay-session-required',()=>{
+        const panel=document.getElementById('sbpay-session-renew');
+        const msg=document.getElementById('sbpay-session-message');
+        if(msg)msg.textContent='Shiftbase verlangt eine neue Anmeldung. Vorgang angehalten. Bereits unklare Uploads nicht wiederholen.';
+        if(panel){panel.hidden=false;panel.scrollIntoView({block:'nearest'});}
+      });
+    })();</script>""")
     if blocked_count:
         h.append('<div class="muted" style="margin-bottom:12px">'+str(blocked_count)+' nicht versandbereite '
                  'Abrechnungen bleiben gesperrt. Grund siehe Status je Person. '
@@ -10282,7 +10303,7 @@ def admin_shiftbase_payroll_sync_manifest(batch_id):
     _sbpay_token_check()
     if _sbpay_browser_contract() is None:
         return _sbpay_no_cache(jsonify({'ok':False,
-            'error':'Shiftbase-Browsersitzung fehlt.'})),503
+            'error':_SBPAY_SESSION_RENEW_MESSAGE,'session_required':True})),503
     try:
         _sbpay_refresh_unapproved_mappings(batch_id)
         verified, blocked = _sbpay_prepare_batch_checked(batch_id)
@@ -10321,7 +10342,7 @@ def admin_shiftbase_payroll_sync_one(batch_id):
     page_no = int(raw)
     contract = _sbpay_browser_contract()
     if contract is None:
-        return _sbpay_no_cache(jsonify({'ok':False,'error':'Browsersitzung nicht verfuegbar.'})),503
+        return _sbpay_no_cache(jsonify({'ok':False,'error':_SBPAY_SESSION_RENEW_MESSAGE,'session_required':True})),503
     with db_conn() as conn:
         try:
             batch,row = _sbpay_remote_recheck_candidate(conn,batch_id,page_no)
@@ -10357,6 +10378,9 @@ def admin_shiftbase_payroll_sync_one(batch_id):
             conn.execute('''DELETE FROM shiftbase_payroll_remote_absence
               WHERE batch_id=? AND page_no=?''',(batch_id,page_no))
             conn.commit()
+        if _sbpay_is_session_error(exc):
+            return _sbpay_no_cache(jsonify({'ok':False,'error':_SBPAY_SESSION_RENEW_MESSAGE,
+                                            'session_required':True})), 409
         return _sbpay_no_cache(jsonify({'ok':True,'result':'uncertain'}))
     if observed not in ('present','absent'):
         with db_conn() as conn:
@@ -11151,44 +11175,262 @@ import base64 as _sbpay_base64
 from urllib.parse import urlparse as _sbpay_urlparse
 
 
+# Private, encrypted Shiftbase browser-session store. No session bytes in Flask
+# cookies, Git, logs or exported business-data backups. The existing Render
+# PORTAL_SECRET_KEY is used only as a source for a separate domain-bound key.
+_SBPAY_SESSION_FILE = DATA_ROOT / 'private_shiftbase_session' / 'session.enc'
+_SBPAY_SESSION_LOCK = threading.RLock()
+_SBPAY_SESSION_MAX = 200_000
+
+
+def _sbpay_session_cipher():
+    from cryptography.fernet import Fernet
+    secret = os.environ.get('PORTAL_SECRET_KEY', '').encode('utf-8')
+    if len(secret) < 32:
+        raise ValueError('Dauerhafter PORTAL_SECRET_KEY fehlt oder ist zu kurz.')
+    key = hmac.new(secret, b'plusminus/shiftbase/session-store/v1', 'sha256').digest()
+    return Fernet(_sbpay_base64.urlsafe_b64encode(key))
+
+
+def _sbpay_validate_storage_state(state):
+    """Validate bounded, exclusively Shiftbase-scoped Playwright state."""
+    if not isinstance(state, dict) or set(state) - {'cookies','origins'}:
+        raise ValueError('Ungueltiges Sitzungsformat.')
+    cookies, origins = state.get('cookies'), state.get('origins', [])
+    if not isinstance(cookies, list) or not cookies or len(cookies) > 500 or not isinstance(origins,list):
+        raise ValueError('Ungueltige Sitzungsdaten.')
+    for c in cookies:
+        if not isinstance(c,dict) or not all(isinstance(c.get(k),str) for k in ('name','value','domain','path')):
+            raise ValueError('Ungueltiges Cookie.')
+        domain = c['domain'].lstrip('.').lower()
+        if domain != 'shiftbase.com' and not domain.endswith('.shiftbase.com'):
+            raise ValueError('Nur Shiftbase-Sitzungen sind erlaubt.')
+        if not c['name'] or not c['path'].startswith('/'):
+            raise ValueError('Ungueltiges Cookie.')
+    for item in origins:
+        if not isinstance(item,dict) or item.get('origin') not in ('https://shiftbase.com','https://app.shiftbase.com'):
+            raise ValueError('Nur Shiftbase-Sitzungen sind erlaubt.')
+        if not isinstance(item.get('localStorage',[]),list):
+            raise ValueError('Ungueltiger Browserspeicher.')
+    raw = json.dumps(state,ensure_ascii=False,separators=(',',':'),sort_keys=True,allow_nan=False).encode('utf-8')
+    if len(raw) > _SBPAY_SESSION_MAX:
+        raise ValueError('Sitzungsdaten zu gross.')
+    return raw
+
+
+def _sbpay_decode_session_export(value):
+    value = str(value or '').strip()
+    if not value or len(value) > _SBPAY_SESSION_MAX * 2:
+        raise ValueError('Sitzungsexport fehlt oder ist zu gross.')
+    if value.startswith('{'):
+        raw = value.encode('utf-8')
+    else:
+        raw = _sbpay_base64.b64decode(''.join(value.split()), validate=True)
+    if len(raw) > _SBPAY_SESSION_MAX:
+        raise ValueError('Sitzungsexport zu gross.')
+    state = json.loads(raw.decode('utf-8'))
+    _sbpay_validate_storage_state(state)
+    return state
+
+
+def _sbpay_session_revision(state):
+    return _sbpay_hashlib.sha256(_sbpay_validate_storage_state(state)).hexdigest()
+
+
+def _sbpay_session_load():
+    # An existing but unreadable encrypted file must NEVER silently fall back
+    # to an older, potentially revoked Render session. A new verified import
+    # can repair it. The old Render secret remains a bootstrap only.
+    if _SBPAY_SESSION_FILE.exists():
+        with _SBPAY_SESSION_FILE.open('rb') as f:
+            encrypted = f.read(_SBPAY_SESSION_MAX * 2 + 1024)
+        if len(encrypted) > _SBPAY_SESSION_MAX * 2:
+            raise ValueError('Gespeicherte Sitzung zu gross.')
+        state = json.loads(_sbpay_session_cipher().decrypt(encrypted).decode('utf-8'))
+        _sbpay_validate_storage_state(state)
+        return state, 'cloud'
+    state = _sbpay_decode_session_export(os.environ.get('SHIFTBASE_PAYROLL_WEB_SESSION_B64',''))
+    return state, 'render'
+
+
+def _sbpay_session_store(state):
+    """Atomic encrypted write, with mode 0600, no plaintext temporary file."""
+    encrypted = _sbpay_session_cipher().encrypt(_sbpay_validate_storage_state(state))
+    import tempfile
+    parent = _SBPAY_SESSION_FILE.parent
+    parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    os.chmod(parent,0o700)
+    fd, tmp = tempfile.mkstemp(prefix='.session-',dir=parent)
+    try:
+        with os.fdopen(fd,'wb') as f:
+            os.fchmod(f.fileno(),0o600)
+            f.write(encrypted)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp,_SBPAY_SESSION_FILE)
+        # Render/Linux: fsync directory metadata as well as file bytes.
+        if hasattr(os,'O_DIRECTORY'):
+            dfd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY)
+            try: os.fsync(dfd)
+            finally: os.close(dfd)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+
+
 def _sbpay_browser_contract():
-    """Optionale Browserautomatisierung; niemals ohne explizite Render-Secrets."""
+    """Use an encrypted cloud session first, existing Render secret as bootstrap."""
     if os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED', '').strip() != '1':
         return None
-    encoded = os.environ.get('SHIFTBASE_PAYROLL_WEB_SESSION_B64', '').strip()
-    if not encoded or len(encoded) > 200_000:
-        return None
     try:
-        state = json.loads(_sbpay_base64.b64decode(encoded, validate=True).decode('utf-8'))
-        if not isinstance(state, dict) or not isinstance(state.get('cookies'), list):
-            return None
-        if any(not isinstance(cookie, dict) for cookie in state['cookies']):
-            return None
-        if len(state['cookies']) == 0:
-            return None
-        # Shiftbase session state never includes other websites. This prevents
-        # accidentally forwarding authentication tokens from unrelated apps.
-        for cookie in state['cookies']:
-            domain = str(cookie.get('domain','')).lstrip('.').lower()
-            if domain not in ('shiftbase.com','app.shiftbase.com') and not domain.endswith('.shiftbase.com'):
-                return None
-        origins = state.get('origins',[])
-        if not isinstance(origins,list):
-            return None
-        for origin in origins:
-            if not isinstance(origin,dict):
-                return None
-            uri = _sbpay_urlparse(str(origin.get('origin','')))
-            if uri.scheme != 'https' or (uri.hostname or '').lower() not in ('shiftbase.com','app.shiftbase.com'):
-                return None
-    except (ValueError, TypeError, KeyError, UnicodeError):
+        with _SBPAY_SESSION_LOCK:
+            state,source = _sbpay_session_load()
+            revision = _sbpay_session_revision(state)
+    except Exception:
         return None
-    # The recipient and the send mode are always chosen inside the protected
-    # admin interface. No hard-coded test employee or environment bulk toggle.
-    # Both paths still require individual approval, a live ID check and one
-    # persistent attempt per private PDF.
-    return {'mode':'browser', 'state':state,
-            'origin':'https://app.shiftbase.com'}
+    return {'mode':'browser','state':state,'origin':'https://app.shiftbase.com',
+            'session_revision':revision,'session_source':source}
+
+
+def _sbpay_session_refresh_verified(context, contract):
+    """Best effort: capture rotated state after a verified personal-profile read.
+
+    Only retain Shiftbase state, and never overwrite a newer manual renewal.
+    No extra HTTP request, no automatic login, and no repeat of a PDF upload.
+    """
+    if not contract.get('session_revision'):
+        return
+    try:
+        state=context.storage_state()
+        state={'cookies':[c for c in state.get('cookies',[]) if
+                          str(c.get('domain','')).lstrip('.').lower() == 'shiftbase.com' or
+                          str(c.get('domain','')).lstrip('.').lower().endswith('.shiftbase.com')],
+               'origins':[o for o in state.get('origins',[]) if o.get('origin') in
+                          ('https://shiftbase.com','https://app.shiftbase.com')]}
+        revision=_sbpay_session_revision(state)
+        with _SBPAY_SESSION_LOCK:
+            current,source=_sbpay_session_load()
+            if _sbpay_session_revision(current)!=contract['session_revision']:
+                return
+            if source=='cloud' and revision==contract['session_revision']:
+                return
+            _sbpay_session_store(state)
+    except Exception:
+        # Never let optional state persistence change a confirmed delivery.
+        app.logger.warning('SBPAY_SESSION_REFRESH_NOT_SAVED')
+
+
+def _sbpay_session_verify_candidate(state):
+    """Read-only live check against one already verified mapped employee.
+
+    No new driver association, no file selection, no upload. Checks both
+    official API identity and the actual browser profile + Add-file control.
+    """
+    if _shiftbase_config().get('mock_dir'):
+        raise ShiftbaseIntegrationError('Im Shiftbase-Testmodus nicht verfuegbar.')
+    with db_conn() as conn:
+        drivers=_sbpay_drivers(conn)
+    pairs,uid_counts,name_counts=_sb_verified_directory(_sbpay_cached_users(force=True))
+    from collections import Counter
+    local_uid=Counter(str(d['shiftbase_user_id']) for d in drivers)
+    local_name=Counter(_sbpay_norm(d['name']) for d in drivers)
+    choices=[d for d in drivers if re.fullmatch(r'[0-9]{1,20}',str(d['shiftbase_user_id']))
+             and local_uid[str(d['shiftbase_user_id'])]==1 and local_name[_sbpay_norm(d['name'])]==1
+             and uid_counts[str(d['shiftbase_user_id'])]==1 and name_counts[_sbpay_norm(d['name'])]==1
+             and (str(d['shiftbase_user_id']),_sbpay_norm(d['name'])) in pairs]
+    if not choices:
+        raise ShiftbaseIntegrationError('Kein eindeutig zugeordnetes Testprofil fuer die Sitzungspruefung vorhanden.')
+    d=choices[0]
+    uid,name=str(d['shiftbase_user_id']),str(d['name'])
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'],timeout=15000)
+        try:
+            context=browser.new_context(storage_state=state,accept_downloads=False,service_workers='block',viewport={'width':1600,'height':900})
+            try:
+                page=context.new_page()
+                page.set_default_timeout(10000)
+                shown=_sbpay_open_verified_employee_files(page,'https://app.shiftbase.com',uid,name)
+                _sbpay_personal_file_tab_add_button(page,uid,timeout_ms=8000)
+                if not shown.first.is_visible() or not _sbpay_is_exact_employee_files_url(page.url,uid):
+                    raise ShiftbaseIntegrationError('Testprofil nicht eindeutig sichtbar.')
+                fresh=context.storage_state()
+                scoped={'cookies':[c for c in fresh.get('cookies',[]) if
+                                  str(c.get('domain','')).lstrip('.').lower()=='shiftbase.com' or
+                                  str(c.get('domain','')).lstrip('.').lower().endswith('.shiftbase.com')],
+                        'origins':[o for o in fresh.get('origins',[]) if o.get('origin') in
+                                   ('https://shiftbase.com','https://app.shiftbase.com')]}
+                _sbpay_validate_storage_state(scoped)
+                return scoped
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def _sbpay_session_page(batch_id='',message='',success=False):
+    contract=_sbpay_browser_contract()
+    source=contract.get('session_source') if contract else None
+    back=url_for('admin_shiftbase_payroll_batch',batch_id=batch_id) if re.fullmatch(r'[a-f0-9]{32}',batch_id) else url_for('admin_shiftbase_payroll')
+    configured='Sitzung gespeichert (verschluesselt in der Cloud).' if source=='cloud' else ('Bisherige Render-Sitzung vorhanden.' if source=='render' else 'Keine lesbare Sitzung vorhanden.')
+    body=['<div class="card" style="max-width:820px"><h2>Shiftbase verbinden / Sitzung erneuern</h2>',
+          '<p><b>'+str(_sbpay_escape(configured))+'</b> Die tatsaechliche Gueltigkeit wird beim Zugriff auf Shiftbase geprueft.</p>']
+    if message:
+        body.append('<div role="status" class="flash '+('ok' if success else 'err')+'">'+str(_sbpay_escape(message))+'</div>')
+    body.extend(['<p>Nur bei einer abgelaufenen Anmeldung: Starte dein vorhandenes Windows-Sitzungsexportprogramm, '
+                 'melde dich im offiziellen Shiftbase-Fenster an und kopiere den neuen Sitzungswert. '
+                 'Passwort und MFA bleiben ausschliesslich bei Shiftbase.</p>',
+                 '<form method="post" autocomplete="off" id="sbpay-session-form">',
+                 '<input type="hidden" name="csrf_token" value="'+str(_sbpay_escape(_sb_csrf_token()))+'">',
+                 '<input type="hidden" name="batch_id" value="'+str(_sbpay_escape(batch_id if re.fullmatch(r'[a-f0-9]{32}',batch_id) else ''))+'">',
+                 '<label>Neuer Sitzungsexport (Base64 oder Playwright-JSON)<textarea name="session_export" required maxlength="400000" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Sitzungswert hier einfuegen"></textarea></label>',
+                 '<div class="actions"><button type="submit" class="primary">Sitzung pruefen und speichern</button>',
+                 '<a class="btn small" href="'+back+'">Zurueck zu den Lohnzetteln</a></div></form>',
+                 '<p id="sbpay-session-status" class="muted">Die Cloud prueft den Zugang ohne Upload. Nach Erfolg ist kein Render-Aufruf und kein Neustart erforderlich.</p>',
+                 '<p class="muted">Die Sitzung ist ein geheimer Zugangsschluessel. Nur hier einfuegen, nicht per E-Mail oder Chat teilen. Ein normaler Shiftbase-Login in einem anderen Tab uebertraegt die Sitzung nicht automatisch.</p></div>',
+                 """<script>document.getElementById('sbpay-session-form').addEventListener('submit',function(){this.querySelector('button').disabled=true;document.getElementById('sbpay-session-status').textContent='Shiftbase-Zugang wird geprueft… Bitte Seite offen lassen.';});</script>"""])
+    resp=_sbpay_no_cache(make_response(base_page('Shiftbase-Anmeldung',''.join(body),'shiftbase_payroll')))
+    resp.headers['X-Frame-Options']='DENY'
+    resp.headers['Content-Security-Policy']="frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
+    return resp
+
+
+@app.route('/admin/shiftbase/lohnzettel/sitzung', methods=['GET','POST'])
+@admin_login_required
+def admin_shiftbase_payroll_session():
+    batch_id=str(request.values.get('batch_id',''))
+    if request.method=='GET':
+        return _sbpay_session_page(batch_id)
+    _sbpay_token_check()
+    if os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED','').strip()!='1':
+        return _sbpay_session_page(batch_id,'Browser-Integration ist deaktiviert.'),503
+    # Render terminates TLS at its trusted proxy. Never accept a session over
+    # cleartext on an ordinary local/other deployment.
+    https=request.is_secure or (os.environ.get('RENDER','').lower()=='true' and
+                               request.headers.get('X-Forwarded-Proto','').lower()=='https')
+    if not https:
+        return _sbpay_session_page(batch_id,'Sitzungsimport ist nur ueber HTTPS erlaubt.'),400
+    try:
+        _sbpay_session_cipher()  # stable encryption key required BEFORE live verification
+        state=_sbpay_decode_session_export(request.form.get('session_export',''))
+    except Exception:
+        return _sbpay_session_page(batch_id,'Sitzungsexport ungueltig oder Verschluesselung nicht eingerichtet. Nichts gespeichert.'),400
+    # Concurrent requests may not replace a manually renewed session silently.
+    with _SBPAY_SESSION_LOCK:
+        try:
+            previous=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
+        except OSError:
+            return _sbpay_session_page(batch_id,'Sitzungsspeicher nicht lesbar.'),503
+    try:
+        verified=_sbpay_session_verify_candidate(state)
+        with _SBPAY_SESSION_LOCK:
+            current=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
+            if current!=previous:
+                return _sbpay_session_page(batch_id,'Die Sitzung wurde inzwischen aktualisiert. Bitte erneut versuchen.'),409
+            _sbpay_session_store(verified)
+    except Exception as exc:
+        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED type=%s',type(exc).__name__)
+        return _sbpay_session_page(batch_id,'Anmeldung oder Berechtigung konnte nicht live bestaetigt werden. Die bisherige Sitzung bleibt erhalten. Bitte im Exportprogramm neu anmelden und erneut versuchen.'),400
+    return _sbpay_session_page(batch_id,'Shiftbase-Anmeldung live bestaetigt und sicher gespeichert. Du kannst direkt weiterarbeiten. Es wurde keine PDF gesendet.',True)
 
 
 def _sbpay_ui_strict_locator(locators, label):
@@ -11325,6 +11567,7 @@ def _sbpay_wait_for_employee_file_stage(page, user_id, stage, timeout_ms=25000):
         if found == stage:
             return
         if found not in ('files', 'upload', 'details'):
+            _sbpay_raise_if_login(page)
             raise ShiftbaseIntegrationError('Die persoenliche Mitarbeiterdatei-Seite wurde verlassen. Kein weiterer Schreibversuch.')
         page.wait_for_timeout(200)
     raise ShiftbaseIntegrationError('Shiftbase-Dialogschritt wurde nicht rechtzeitig angezeigt; Status pruefen.')
@@ -11402,6 +11645,7 @@ def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000):
                 raise ShiftbaseIntegrationError(
                     'Browserseite nach Dateiauswahl nicht mehr erreichbar; Status unklar.') from exc
             if current is None:
+                _sbpay_raise_if_login(page)
                 raise ShiftbaseIntegrationError(
                     'Mitarbeiter-Dateien verlassen oder Shiftbase-Anmeldung geaendert; '
                     'kein weiterer Upload, Status unklar.')
@@ -11661,6 +11905,43 @@ def _sbpay_details_visibility_control(scope):
         r'(?:F[uü]r Mitarbeiter sichtbar|Visible for employee|Zichtbaar voor medewerker)', re.I)))
 
 
+_SBPAY_SESSION_RENEW_MESSAGE = (
+    'SHIFTBASE_SESSION_REQUIRED: Shiftbase-Anmeldung fehlt oder ist abgelaufen. '
+    'Sitzung im Bereich Shiftbase verbinden / Sitzung erneuern in der Cloud aktualisieren.')
+
+
+def _sbpay_login_visible(page):
+    """Recognize only an actual login route or a visible login form. No secrets."""
+    try:
+        parsed = _sbpay_urlparse(str(page.url))
+        host = (parsed.hostname or '').lower()
+        if parsed.scheme != 'https' or not (host == 'shiftbase.com' or host.endswith('.shiftbase.com')):
+            return False
+        path = parsed.path.lower().rstrip('/')
+        if re.search(r'(?:^|/)(?:login|log-in|signin|sign-in|anmelden)(?:/|$)', path):
+            return True
+        if re.search(r'(?:^|/)(?:login|signin|sign-in)(?:/|$)', parsed.fragment.lower()):
+            return True
+        # Some SPAs render the login form before updating the location.
+        passwords = page.locator('input[type="password"]').filter(visible=True)
+        if passwords.count() == 0:
+            return False
+        actions = page.get_by_role('button', name=re.compile(
+            r'^\s*(?:Anmelden|Einloggen|Log in|Login|Sign in|Inloggen)\s*$', re.I)).filter(visible=True)
+        return actions.count() > 0
+    except Exception:
+        return False
+
+
+def _sbpay_raise_if_login(page):
+    if _sbpay_login_visible(page):
+        raise ShiftbaseIntegrationError(_SBPAY_SESSION_RENEW_MESSAGE)
+
+
+def _sbpay_is_session_error(exc):
+    return isinstance(exc, ShiftbaseIntegrationError) and 'SHIFTBASE_SESSION_REQUIRED:' in str(exc)
+
+
 def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
     """Open the exact employee-private files tab and prove visible profile name.
 
@@ -11672,6 +11953,7 @@ def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
         raise ShiftbaseIntegrationError('Ungueltige Shiftbase-Mitarbeiter-ID. Kein Upload.')
     target = origin + '/employees/' + uid + '/files'
     page.goto(target, wait_until='domcontentloaded', timeout=25_000)
+    _sbpay_raise_if_login(page)
     if not _sbpay_is_exact_employee_files_url(page.url, uid):
         raise ShiftbaseIntegrationError(
             'Shiftbase hat die persoenliche Mitarbeiter-Dateien-URL verlassen '
@@ -11680,8 +11962,10 @@ def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
     try:
         name.first.wait_for(state='visible', timeout=20_000)
     except Exception as exc:
+        _sbpay_raise_if_login(page)
         raise ShiftbaseIntegrationError(
             'Der exakte Mitarbeitername ist im persoenlichen Dateien-Profil nicht sichtbar. Kein Upload.') from exc
+    _sbpay_raise_if_login(page)
     if not _sbpay_is_exact_employee_files_url(page.url, uid):
         raise ShiftbaseIntegrationError('Mitarbeiterprofil nach Laden verlassen. Kein Upload.')
     if not name.first.is_visible():
@@ -12113,8 +12397,11 @@ def _sbpay_browser_inspect_with_browser(browser, contract, user_id, employee_nam
                                       service_workers='block', viewport={'width':1600, 'height':900})
         page = context.new_page()
         page.set_default_timeout(12000)
-        _sbpay_open_verified_employee_files(page, contract['origin'], user_id, employee_name)
+        name = _sbpay_open_verified_employee_files(page, contract['origin'], user_id, employee_name)
         result = _sbpay_remote_title_read(page, user_id, employee_name, title)
+        if (result in ('present','absent') and _sbpay_is_exact_employee_files_url(page.url,user_id)
+                and name.first.is_visible()):
+            _sbpay_session_refresh_verified(context,contract)
         return {'presence':result}
     finally:
         if context is not None:
@@ -12223,6 +12510,8 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         try:
             _sbpay_wait_for_employee_file_stage(page, user_id, 'upload', timeout_ms=10000)
         except ShiftbaseIntegrationError as exc:
+            if _sbpay_is_session_error(exc):
+                raise
             raise ShiftbaseIntegrationError('Persoenliche Dateiauswahl nicht geoeffnet. Kein Upload.') from exc
         stage = 'FILE_PICKER'
         upload_scope = _sbpay_upload_dialog_scope(page, user_id, 'upload')
@@ -12292,6 +12581,8 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         try:
             _sbpay_wait_for_employee_file_stage(page, user_id, 'files', timeout_ms=25000)
         except ShiftbaseIntegrationError as exc:
+            if _sbpay_is_session_error(exc):
+                raise
             raise ShiftbaseIntegrationError(
                 'Speichern wurde ausgeloest; Rueckkehr zur persoenlichen Dateiablage unklar. '
                 'Nicht erneut senden.') from exc
@@ -12306,6 +12597,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
                 'Nicht erneut senden.') from exc
         # This is NOT a provider-confirmed document ID. In the current UI,
         # employee visibility cannot be proven when no checkbox is shown.
+        _sbpay_session_refresh_verified(context,contract)
         return {'document_id':'ui:'+_sbpay_uuid.uuid4().hex,
                 'visibility_control_verified':visibility_control_verified}
 
@@ -12391,7 +12683,7 @@ def _sbpay_neutral_test_page():
          'Nach Erfolg in der richtigen Akte kontrollieren und manuell loeschen.</p>']
     if not ready:
         h.append('<div class="flash err">Browser-Sitzung nicht eingerichtet. '
-                 'Es kann kein Testversand stattfinden.</div>')
+                 'Es kann kein Testversand stattfinden. <a href="'+url_for('admin_shiftbase_payroll_session')+'">Sitzung erneuern</a>.</div>')
     h.extend(['<form method="post" style="max-width:620px">'
               '<input type="hidden" name="csrf_token" value="'+token+'">'
               '<label>Freigegebenes persoenliches Testprofil'
@@ -12588,6 +12880,10 @@ const run=async(endpoint, extra={})=>{
   const response=await fetch(endpoint,{method:'POST',body:form,
           headers:{'Accept':'application/json'},credentials:'same-origin',cache:'no-store'});
   const result=await response.json();
+  if(result.session_required){
+    window.dispatchEvent(new Event('sbpay-session-required'));
+    const error=Error('Shiftbase-Anmeldung erneuern.');error.sessionRequired=true;throw error;
+  }
   if(!response.ok||!result.ok)throw Error(result.error||'Shiftbase ist nicht erreichbar');
   return result;
 };
@@ -12626,7 +12922,8 @@ for(const checkButton of singleButtons){
         window.location.reload();
       }
     }catch(e){
-      checkStatus.textContent='Einzelpruefung fehlgeschlagen. Es wurde nichts gesendet; Sperren bleiben erhalten.';
+      checkStatus.textContent=e.sessionRequired?'Shiftbase-Anmeldung erneuern. Kein Upload.':
+        'Einzelpruefung fehlgeschlagen. Es wurde nichts gesendet; Sperren bleiben erhalten.';
     }finally{
       checkButton.textContent=label;
       activeCheck=false;
@@ -12654,7 +12951,7 @@ button.addEventListener('click',async()=>{
         if(result.result==='found')found++;
         if(result.result==='released')released++;
         if(result.result==='uncertain'||result.result==='held')errors++;
-      }catch(e){errors++;}
+      }catch(e){if(e.sessionRequired)throw e;errors++;}
       checked++;
       status.textContent=checked+' von '+targets.length+' persoenlichen Dateien geprueft. '+
          'Noch gesperrt/unklar: '+errors+'. Freigegeben: '+released+'.';
@@ -12668,7 +12965,7 @@ button.addEventListener('click',async()=>{
           const result=await run(ONE,{page_no:pending[i]});
           if(result.result==='released')released++;
           if(result.result==='uncertain'||result.result==='held')errors++;
-        }catch(e){errors++;}
+        }catch(e){if(e.sessionRequired)throw e;errors++;}
         status.textContent='Zweite Kontrolle '+(i+1)+'/'+pending.length+
           '. Wieder freigegeben: '+released+'.';
       }
@@ -12750,6 +13047,7 @@ send.addEventListener('click',async()=>{
   try{
    const response=await fetch(ROUTE,{method:'POST',body:params,credentials:'same-origin',cache:'no-store'});
    const result=await response.json();
+   if(result.session_required)window.dispatchEvent(new Event('sbpay-session-required'));
    if(!response.ok||result.error||result.done){
     info.textContent='Gestoppt bei PDF '+number+': '+(result.error||'Unbekannte Antwort')+
         '. Bereits bearbeitete Personen bitte in Shiftbase kontrollieren.';
@@ -12812,7 +13110,8 @@ def admin_shiftbase_payroll_upload_step(batch_id):
     _sbpay_token_check()
     contract = _sbpay_upload_contract()
     if not contract:
-        return _sbpay_no_cache(jsonify({'error':'Kein verifizierter Shiftbase-Personalakten-API-Vertrag konfiguriert.'})), 503
+        return _sbpay_no_cache(jsonify({'error':_SBPAY_SESSION_RENEW_MESSAGE,
+                                        'session_required':True})), 503
     # Explicit admin-side choice: exactly one identified page OR all eligible
     # pages in a sequential run. An unset/invalid mode must NEVER imply bulk.
     mode = (request.form.get('mode') or '').strip()
@@ -12888,6 +13187,7 @@ def admin_shiftbase_payroll_upload_step(batch_id):
     diagnostic = ''
     document_id=''
     browser_reused = False
+    session_required = False
     try:
         with db_conn() as conn:
             batch, row, driver, content = _sbpay_verified_pdf(conn,batch_id,page_no)
@@ -12918,6 +13218,7 @@ def admin_shiftbase_payroll_upload_step(batch_id):
         safe_preflight = (str(exc)[:250] if isinstance(exc, ShiftbaseIntegrationError)
                           else 'Unbekannter Browserfehler. Render-Logs auf Fehlertyp pruefen.')
         diagnostic = safe_preflight
+        session_required = _sbpay_is_session_error(exc)
         app.logger.warning('Payroll Shiftbase browser send interrupted: type=%s reason=%s',
                            type(exc).__name__, diagnostic[:200])
         # BEFORE set_input_files, a browser attempt is provably write-free.
@@ -12933,7 +13234,7 @@ def admin_shiftbase_payroll_upload_step(batch_id):
                       WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='preparing' ''',
                       (batch_id,page_no,attempt_id))
                     rconn.commit()
-                    return _sbpay_no_cache(jsonify({'done':False,'error':
+                    return _sbpay_no_cache(jsonify({'done':False,'session_required':session_required,'error':
                         'Browser-Vorpruefung: '+safe_preflight+' Kein Upload gestartet. '
                         'Nur diesen Einzelversand nach Behebung erneut versuchen.'})), 409
         # After Save could have started, never retry this employee automatically.
@@ -12948,6 +13249,7 @@ def admin_shiftbase_payroll_upload_step(batch_id):
     return _sbpay_no_cache(jsonify({'done':False,'state':state,
                                     'elapsed_seconds':round(_sbpay_time.monotonic()-started_at, 1),
                                     'browser_reused':browser_reused,
+                                    'session_required':session_required,
                                     'diagnostic': diagnostic if state == 'unknown' else ''}))
 
 
