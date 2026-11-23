@@ -8920,6 +8920,26 @@ def _sbpay_period(text):
     return (int(m.group(2)), _SBPAY_MONTHS.get(month_key))
 
 
+def _sbpay_document_type(text):
+    """Strictly distinguish DATEV payslips from preceding DEUEV notices.
+
+    Only the two explicitly understood document types are accepted. Unknown
+    documents must never be quietly discarded or attached to a payroll PDF.
+    This categorization does not use dates or the uploaded filename.
+    """
+    text = str(text or '')
+    payslip = bool(re.search(
+        r'Abrechnung\s+der\s+Brutto\s*/\s*Netto[-\s]*Bez[uü]ge', text, re.I))
+    sv_notice = bool(re.search(r'Meldebescheinigung\s+zur\s+Sozialversicherung', text, re.I))
+    sv_form = bool(re.search(r'Form\s*\.?\s*[-–]?\s*Nr\s*\.?\s*LNMS07', text, re.I))
+    # Contradictory markers suggest an unexpected merged/overlaid document.
+    if payslip and not sv_notice:
+        return 'payslip'
+    if sv_notice and sv_form and not payslip:
+        return 'sv_notice'
+    return 'unknown'
+
+
 def _sbpay_identity(text, layout_text=None):
     """Find one unambiguous DATEV recipient and payroll personnel number.
 
@@ -9166,9 +9186,12 @@ def _sbpay_stage_progress(meta):
     else:
         pct = 0
         info = meta.get('message') or 'PDF-Import nicht abgeschlossen'
+    excluded = int(meta.get('excluded_sv_pages') or 0)
+    if excluded and state in ('reading', 'finalizing', 'committing', 'completed'):
+        info += f' · {excluded} Sozialversicherungsmeldungsseiten nicht als Lohnzettel übernommen'
     return {'state':state, 'percent':pct, 'info':info,
             'page_count':pages, 'page_done':finished_pages,
-            'recipient_count':len(groups)}
+            'excluded_sv_pages':excluded, 'recipient_count':len(groups)}
 
 
 def _sbpay_stage_parse(parent, meta):
@@ -9197,6 +9220,21 @@ def _sbpay_stage_parse(parent, meta):
         for index in range(start, min(start + _SBPAY_IMPORT_CHUNK, count)):
             page = pdf.pages[index]
             text = page.extract_text() or ''
+            document_type = _sbpay_document_type(text)
+            if document_type == 'sv_notice':
+                # DATEV can prepend standalone social-insurance notices to a
+                # payslip batch. They are NOT payslips and must NEVER enter any
+                # individual payroll PDF or be uploaded to Shiftbase as salary.
+                # Restrict exclusions to the initial block, so interleaved
+                # unknown material cannot silently change employees' PDFs.
+                if meta['period'] is not None:
+                    raise ValueError(f'Seite {index+1}: Sozialversicherungsmeldung zwischen Lohnabrechnungen. Import gestoppt.')
+                meta['pages'].append(None)  # Preserve ORIGINAL 1-based page positions.
+                meta['excluded_sv_pages'] = int(meta.get('excluded_sv_pages') or 0) + 1
+                meta['next_page'] = index + 1
+                continue
+            if document_type != 'payslip':
+                raise ValueError(f'Seite {index+1}: Unbekannter Dokumenttyp. Keine automatische Zuordnung oder Versendung.')
             period = _sbpay_period(text)
             if not period or None in period:
                 raise ValueError(f'Seite {index+1}: Abrechnungsmonat nicht eindeutig.')
@@ -9231,8 +9269,13 @@ def _sbpay_stage_parse(parent, meta):
             meta['next_page'] = index + 1
         if meta['next_page'] == count:
             from collections import OrderedDict
+            if meta['period'] is None:
+                raise ValueError('Keine DATEV-Brutto-/Netto-Lohnabrechnungen gefunden; nur andere Dokumente enthalten.')
             people = OrderedDict()
-            for index, (name, number) in enumerate(meta['pages'], 1):
+            for index, item in enumerate(meta['pages'], 1):
+                if item is None:
+                    continue  # Excluded SV notice; original numbering stays intact.
+                name, number = item
                 entry = people.get(number)
                 if entry:
                     if _sbpay_norm(entry['name']) != _sbpay_norm(name):
@@ -9240,6 +9283,8 @@ def _sbpay_stage_parse(parent, meta):
                     entry['source_pages'].append(index)
                 else:
                     people[number] = {'name':name,'personal_no':number,'source_pages':[index]}
+            if not people:
+                raise ValueError('Keine Lohnabrechnungen in dieser PDF gefunden.')
             meta['groups'] = list(people.values())
             meta['state'] = 'finalizing'
 
@@ -9370,6 +9415,7 @@ def _sbpay_stage_complete(parent, meta, batch_id):
     _sbpay_stage_purge_files(parent)
     safe = {'state':'completed','batch_id':batch_id,'page_count':total,
             'next_page':total,'groups':[None]*count,'next_group':count,
+            'excluded_sv_pages':int(meta.get('excluded_sv_pages') or 0),
             'created_at':meta.get('created_at')}
     _sbpay_stage_store(parent, safe)
     return safe
@@ -9408,7 +9454,7 @@ def admin_shiftbase_payroll():
                 os.chmod(source,0o600)
                 stream.write(content)
             data = {'state':'reading','source_sha256':digest,'created_at':now_iso(),
-                    'page_count':0,'next_page':0,'period':None,'pages':[],
+                    'page_count':0,'next_page':0,'period':None,'pages':[],'excluded_sv_pages':0,
                     'groups':[],'next_group':0,'completed_groups':[]}
             _sbpay_stage_store(parent,data)
             return redirect(url_for('admin_shiftbase_payroll_import_view',job_id=job_id))
@@ -9426,7 +9472,9 @@ def admin_shiftbase_payroll():
          '<p><a class="btn small" href="'+url_for('admin_shiftbase_mapping_audit')+'">Shiftbase-IDs live prüfen</a> '
          '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_browser_check')+'" target="_blank" rel="noopener noreferrer">Chromium-Diagnose (kein Upload)</a> '
          '<a class="btn small" href="'+url_for('admin_shiftbase_payroll_neutral_test')+'">Neutralen Browserupload testen</a></p>',
-         '<p>DATEV-Gesamt-PDF auswählen. Die Cloud trennt die Mitarbeiterabrechnungen mit '
+         '<p>DATEV-Gesamt-PDF auswählen. Vorangestellte DATEV-Sozialversicherungsmeldungen '
+         'werden erkannt und separat gezählt, aber <b>nicht</b> als Lohnabrechnungen versendet. '
+         'Die Cloud trennt die Mitarbeiterabrechnungen mit '
          '<b>Fortschrittsanzeige</b> in mehrere kurze Schritte. Anschließend kannst du '
          'alle eindeutig zugeordneten Fahrer oder einzelne Fahrer zum Versand auswählen.</p>',
          '<p class="muted" style="font-size:13px">Der PDF-Import sendet noch nichts an Shiftbase. '
@@ -9480,21 +9528,23 @@ def admin_shiftbase_payroll_import_view(job_id):
          '<script>(function(){"use strict";const API='+json.dumps(endpoint)+', TOKEN='+json.dumps(token)+
          ', INITIAL='+initial+';const label=document.getElementById("sbpay-progress-text"),'+
          'meter=document.getElementById("sbpay-progress-meter"),note=document.getElementById("sbpay-progress-note"),'+
-         'resume=document.getElementById("sbpay-resume");let active=false;'+
+         'resume=document.getElementById("sbpay-resume");let active=false,hardFailure=(INITIAL.state==="failed");'+
          'function show(s){meter.value=s.percent||0;label.textContent=s.info||"Import läuft";}'+
          'async function step(){if(active)return;active=true;resume.style.display="none";'+
          'try{let form=new URLSearchParams();form.set("csrf_token",TOKEN);'+
          'const response=await fetch(API,{method:"POST",body:form,credentials:"same-origin",cache:"no-store"});'+
          'const result=await response.json();if(!response.ok||result.state==="failed"){'+
+         'if(result.state==="failed")hardFailure=true;'+
          'throw new Error(result.message||"Der Import ist fehlgeschlagen.");}show(result);'+
          'if(result.state==="completed"&&result.url){location.assign(result.url);return;}'+
          'if(["reading","finalizing","committing"].includes(result.state)){active=false;setTimeout(step,30);return;}'+
          'throw new Error("Unerwarteter Importstatus.");'+
          '}catch(err){note.textContent="Import angehalten: "+err.message+'+
-         '" Die PDF wurde nicht an Shiftbase gesendet. Du kannst es erneut versuchen.";'+
-         'resume.style.display="block";}finally{active=false;}}'+
+         '" Die PDF wurde nicht an Shiftbase gesendet. "+'+
+         '(hardFailure?"Bitte die PDF neu hochladen.":"Bei Verbindungsabbruch kannst du fortsetzen.");'+
+         'resume.style.display=hardFailure?"none":"block";}finally{active=false;}}'+
          'resume.addEventListener("click",step);show(INITIAL);'+
-         'if(INITIAL.state!=="failed")step();else{note.textContent="Dieser Import wurde sicher gestoppt.";}'+
+         'if(INITIAL.state!=="failed")step();else{note.textContent="Dieser Import wurde sicher gestoppt. Bitte PDF erneut hochladen.";}'+
          '})();</script>']
     return _sbpay_no_cache(make_response(base_page('Lohnzettel-Import', ''.join(h),'shiftbase_payroll')))
 
@@ -9726,6 +9776,9 @@ def admin_shiftbase_payroll_batch(batch_id):
         items.append((row, driver if correct else None, eligible, status, color))
     token = str(_sbpay_escape(_sb_csrf_token()))
     period = f'{int(batch["month"]):02d}/{int(batch["year"])}'
+    excluded_count = int(batch['page_count']) - sum(int(r['file_pages']) for r in rows)
+    if excluded_count < 0:
+        raise ShiftbaseIntegrationError('Widerspruechliche PDF-Seitenzahlen; Versand gesperrt.')
     h = ['<div class="card" style="max-width:1320px">',
          '<h2>Lohnzettel '+period+' – Mitarbeiter auswaehlen und senden</h2>',
          '<p><a class="btn small" href="'+url_for('admin_shiftbase_mapping_audit')+'">Gespeicherte Shiftbase-IDs kontrollieren</a> '
@@ -9733,6 +9786,9 @@ def admin_shiftbase_payroll_batch(batch_id):
          '<p>Die Gesamt-PDF wurde automatisch in getrennte Mitarbeiterabrechnungen aufgeteilt. '
          'Waehle alle oder einzelne gruen markierte Mitarbeiter aus und klicke auf <b>Ausgewaehlte PDFs senden</b>. '
          'Unklare Zuordnungen sind aus Sicherheitsgruenden nicht auswaehlbar.</p>',
+         ('<p class="flash ok"><b>Dokumentarten getrennt:</b> '+str(excluded_count)+
+          ' vorgelagerte Sozialversicherungsmeldungsseiten sind nicht in den Lohnzetteln enthalten '
+          'und werden nicht an Shiftbase gesendet.</p>' if excluded_count else ''),
          '<div class="grid grid-4" style="margin:15px 0">',
          '<div class="kpi">Originalseiten<b>'+str(batch['page_count'])+'</b></div>',
          '<div class="kpi">Einzel-PDFs<b>'+str(len(rows))+'</b></div>',
