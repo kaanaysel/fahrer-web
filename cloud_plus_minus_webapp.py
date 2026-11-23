@@ -10087,13 +10087,20 @@ def admin_shiftbase_payroll_batch(batch_id):
     h.append('<p id="sbpay-send-help" role="status" aria-live="polite" '
              'style="font-size:13px;color:#475467;margin:5px 0 12px">'
              'Nur gruen freigegebene Empfaenger werden nacheinander gesendet. '
-             'Ein unklarer Upload stoppt den Versand. Die Mitarbeitersichtbarkeit '
+             'Einzelne Uploadfehler werden uebersprungen und am Ende mit Namen aufgelistet. '
+             'Ein unklarer Upload wird niemals automatisch wiederholt. Die Mitarbeitersichtbarkeit '
              'wird weiterhin gesondert ausgewiesen.</p>')
     h.append('<div style="margin:12px 0;padding:12px;background:#f6f9ff;border:1px solid #d8e5f8;border-radius:12px">'
              '<div style="font-size:13px;font-weight:750">Fortschritt</div>'
              '<progress id="sbpay-meter" max="1" value="0" style="width:100%;height:19px"></progress>'
              '<p id="sbpay-progress" role="status" aria-live="polite" '
-             'style="margin:4px 0;color:#344054">Noch kein Versand gestartet.</p></div>')
+             'style="margin:4px 0;color:#344054">Noch kein Versand gestartet.</p>'
+             '<section id="sbpay-send-report" hidden aria-label="Ergebnis des Sammelversands" '
+             'style="margin-top:12px;padding:12px;background:white;border:1px solid #d0d5dd;border-radius:9px">'
+             '<b>Versandbericht</b><p id="sbpay-report-counts" aria-live="polite"></p>'
+             '<ul id="sbpay-report-problems" style="padding-left:20px"></ul>'
+             '<p id="sbpay-report-action" style="font-weight:600"></p>'
+             '</section></div>')
     h.append('<label style="max-width:460px">Mitarbeiter suchen'
              '<input id="sbpay-find" type="search" placeholder="Name oder Personalnummer" autocomplete="off">'
              '</label>')
@@ -12990,7 +12997,12 @@ updateButtons();
 
 
 def _sbpay_simple_send_script(batch_id, csrf_token):
-    """One visible send action, always one verified recipient per server request."""
+    """Sequential, at-most-once sends; skip per-recipient failures and report names.
+
+    Browser/network global errors can stop the run, but no individual error
+    causes an automatic retry. Persistent per-PDF delivery claims remain on
+    the server. The browser shows failures and unattempted recipients separately.
+    """
     route = url_for('admin_shiftbase_payroll_upload_step', batch_id=batch_id)
     script = r"""<script>(function(){
 const boxes=[...document.querySelectorAll('.sbpay-choice:not(:disabled)')];
@@ -13002,12 +13014,22 @@ const meter=document.getElementById('sbpay-meter');
 const info=document.getElementById('sbpay-progress');
 const search=document.getElementById('sbpay-find');
 const rows=[...document.querySelectorAll('#sbpay-table tbody tr')];
+const report=document.getElementById('sbpay-send-report');
+const reportCounts=document.getElementById('sbpay-report-counts');
+const reportProblems=document.getElementById('sbpay-report-problems');
+const reportAction=document.getElementById('sbpay-report-action');
 if(!send||!meter||!info)return;
 let sending=false, checking=false;
 function chosen(){return boxes.filter(b=>b.checked&&!b.disabled);}
-window.addEventListener('sbpay-sync-start',()=>{checking=true;update();});
-window.addEventListener('sbpay-sync-end',()=>{checking=false;update();});
-
+function employeeName(number){
+ const row=document.getElementById('sbpay-person-'+number);
+ return row?.querySelector('td:nth-child(2) b')?.textContent?.trim()||'PDF '+number;
+}
+function setStatus(number,message){
+ const row=document.getElementById('sbpay-person-'+number);
+ const cell=row?.querySelector('.sbpay-status');
+ if(cell)cell.textContent=message;
+}
 function update(){
  const n=chosen().length;
  send.textContent='Ausgewaehlte PDFs senden ('+n+')';
@@ -13019,11 +13041,49 @@ function update(){
   sendHelp.textContent=DISABLED?'Shiftbase-Upload ist nicht konfiguriert.':
    checking?'Dateien werden live abgeglichen; bitte warten.':
    n===0?'Ein oder alle gruen freigegebenen Mitarbeiter auswaehlen.':
-   n+' PDFs ausgewaehlt. Mit einem Klick werden sie nacheinander gesendet.';
+   n+' PDFs ausgewaehlt. Fehler bei einzelnen Personen werden am Ende mit Namen angezeigt; kein automatischer Neuversuch.';
  }
  if(all)all.disabled=sending||checking;
  if(none)none.disabled=sending||checking;
 }
+function renderReport(success,problems,remaining,visibilityPending,globalReason,seconds){
+ if(!report)return;
+ report.hidden=false;
+ if(reportCounts)reportCounts.textContent=
+  'Erfolgreich: '+success.length+' · Probleme: '+problems.length+
+  ' · Nicht versucht: '+remaining.length+' · Gesamtzeit: '+seconds+' s.';
+ if(reportProblems){
+  reportProblems.replaceChildren();
+  for(const problem of problems){
+   const li=document.createElement('li');
+   li.textContent=problem.name+' (PDF '+problem.number+'): '+problem.reason;
+   reportProblems.appendChild(li);
+  }
+  if(remaining.length){
+   const li=document.createElement('li');
+   li.textContent='Noch nicht versucht: '+remaining.map(x=>x.name).join(', ')+'.';
+   reportProblems.appendChild(li);
+  }
+  if(!problems.length&&!remaining.length){
+   const li=document.createElement('li');
+   li.textContent='Kein Fehler beim Hochladen gemeldet.';
+   reportProblems.appendChild(li);
+  }
+ }
+ if(reportAction){
+  reportAction.textContent=globalReason?
+   'Sammelversand wegen eines uebergreifenden Problems angehalten: '+globalReason+
+   ' Bereits unklare Uploads nicht wiederholen.':
+   problems.length?
+   'Bitte die oben genannten Mitarbeiter einzeln in Shiftbase pruefen bzw. ihre Zuordnung korrigieren. '+
+   'Ein unklarer Upload darf nicht blind erneut gesendet werden.':
+   'Alle ausgewaehlten PDFs verarbeitet. '+visibilityPending+
+   ' x Mitarbeitersichtbarkeit im Mitarbeiterkonto noch selbst pruefen.';
+ }
+ report.scrollIntoView({block:'nearest'});
+}
+window.addEventListener('sbpay-sync-start',()=>{checking=true;update();});
+window.addEventListener('sbpay-sync-end',()=>{checking=false;update();});
 boxes.forEach(b=>b.addEventListener('change',update));
 if(all)all.addEventListener('click',()=>{boxes.forEach(b=>b.checked=true);update();});
 if(none)none.addEventListener('click',()=>{boxes.forEach(b=>b.checked=false);update();});
@@ -13032,69 +13092,94 @@ if(search)search.addEventListener('input',()=>{
  rows.forEach(r=>{r.style.display=!query||r.textContent.toLocaleLowerCase('de').includes(query)?'':'none';});
 });
 send.addEventListener('click',async()=>{
- if(sending)return;
- const picked=chosen().map(b=>b.value);
+ if(sending||checking)return;
+ const picked=chosen().map(b=>({number:b.value,name:employeeName(b.value)}));
  if(!picked.length)return;
  sending=true;update();
  window.dispatchEvent(new Event('sbpay-send-start'));
+ if(report)report.hidden=true;
  meter.max=picked.length;meter.value=0;
  info.textContent='0 von '+picked.length+' Mitarbeitern verarbeitet. Bitte diese Seite waehrend des Versands offen lassen.';
- let complete=0, failed=false, visibilityPending=0;
+ const success=[],problems=[];
+ let processed=0, visibilityPending=0, globalReason='';
+ let networkErrors=0, consecutiveUnknown=0;
  const startTime=performance.now();
- for(const number of picked){
-  const params=new URLSearchParams();
-  params.set('csrf_token',CSRF);params.set('mode','single');params.set('page_no',number);
-  try{
-   const response=await fetch(ROUTE,{method:'POST',body:params,credentials:'same-origin',cache:'no-store'});
-   const result=await response.json();
-   if(result.session_required)window.dispatchEvent(new Event('sbpay-session-required'));
-   if(!response.ok||result.error||result.done){
-    info.textContent='Gestoppt bei PDF '+number+': '+(result.error||'Unbekannte Antwort')+
-        '. Bereits bearbeitete Personen bitte in Shiftbase kontrollieren.';
-    failed=true;break;
+ try{
+  for(const recipient of picked){
+   const number=recipient.number;
+   const params=new URLSearchParams();
+   params.set('csrf_token',CSRF);params.set('mode','single');params.set('page_no',number);
+   let reason='',result=null,globalFailure='';
+   try{
+    const response=await fetch(ROUTE,{method:'POST',body:params,credentials:'same-origin',cache:'no-store'});
+    const contentType=(response.headers.get('content-type')||'').toLowerCase();
+    if(!contentType.includes('application/json')){
+     reason='Serverantwort nicht lesbar; Ergebnis in Shiftbase pruefen.';
+     globalFailure='Cloud-Anmeldung oder Serverantwort nicht verfuegbar.';
+    }else{
+     result=await response.json();
+     if(result.session_required){
+      window.dispatchEvent(new Event('sbpay-session-required'));
+      reason='Shiftbase-Sitzung abgelaufen; zuerst die persoenliche Dateiablage pruefen.';
+      globalFailure='Shiftbase-Sitzung erneuern.';
+     }else if(response.status===429){
+      reason='Shiftbase oder Cloud begrenzt gerade die Anfragen; diesen Empfaenger pruefen.';
+      globalFailure='Anfragelimit erreicht.';
+     }else if(!response.ok||result.error||result.done){
+      reason=result.error||'Dieser Upload wurde nicht freigegeben oder nicht bestaetigt.';
+     }else if(result.state==='unknown'){
+      reason='Uploadstatus unklar: '+(result.diagnostic||'kein eindeutig bestaetigtes Ergebnis')+
+       '. In Shiftbase pruefen, nicht blind erneut senden.';
+     }else if(!['confirmed','observed_ui','observed_ui_visibility_unverified'].includes(result.state)){
+      reason='Unerwarteter Status: '+(result.state||'unbekannt')+'. In Shiftbase pruefen.';
+     }
+    }
+    networkErrors=0;
+   }catch(error){
+    networkErrors++;
+    reason='Verbindung unterbrochen oder Serverantwort unlesbar. Shiftbase-Dateien vor jedem Neuversuch pruefen.';
+    // After two consecutive transport failures, a working server connection is
+    // no longer established. Do not generate a cascade of uncertain uploads.
+    if(networkErrors>=2)globalFailure='Verbindung zur Cloud mehrfach unterbrochen.';
    }
-   if(result.state==='unknown'){
-    info.textContent='Gestoppt bei PDF '+number+': '+(result.diagnostic||'Unbekannter Browserfehler')+
-      '. Status unklar: zuerst persoenliche Mitarbeiterakte pruefen; NICHT erneut senden!';
-    failed=true;break;
+   processed++;
+   meter.value=processed;
+   if(reason){
+    problems.push({number,name:recipient.name,reason});
+    setStatus(number,'Probleme beim Versand – persoenliche Shiftbase-Akte pruefen');
+    if(result?.state==='unknown')consecutiveUnknown++;
+    else consecutiveUnknown=0;
+    // The same systemic browser failure on several consecutive employees must
+    // not turn an entire payroll batch into unknown remote states.
+    if(consecutiveUnknown>=3&&!globalFailure){
+     globalFailure='Drei aufeinanderfolgende Uploads mit unklarem Status. Bitte Shiftbase/Browsersitzung pruefen.';
+    }
+   }else{
+    consecutiveUnknown=0;
+    success.push(recipient);
+    if(result?.state==='observed_ui_visibility_unverified')visibilityPending++;
+    const checkbox=boxes.find(b=>b.value===number);
+    if(checkbox){checkbox.checked=false;checkbox.disabled=true;}
+    setStatus(number,result.state==='confirmed'?'API-bestaetigt':
+      result.state==='observed_ui_visibility_unverified'?
+      'Im persoenlichen Profil gesehen – Mitarbeitersichtbarkeit selbst pruefen':
+      'Im persoenlichen Profil gesehen');
    }
-   if(!['confirmed','observed_ui','observed_ui_visibility_unverified'].includes(result.state)){
-    info.textContent='Gestoppt bei PDF '+number+': Status '+(result.state||'unbekannt')+
-        '. Bei unklarem Ergebnis nicht erneut senden!';
-    failed=true;break;
-   }
-   if(result.state==='observed_ui_visibility_unverified')visibilityPending++;
-   const checkbox=boxes.find(b=>b.value===number);
-   if(checkbox){
-    checkbox.checked=false;checkbox.disabled=true;
-    const cell=checkbox.closest('tr')?.querySelector('.sbpay-status');
-    if(cell)cell.textContent=result.state==='confirmed'?'API-bestaetigt':
-        (result.state==='observed_ui_visibility_unverified'
-        ?'Im persoenlichen Profil gesehen – Mitarbeitersichtbarkeit noch selbst pruefen'
-        :'Im persoenlichen Profil gesehen');
-   }
-   complete++;meter.value=complete;
    const seconds=((performance.now()-startTime)/1000).toFixed(1);
-   const perPdf=(Number(seconds)/complete).toFixed(1);
-   info.textContent=complete+' von '+picked.length+' PDFs verarbeitet. '+
-       'Bisher '+seconds+' s, Durchschnitt '+perPdf+' s/PDF. '+
-       (result.browser_reused?'Chromium wiederverwendet. ':'')+
-       visibilityPending+' x Mitarbeitersichtbarkeit noch manuell pruefen.';
-  }catch(error){
-   info.textContent='Verbindung unterbrochen bei PDF '+number+
-      '. Keine erneute Uebertragung starten, bevor die persoenliche Shiftbase-Akte kontrolliert wurde.';
-   failed=true;break;
+   info.textContent=processed+' von '+picked.length+' geprueft. '+success.length+
+    ' erfolgreich, '+problems.length+' mit Problemen. Bisher '+seconds+' s.';
+   if(globalFailure){globalReason=globalFailure;break;}
   }
- }
- sending=false;update();
- window.dispatchEvent(new Event('sbpay-send-end'));
- if(!failed){
-  const totalSeconds=((performance.now()-startTime)/1000).toFixed(1);
-  const average=complete?(Number(totalSeconds)/complete).toFixed(1):'–';
-  info.textContent='Alle '+complete+' ausgewaehlten PDFs sind verarbeitet. '+
-     'Gesamtzeit '+totalSeconds+' s, Durchschnitt '+average+' s/PDF. '+
-     visibilityPending+' x Mitarbeitersichtbarkeit noch im Mitarbeiterkonto pruefen. '+
-     'Seite bei Bedarf neu laden.';
+ }finally{
+  sending=false;update();
+  window.dispatchEvent(new Event('sbpay-send-end'));
+  const remaining=picked.slice(processed);
+  const seconds=((performance.now()-startTime)/1000).toFixed(1);
+  info.textContent=globalReason?
+   processed+' von '+picked.length+' bearbeitet; Rest nicht gestartet. Bericht unten.':
+   'Sammelversand abgeschlossen: '+success.length+' erfolgreich, '+problems.length+
+   ' mit Problemen. Bericht unten.';
+  renderReport(success,problems,remaining,visibilityPending,globalReason,seconds);
  }
 });
 update();
@@ -13102,7 +13187,6 @@ update();
     return script.replace('CSRF', json.dumps(str(_sb_csrf_token())))\
                  .replace('ROUTE', json.dumps(route))\
                  .replace('DISABLED', 'false' if _sbpay_upload_contract() else 'true')
-
 
 @app.post('/admin/shiftbase/lohnzettel/<batch_id>/upload-next')
 @admin_login_required
