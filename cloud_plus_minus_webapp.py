@@ -9848,12 +9848,16 @@ def admin_shiftbase_payroll_batch(batch_id):
              'Mitarbeiterkonto geprueft, dass die Datei sichtbar und lesbar ist. '
              'Fuer jede weitere Person wird die Sichtbarkeit weiterhin als nicht automatisch '
              'bestaetigt ausgewiesen.</label></p>')
-    h.append('<div class="actions" style="margin-bottom:12px;gap:8px"'
+    h.append('<div class="actions" style="margin-bottom:12px;gap:8px">'
              '<button type="button" id="sbpay-all" style="width:auto">Alle Versandbereiten auswaehlen</button>'
              '<button type="button" id="sbpay-none" style="width:auto">Auswahl aufheben</button>'
              '<button type="button" class="primary" id="sbpay-send" '
              + ('disabled ' if not can_upload or not ready_count else '')
-             + 'style="width:auto">Ausgewaehlte PDFs senden (0)</button></div>')
+             + 'style="width:auto" aria-describedby="sbpay-send-help">Ausgewaehlte PDFs senden (0)</button></div>')
+    h.append('<p id="sbpay-send-help" role="status" aria-live="polite" '
+             'style="font-size:13px;color:#475467;margin:5px 0 12px">'
+             'Waehle ausschliesslich eindeutig zugeordnete Empfaenger aus. '
+             'Fuer mehrere Empfaenger ist die bestaetigte Sichtbarkeitspruefung erforderlich.</p>')
     h.append('<div style="margin:12px 0;padding:12px;background:#f6f9ff;border:1px solid #d8e5f8;border-radius:12px">'
              '<div style="font-size:13px;font-weight:750">Fortschritt</div>'
              '<progress id="sbpay-meter" max="1" value="0" style="width:100%;height:19px"></progress>'
@@ -11646,6 +11650,7 @@ const all=document.getElementById('sbpay-all');
 const none=document.getElementById('sbpay-none');
 const send=document.getElementById('sbpay-send');
 const visibilityAck=document.getElementById('sbpay-visibility-ack');
+const sendHelp=document.getElementById('sbpay-send-help');
 const meter=document.getElementById('sbpay-meter');
 const info=document.getElementById('sbpay-progress');
 const search=document.getElementById('sbpay-find');
@@ -11655,8 +11660,22 @@ let sending=false;
 function chosen(){return boxes.filter(b=>b.checked&&!b.disabled);}
 function update(){
  const n=chosen().length;
+ const needsAck=n>1&&!visibilityAck?.checked;
  send.textContent='Ausgewaehlte PDFs senden ('+n+')';
- send.disabled=sending||n===0||DISABLED||(n>1&&!visibilityAck?.checked);
+ // Keep the button clickable for the missing-acknowledgement explanation.
+ // The click handler below MUST check the acknowledgement before any fetch.
+ send.disabled=sending||n===0||DISABLED;
+ send.title=needsAck?'Fuer Sammelversand zuerst Sichtbarkeitspruefung bestaetigen.':'';
+ send.style.opacity=send.disabled?'0.55':'1';
+ send.style.cursor=send.disabled?'not-allowed':'pointer';
+ if(sendHelp){
+  sendHelp.style.color=needsAck?'#b42318':'#475467';
+  sendHelp.textContent=DISABLED?'Shiftbase-Upload ist nicht konfiguriert. Kein Versand moeglich.':
+   n===0?'Bitte mindestens einen gruenen Mitarbeiter auswaehlen.':
+   needsAck?'Fuer '+n+' ausgewaehlte PDFs: ZUERST das Kontrollkaestchen "Fuer einen Sammelversand" oben bestaetigen. Nur bestaetigen, wenn die Mitarbeitersichtbarkeit mit einem Test wirklich geprueft wurde. Noch KEIN Versand gestartet.':
+   n===1?'Einzelversand bereit. Vor dem Klicken PDF und Empfaenger pruefen.':
+   n+' PDFs ausgewaehlt. Beim Klick werden die Empfaenger nacheinander geprueft und gesendet.';
+ }
  if(all)all.disabled=sending;
  if(none)none.disabled=sending;
 }
@@ -11672,6 +11691,14 @@ send.addEventListener('click',async()=>{
  if(sending)return;
  const picked=chosen().map(b=>b.value);
  if(!picked.length)return;
+ // Never allow an unacknowledged multi-recipient submission, even though
+ // the button remains clickable to explain the missing prerequisite.
+ if(picked.length>1&&!visibilityAck?.checked){
+  info.textContent='Noch kein Versand gestartet: Erst oben die Sichtbarkeitspruefung fuer den Sammelversand bestaetigen – ausschliesslich nach echtem Test im Mitarbeiterkonto.';
+  if(visibilityAck){visibilityAck.scrollIntoView({block:'center'});visibilityAck.focus({preventScroll:true});}
+  update();
+  return;
+ }
  sending=true;update();
  meter.max=picked.length;meter.value=0;
  info.textContent='0 von '+picked.length+' Mitarbeitern verarbeitet. Bitte diese Seite waehrend des Versands offen lassen.';
