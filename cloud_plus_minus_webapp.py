@@ -9095,28 +9095,42 @@ def _sbpay_drivers(conn):
 
 
 def _sbpay_name_variant_plausible(pdf_name, other_name):
-    """Permit review of common spelling/second-name/display-label variants.
+    """Conservative NAME VARIANT screen, not an identity decision.
 
-    This is NOT an identity proof and never auto-maps anyone. It only limits
-    the one-click candidate list. A real, unique Shiftbase ID plus explicit
-    admin selection and subsequent live checks are still mandatory.
+    This screen applies to suggestions and to a manually selected Cloud
+    employee vs. the fresh Shiftbase directory. Only a genuine unique ID,
+    independently checked Cloud mapping, explicit administrator selection
+    and the per-PDF personnel number can authorize the reviewed binding.
+    Names are never used to invent IDs or to choose a recipient automatically.
     """
+    from difflib import SequenceMatcher
     pdf = _sbpay_norm(pdf_name).split()
     other = _sbpay_shiftbase_name_key(other_name).split()
     if len(pdf) < 2 or len(other) < 2:
         return False
     if pdf == other:
         return True
+    # In some payroll exports a two-token name is printed in reversed order.
+    # This is useful as a *candidate*, never as standalone identity proof.
+    if len(pdf) == len(other) == 2 and pdf == list(reversed(other)):
+        return True
     overlap = set(pdf) & set(other)
-    # Shared first name and substantial other name token (normally surname).
     if pdf[0] == other[0] and any(len(t) >= 4 and t != pdf[0] for t in overlap):
         return True
-    # Common short/long given-name form such as Alex/Alexander requires a
-    # matching surname, not merely a coincidentally shared family name.
-    first_a,first_b = pdf[0],other[0]
+    first_a, first_b = pdf[0], other[0]
     if min(len(first_a),len(first_b)) >= 4 and (
             first_a.startswith(first_b) or first_b.startswith(first_a)):
         return any(len(t) >= 4 for t in (set(pdf[1:]) & set(other[1:])))
+    # Known transcription/transliteration variants such as
+    # "Sabahuddin Ahmed" / "Sabadin Ahmed" have the SAME full surname,
+    # substantially similar long first names, and the same initial prefix.
+    # Keep the threshold intentionally strict; *never* infer a Shiftbase ID
+    # from a fuzzy result, and refuse ambiguous live-directory candidates.
+    if (len(pdf) == len(other) == 2 and pdf[1] == other[1]
+            and len(pdf[1]) >= 4 and min(len(first_a),len(first_b)) >= 6
+            and first_a[:3] == first_b[:3]
+            and SequenceMatcher(None, first_a, first_b).ratio() >= 0.82):
+        return True
     return False
 
 
@@ -10694,8 +10708,17 @@ def admin_shiftbase_payroll_assign(batch_id, page_no):
         remote_display=matches[0]
         if not _sbpay_name_variant_plausible(driver['name'], remote_display):
             raise ShiftbaseIntegrationError(
-                'Gespeicherter Cloud-Fahrer passt nicht zum echten Shiftbase-Profil dieser ID. '
-                'Bitte die Shiftbase-ID im Monatsabgleich korrigieren.')
+                'Cloud-Name und echter Shiftbase-Profilname weichen zu stark voneinander ab. '
+                'Bitte das Profil und die gespeicherte ID pruefen; keine Zuordnung gespeichert.')
+        # A similar spelling is never sufficient when the live directory has
+        # *another* plausible person. Even an explicit manual choice is blocked
+        # until this ambiguity has been resolved outside the payroll importer.
+        plausible_ids={found_uid for found_uid, display in profiles
+                       if found_uid and _sbpay_name_variant_plausible(driver['name'], display)}
+        if plausible_ids != {uid}:
+            raise ShiftbaseIntegrationError(
+                'Mehrere Shiftbase-Profile mit aehnlichen Namen gefunden. '
+                'Identitaet nicht eindeutig; keine Zuordnung gespeichert.')
         # The selected real user was independently found by immutable ID.
         # Do not silently substitute a similar name. Explicit manual selection
         # binds only this unique PDF identity, and all later uploads still
