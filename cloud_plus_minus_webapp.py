@@ -4009,7 +4009,7 @@ def _sb_verified_directory(users):
         if not isinstance(person, dict):
             person = item
         uid = _sb_id(person, 'id', 'user_id')
-        name = _sbpay_norm(_sb_user_display(person))
+        name = _sbpay_shiftbase_name_key(_sb_user_display(person))
         if uid and name:
             pairs.append((str(uid), name))
     return (set(pairs), Counter(uid for uid, _ in pairs),
@@ -4075,7 +4075,9 @@ def admin_shiftbase_mapping_audit():
     html = ['<div class="card"><h2>Shiftbase-Zuordnungen prüfen (nur lesend)</h2>',
             '<p>Quelle: bestehende Tabelle <code>shiftbase_driver_map</code>. Dieselben '
             'Zuordnungen werden für Monatsabgleich und Lohnzettel verwendet. '
-            'Die hier aufgeführten Nummern sind keine aus Tabellenpositionen erzeugten IDs.</p>',
+            'Die hier aufgeführten Nummern sind keine aus Tabellenpositionen erzeugten IDs. '
+            'Ein getrenntes, ein- oder zweistelliges Shiftbase-Anzeigepräfix vor dem Namen '
+            'wird nur beim Namensvergleich ignoriert; ID- und Eindeutigkeitsprüfung bleiben streng.</p>',
             '<p><a class="btn small" href="'+url_for('admin_shiftbase_abgleich',erweitert=1,laden=1)+'">'
             'Zur offiziellen Shiftbase-Zuordnung</a></p>']
     if not online:
@@ -4208,7 +4210,7 @@ def _sb_report(conn,year,month,users,times,absences):
             absence_by_user[uid].append({'von':max(astart,start),'bis':min(aend,end),'art':_sb_absence_name(ab),'status':str(_sb_value(ab,'status') or 'unbekannt')})
     result=[]
     from collections import Counter as _SBNamesCount
-    real_name_count = _SBNamesCount(_sbpay_norm(_sb_user_display(u)) for u in known_users.values())
+    real_name_count = _SBNamesCount(_sbpay_shiftbase_name_key(_sb_user_display(u)) for u in known_users.values())
     local_name_count = _SBNamesCount(_sbpay_norm(r['name']) for r in local)
     for r in local:
         uid=mappings.get(r['driver_id'])
@@ -4216,7 +4218,7 @@ def _sb_report(conn,year,month,users,times,absences):
         mapping_confirmed = bool(uid and uid in known_users and
                                  local_name and local_name_count[local_name] == 1 and
                                  real_name_count[local_name] == 1 and
-                                 _sbpay_norm(_sb_user_display(known_users[uid])) == local_name)
+                                 _sbpay_shiftbase_name_key(_sb_user_display(known_users[uid])) == local_name)
         # A wrong/stale ID may exist historically. Never attribute its hours to
         # another Cloud employee, even in the read-only monthly comparison.
         selected=entries.get(uid,[]) if mapping_confirmed else []
@@ -8910,6 +8912,31 @@ def _sbpay_norm(name):
     return re.sub(r'[^a-z0-9]+', ' ', text).strip()
 
 
+def _sbpay_shiftbase_name_key(display_name):
+    """Compare a *Shiftbase* display name with the unnumbered Cloud/PDF name.
+
+    Some Shiftbase profiles display an administrative two-digit label before
+    the actual name (e.g. '04 Claudia Schmäler'). This label is NOT a user ID,
+    personnel number or position-based association. Strip it only when it is a
+    separate 1- or 2-digit prefix followed by an otherwise plausible two-part
+    name. Identity still requires the exact real Shiftbase API user ID and a
+    unique name on both sides; collisions are always blocked.
+    """
+    raw = ' '.join(str(display_name or '').split())
+    prefixed = re.fullmatch(r'[0-9]{1,2}\s+(.+)', raw)
+    if prefixed and len(prefixed.group(1).split()) >= 2:
+        raw = prefixed.group(1)
+    return _sbpay_norm(raw)
+
+
+def _sbpay_profile_name_pattern(cloud_name):
+    """The visible Shiftbase profile can show the same display-only prefix."""
+    value = ' '.join(str(cloud_name or '').split())
+    if not value or len(value) > 100:
+        raise ShiftbaseIntegrationError('Ungueltiger Cloud-Mitarbeitername. Kein Upload.')
+    return re.compile(r'^\s*(?:[0-9]{1,2}\s+)?' + re.escape(value) + r'\s*$', re.I)
+
+
 def _sbpay_period(text):
     # Recognize the official DATEV heading; do not derive it from the upload name.
     m = re.search(r'\bf[uü]r\s+(Januar|Februar|M[aä]rz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+(20\d{2})\b',
@@ -9639,7 +9666,7 @@ def _sbpay_prepare_batch_checked(batch_id):
         if not isinstance(profile, dict):
             profile = item
         profile_pairs.append((_sb_id(profile, 'id', 'user_id'),
-                              _sbpay_norm(_sb_user_display(profile))))
+                              _sbpay_shiftbase_name_key(_sb_user_display(profile))))
     uid_counts = _C(uid for uid, name in profile_pairs if uid)
     name_counts = _C(name for uid, name in profile_pairs if name)
     user_pairs = set(profile_pairs)
@@ -9692,6 +9719,7 @@ def admin_shiftbase_payroll_prepare(batch_id):
     _sbpay_token_check()
     as_json = 'application/json' in str(request.headers.get('Accept', ''))
     try:
+        _sbpay_refresh_unapproved_mappings(batch_id)
         passed, blocked = _sbpay_prepare_batch_checked(batch_id)
     except Exception:
         app.logger.warning('Payroll recipient check failed (no upload initiated)')
@@ -9813,7 +9841,14 @@ def admin_shiftbase_payroll_batch(batch_id):
                  '<input type="hidden" name="csrf_token" value="'+token+'">'
                  '<button type="submit" class="btn small" style="width:auto">Zuordnungen erneut pruefen</button>'
                  '</form></div>')
-    h.append('<div class="actions" style="margin-bottom:12px;gap:8px">'
+    h.append('<p style="margin:8px 0;font-size:13px">'
+             '<label style="display:flex;align-items:flex-start;gap:8px;font-weight:700">'
+             '<input type="checkbox" id="sbpay-visibility-ack" style="width:18px;height:18px;flex:none">'
+             'Fuer einen Sammelversand: Ich habe bereits an einer Testabrechnung selbst im '
+             'Mitarbeiterkonto geprueft, dass die Datei sichtbar und lesbar ist. '
+             'Fuer jede weitere Person wird die Sichtbarkeit weiterhin als nicht automatisch '
+             'bestaetigt ausgewiesen.</label></p>')
+    h.append('<div class="actions" style="margin-bottom:12px;gap:8px"'
              '<button type="button" id="sbpay-all" style="width:auto">Alle Versandbereiten auswaehlen</button>'
              '<button type="button" id="sbpay-none" style="width:auto">Auswahl aufheben</button>'
              '<button type="button" class="primary" id="sbpay-send" '
@@ -9921,7 +9956,9 @@ def admin_shiftbase_payroll_batch(batch_id):
     h.append('<p class="muted" style="font-size:12px;margin-top:12px">'
              'Es werden nur die ausgewaehlten, eindeutig verifizierten Mitarbeiter-PDFs '
              'in die jeweilige persoenliche Shiftbase-Dateiablage hochgeladen. '
-             'Bei einem unklaren Ergebnis wird der Versand angehalten; kein automatischer Neuversand.</p>')
+             'Bei einem unklaren Ergebnis wird der Versand angehalten; kein automatischer Neuversand. '
+             'Fehlt Shiftbase eine technische Sichtbarkeitsbestaetigung, bleibt die Sichtbarkeit '
+             'auch nach beobachtetem Upload zur Einzelpruefung offen.</p>')
     h.append('<a class="btn small" href="'+url_for('admin_shiftbase_payroll')+'">Weitere PDF hochladen</a></div>')
     return _sbpay_no_cache(make_response(base_page('Lohnzettel auswaehlen und senden',''.join(h),'shiftbase_payroll')))
 
@@ -9982,36 +10019,56 @@ def admin_shiftbase_payroll_review_unknown(batch_id, page_no):
     return redirect(url_for('admin_shiftbase_payroll_batch', batch_id=batch_id))
 
 
-@app.post('/admin/shiftbase/lohnzettel/<batch_id>/resync')
-@admin_login_required
-def admin_shiftbase_payroll_resync(batch_id):
-    _sbpay_token_check()
+def _sbpay_refresh_unapproved_mappings(batch_id):
+    """Refresh only untouched PDF associations from the shared monthly mapping.
+
+    Never rewrite individually approved, manually reviewed or attempted
+    deliveries. No guessed ID and no upload are possible here. Final approval
+    always depends on a fresh, unique Shiftbase API ID/name check.
+    """
     from collections import Counter as _C
     with db_conn() as conn:
         _, rows = _sbpay_batch_data(conn,batch_id)
         drivers = _sbpay_drivers(conn)
+        _sbpay_delivery_schema(conn)
+        attempts = {int(r['page_no']) for r in conn.execute(
+            'SELECT page_no FROM shiftbase_payroll_deliveries WHERE batch_id=?',
+            (batch_id,)).fetchall()}
         names = _C(_sbpay_norm(r['employee_name']) for r in rows)
         numbers = _C(r['personal_no'] for r in rows)
-        # Do not overwrite a manually reviewed or already approved decision.
-        reserved={int(r['driver_id']) for r in rows if r['driver_id'] and (r['approved'] or r['match_type']=='manual')}
-        updated=0
+        reserved = {int(r['driver_id']) for r in rows if r['driver_id'] and
+                    (r['approved'] or r['match_type'] == 'manual' or
+                     int(r['page_no']) in attempts)}
+        updated = 0
         for r in rows:
-            if r['approved'] or r['match_type']=='manual':
+            if r['approved'] or r['match_type'] == 'manual' or int(r['page_no']) in attempts:
                 continue
-            match=_sbpay_matching(r['employee_name'],r['personal_no'],drivers,names,numbers)
+            match = _sbpay_matching(r['employee_name'],r['personal_no'],drivers,names,numbers)
             if match and int(match['id']) not in reserved:
-                conn.execute('''UPDATE shiftbase_payroll_pages SET
-                    driver_id=?,shiftbase_user_id=?,match_type='exact',approved=0,approved_at=NULL
-                    WHERE batch_id=? AND page_no=?''',
-                    (int(match['id']),str(match['shiftbase_user_id']),batch_id,r['page_no']))
+                if (int(r['driver_id'] or 0) != int(match['id']) or
+                        str(r['shiftbase_user_id'] or '') != str(match['shiftbase_user_id']) or
+                        r['match_type'] != 'exact'):
+                    conn.execute("""UPDATE shiftbase_payroll_pages SET
+                        driver_id=?,shiftbase_user_id=?,match_type='exact',approved=0,approved_at=NULL
+                        WHERE batch_id=? AND page_no=?""",
+                        (int(match['id']),str(match['shiftbase_user_id']),batch_id,r['page_no']))
+                    updated += 1
                 reserved.add(int(match['id']))
-                updated+=1
-            else:
-                conn.execute('''UPDATE shiftbase_payroll_pages SET
+            elif r['driver_id'] or r['shiftbase_user_id'] or r['match_type'] != 'blocked':
+                conn.execute("""UPDATE shiftbase_payroll_pages SET
                     driver_id=NULL,shiftbase_user_id='',match_type='blocked',approved=0,approved_at=NULL
-                    WHERE batch_id=? AND page_no=?''', (batch_id,r['page_no']))
+                    WHERE batch_id=? AND page_no=?""", (batch_id,r['page_no']))
+                updated += 1
         conn.commit()
-    flash(f'{updated} eindeutige Zuordnungen aktualisiert. Zur Freigabe bitte prüfen.', 'ok')
+    return updated
+
+
+@app.post('/admin/shiftbase/lohnzettel/<batch_id>/resync')
+@admin_login_required
+def admin_shiftbase_payroll_resync(batch_id):
+    _sbpay_token_check()
+    updated = _sbpay_refresh_unapproved_mappings(batch_id)
+    flash(f'{updated} unbestätigte Zuordnungen aktualisiert. Zur Freigabe bitte live prüfen.', 'ok')
     return redirect(url_for('admin_shiftbase_payroll_batch',batch_id=batch_id))
 
 
@@ -10301,7 +10358,7 @@ def _sbpay_assert_shiftbase_recipient(user_id, employee_name, force=True):
         uid = _sb_id(user,'id','user_id')
         if uid == str(user_id):
             matching.append(user)
-        if _sbpay_norm(_sb_user_display(user)) == target_name:
+        if _sbpay_shiftbase_name_key(_sb_user_display(user)) == target_name:
             same_named.append(user)
     # Never send a payslip if two Shiftbase profiles use the same name,
     # even when one of them carries the ID previously mapped in the Cloud.
@@ -10782,7 +10839,7 @@ def _sbpay_open_verified_employee_files(page, origin, user_id, employee_name):
         raise ShiftbaseIntegrationError(
             'Shiftbase hat die persoenliche Mitarbeiter-Dateien-URL verlassen '
             '(moeglicherweise Sitzung abgelaufen). Kein Upload.')
-    name = page.get_by_text(employee_name, exact=True)
+    name = page.get_by_text(_sbpay_profile_name_pattern(employee_name))
     try:
         name.first.wait_for(state='visible', timeout=20_000)
     except Exception as exc:
@@ -11450,6 +11507,7 @@ const boxes=[...document.querySelectorAll('.sbpay-choice:not(:disabled)')];
 const all=document.getElementById('sbpay-all');
 const none=document.getElementById('sbpay-none');
 const send=document.getElementById('sbpay-send');
+const visibilityAck=document.getElementById('sbpay-visibility-ack');
 const meter=document.getElementById('sbpay-meter');
 const info=document.getElementById('sbpay-progress');
 const search=document.getElementById('sbpay-find');
@@ -11460,11 +11518,12 @@ function chosen(){return boxes.filter(b=>b.checked&&!b.disabled);}
 function update(){
  const n=chosen().length;
  send.textContent='Ausgewaehlte PDFs senden ('+n+')';
- send.disabled=sending||n===0||DISABLED;
+ send.disabled=sending||n===0||DISABLED||(n>1&&!visibilityAck?.checked);
  if(all)all.disabled=sending;
  if(none)none.disabled=sending;
 }
 boxes.forEach(b=>b.addEventListener('change',update));
+if(visibilityAck)visibilityAck.addEventListener('change',update);
 if(all)all.addEventListener('click',()=>{boxes.forEach(b=>b.checked=true);update();});
 if(none)none.addEventListener('click',()=>{boxes.forEach(b=>b.checked=false);update();});
 if(search)search.addEventListener('input',()=>{
@@ -11478,7 +11537,7 @@ send.addEventListener('click',async()=>{
  sending=true;update();
  meter.max=picked.length;meter.value=0;
  info.textContent='0 von '+picked.length+' Mitarbeitern verarbeitet. Bitte diese Seite waehrend des Versands offen lassen.';
- let complete=0, failed=false;
+ let complete=0, failed=false, visibilityPending=0;
  for(const number of picked){
   const params=new URLSearchParams();
   params.set('csrf_token',CSRF);params.set('mode','single');params.set('page_no',number);
@@ -11495,19 +11554,24 @@ send.addEventListener('click',async()=>{
       '. Status unklar: zuerst persoenliche Mitarbeiterakte pruefen; NICHT erneut senden!';
     failed=true;break;
    }
-   if(result.state!=='confirmed'&&result.state!=='observed_ui'){
-    info.textContent='Gestoppt bei PDF '+number+': Status '+(result.state==='observed_ui_visibility_unverified'?'Datei im Profil gesehen, Mitarbeitersichtbarkeit nicht bestaetigt – manuell pruefen':(result.state||'unbekannt'))+
+   if(!['confirmed','observed_ui','observed_ui_visibility_unverified'].includes(result.state)){
+    info.textContent='Gestoppt bei PDF '+number+': Status '+(result.state||'unbekannt')+
         '. Bei unklarem Ergebnis nicht erneut senden!';
     failed=true;break;
    }
+   if(result.state==='observed_ui_visibility_unverified')visibilityPending++;
    const checkbox=boxes.find(b=>b.value===number);
    if(checkbox){
     checkbox.checked=false;checkbox.disabled=true;
     const cell=checkbox.closest('tr')?.querySelector('.sbpay-status');
-    if(cell)cell.textContent=result.state==='confirmed'?'API-bestaetigt':'Im persoenlichen Profil gesehen';
+    if(cell)cell.textContent=result.state==='confirmed'?'API-bestaetigt':
+        (result.state==='observed_ui_visibility_unverified'
+        ?'Im persoenlichen Profil gesehen – Mitarbeitersichtbarkeit noch selbst pruefen'
+        :'Im persoenlichen Profil gesehen');
    }
    complete++;meter.value=complete;
-   info.textContent=complete+' von '+picked.length+' PDFs verarbeitet.';
+   info.textContent=complete+' von '+picked.length+' PDFs verarbeitet. '+
+       visibilityPending+' x Mitarbeitersichtbarkeit noch manuell pruefen.';
   }catch(error){
    info.textContent='Verbindung unterbrochen bei PDF '+number+
       '. Keine erneute Uebertragung starten, bevor die persoenliche Shiftbase-Akte kontrolliert wurde.';
@@ -11516,8 +11580,9 @@ send.addEventListener('click',async()=>{
  }
  sending=false;update();
  if(!failed){
-  info.textContent='Alle '+complete+' ausgewaehlten PDFs bearbeitet. Der aktuelle Status wird geladen.';
-  window.location.reload();
+  info.textContent='Alle '+complete+' ausgewaehlten PDFs sind verarbeitet. '+
+     visibilityPending+' davon im persoenlichen Profil gesehen, Mitarbeitersichtbarkeit '+
+     'noch im Mitarbeiterkonto pruefen. Seite bei Bedarf neu laden.';
  }
 });
 update();
