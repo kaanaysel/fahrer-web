@@ -11330,6 +11330,139 @@ def _sbpay_wait_for_employee_file_stage(page, user_id, stage, timeout_ms=25000):
     raise ShiftbaseIntegrationError('Shiftbase-Dialogschritt wurde nicht rechtzeitig angezeigt; Status pruefen.')
 
 
+def _sbpay_file_selection_error_code(page):
+    """Read only a narrow upload-error *category*, never employee/file content.
+
+    Shiftbase may reject a selected file without switching to the details route.
+    Do not record arbitrary alert text or screenshots: payroll data are private.
+    """
+    try:
+        return str(page.evaluate(r"""() => {
+          const visible = el => {
+            if (!el || !el.getClientRects().length) return false;
+            const style = getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const notices = [...document.querySelectorAll(
+            '[role="alert"], [data-sonner-toast], [class*="toast"], .alert-danger')]
+            .filter(visible).slice(0, 10)
+            .map(el => (el.innerText || '').slice(0, 350)).join(' ');
+          if (/(datei|file|bestand|pdf|upload|hochladen)/i.test(notices)) {
+            if (/(zu gro[ßs]|too large|5\s*mb|maximale gr[oö][ßs]e|bestandsgrootte)/i.test(notices))
+              return 'DATEI_ZU_GROSS';
+            if (/(dateityp|file type|ung[uü]ltiges format|unsupported|nicht erlaubt)/i.test(notices))
+              return 'DATEITYP_ABGELEHNT';
+            if (/(fehlgeschlagen|failed|error|fehler|niet gelukt)/i.test(notices))
+              return 'SHIFTBASE_DATEIFEHLER';
+          }
+          return '';
+        }""") or '')
+    except Exception:
+        return ''
+
+
+def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000):
+    """Quick on success, bounded on slow Shiftbase PDF preview processing.
+
+    The file might already have reached Shiftbase once input[type=file] is set.
+    NEVER retry the selection. A verified, matching employee-details URL AND a
+    visible details heading are required before editing or saving any metadata.
+
+    Return instantly if Shiftbase is ready; report only non-PII status signals
+    if it stalls. No screenshot, URL, session token or payslip text is logged.
+    """
+    from time import monotonic
+    from urllib.parse import urlsplit
+
+    start=monotonic()
+    deadline=start+timeout_ms/1000.0
+    error_codes=[]
+    http_statuses=[]
+    files_since=None
+    last_notice=0.0
+    last_loading_log=False
+
+    def on_response(response):
+        # Keep only status codes, not response bodies or sensitive URLs.
+        try:
+            hostname=(urlsplit(response.url).hostname or '').lower()
+            status=int(response.status)
+            if (hostname in ('app.shiftbase.com','api.shiftbase.com') and
+                    status >= 400 and len(http_statuses) < 8):
+                http_statuses.append(status)
+        except Exception:
+            pass
+
+    page.on('response', on_response)
+    try:
+        while monotonic() < deadline:
+            try:
+                current=_sbpay_employee_file_stage(page.url, user_id)
+            except Exception as exc:
+                raise ShiftbaseIntegrationError(
+                    'Browserseite nach Dateiauswahl nicht mehr erreichbar; Status unklar.') from exc
+            if current is None:
+                raise ShiftbaseIntegrationError(
+                    'Mitarbeiter-Dateien verlassen oder Shiftbase-Anmeldung geaendert; '
+                    'kein weiterer Upload, Status unklar.')
+            if current == 'details':
+                # URL may change a moment before the new SPA view is rendered.
+                heading=page.get_by_text(re.compile(
+                    r'^Dateianh[aä]nge$|^File attachments$',re.I)).filter(visible=True)
+                if heading.count() == 1:
+                    return
+            if current == 'files':
+                if files_since is None:
+                    files_since=monotonic()
+                elif monotonic()-files_since >= 1.5:
+                    raise ShiftbaseIntegrationError(
+                        'Dateiauswahl wurde ohne bestaetigten Dokumentdialog geschlossen; '
+                        'Status unklar, vor erneutem Versand persoenliche Akte pruefen.')
+            else:
+                files_since=None
+
+            elapsed=monotonic()-start
+            if elapsed-last_notice >= 0.8:
+                code=_sbpay_file_selection_error_code(page)
+                if code and code not in error_codes:
+                    error_codes.append(code)
+                last_notice=elapsed
+                # Only an explicit file size/type rejection is a definitive UI
+                # error. Even then, the at-most-once claim stays untouched.
+                if code in ('DATEI_ZU_GROSS','DATEITYP_ABGELEHNT'):
+                    raise ShiftbaseIntegrationError(
+                        'Shiftbase hat die Dateiauswahl abgelehnt ('+code+'). '
+                        'Status der Mitarbeiterakte vor erneutem Versand pruefen.')
+            if elapsed>=10 and not last_loading_log:
+                app.logger.info('SBPAY_FILE_SELECTED_WAIT elapsed_s=%d stage=%s',
+                                int(elapsed), current)
+                last_loading_log=True
+            # Fast transition check: no fixed 25-second delay on healthy uploads.
+            page.wait_for_timeout(120 if elapsed<10 else 240)
+
+        current=_sbpay_employee_file_stage(page.url,user_id) or 'andere_seite'
+        # Diagnostic is intentionally non-sensitive: only the modal state and
+        # provider HTTP codes, never the PDF, names, path, or login session.
+        try:
+            file_field=page.locator('input[type="file"]').count()>0
+        except Exception:
+            file_field=False
+        recent_codes=','.join(str(x) for x in http_statuses[-4:]) or 'keine'
+        ui_code=','.join(error_codes[-2:]) or 'keiner'
+        app.logger.warning(
+            'SBPAY_FILE_SELECTED_DIAGNOSTIC stage=%s file_field=%s http_status=%s ui_error=%s',
+            current, file_field, recent_codes, ui_code)
+        raise ShiftbaseIntegrationError(
+            'Shiftbase-Dokumentdetails nicht bereit (Schritt '+current+
+            ', HTTP-Fehler '+recent_codes+', Anzeige '+ui_code+'). '
+            'Datei eventuell bereits angenommen: Mitarbeiterakte pruefen, nicht blind wiederholen.')
+    finally:
+        try:
+            page.remove_listener('response', on_response)
+        except Exception:
+            pass
+
+
 def _sbpay_upload_dialog_scope(page, user_id, stage):
     """Bind upload controls strictly to the active employee-specific modal.
 
@@ -11378,7 +11511,9 @@ def _sbpay_upload_dialog_scope(page, user_id, stage):
                 continue
             final_action = candidate.locator('button, a, [role="button"]').filter(
                 has_text=re.compile(r'^\s*(?:Datei hinzuf(?:u|ü|ue)gen|Add file|Bestand toevoegen|Speichern|Save)\s*$', re.I)).filter(visible=True)
-            if final_action.count() != 1 or not final_action.is_enabled():
+            # Shiftbase may enable Save only AFTER category/title are entered.
+            # The final enabled-state check remains in _sbpay_detail_save_button.
+            if final_action.count() != 1:
                 continue
             if _sbpay_employee_file_stage(page.url, user_id) != 'details':
                 raise ShiftbaseIntegrationError('Mitarbeiter-Dokumentdialog verlassen. Nicht speichern.')
@@ -12113,12 +12248,9 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         before_submit()
         stage = 'FILE_SELECTED'
         uploads.set_input_files({'name':file_name, 'mimeType':'application/pdf','buffer':content})
-        try:
-            _sbpay_wait_for_employee_file_stage(page, user_id, 'details', timeout_ms=25000)
-        except ShiftbaseIntegrationError as exc:
-            raise ShiftbaseIntegrationError(
-                'Dateiauswahl erfolgt; Dokument-Detaildialog nicht bestaetigt. '
-                'Uploadstatus unklar, nicht erneut senden.') from exc
+        # Details may be delayed by the Shiftbase PDF-preview conversion.
+        # A ready dialog continues immediately; only an actual stall waits.
+        _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000)
         stage = 'DETAIL_DIALOG_SCOPE'
         detail_scope = _sbpay_upload_dialog_scope(page, user_id, 'details')
         # Explicitly identify the new details view from the user's UI.
