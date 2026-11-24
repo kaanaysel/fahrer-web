@@ -11611,7 +11611,7 @@ def _sbpay_file_selection_error_code(page):
         return ''
 
 
-def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000):
+def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000, select_file=None):
     """Quick on success, bounded on slow Shiftbase PDF preview processing.
 
     The file might already have reached Shiftbase once input[type=file] is set.
@@ -11620,6 +11620,9 @@ def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000):
 
     Return instantly if Shiftbase is ready; report only non-PII status signals
     if it stalls. No screenshot, URL, session token or payslip text is logged.
+    The file selection callback, when given, runs AFTER the HTTP listener is
+    attached, so errors during upload are also seen. Exactly one selection,
+    never a retry. The irreversible write claim is persisted by the caller.
     """
     from time import monotonic
     from urllib.parse import urlsplit
@@ -11645,6 +11648,8 @@ def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000):
 
     page.on('response', on_response)
     try:
+        if select_file is not None:
+            select_file()
         while monotonic() < deadline:
             try:
                 current=_sbpay_employee_file_stage(page.url, user_id)
@@ -11665,10 +11670,22 @@ def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000):
             if current == 'files':
                 if files_since is None:
                     files_since=monotonic()
-                elif monotonic()-files_since >= 1.5:
+                # A Shiftbase SPA may briefly show the plain employee files
+                # route BETWEEN the upload picker and the document details.
+                # The old 1.5-second threshold incorrectly marked this normal
+                # transition as failure. Give the SPA a bounded grace period,
+                # but never infer a successful upload from the files route.
+                elif monotonic()-files_since >= 8.0:
+                    recent_codes=','.join(str(x) for x in http_statuses[-4:]) or 'keine'
+                    ui_code=','.join(error_codes[-2:]) or 'keiner'
+                    app.logger.warning(
+                        'SBPAY_FILE_SELECTED_DIAGNOSTIC stage=files_closed http_status=%s ui_error=%s',
+                        recent_codes, ui_code)
                     raise ShiftbaseIntegrationError(
-                        'Dateiauswahl wurde ohne bestaetigten Dokumentdialog geschlossen; '
-                        'Status unklar, vor erneutem Versand persoenliche Akte pruefen.')
+                        'Dateiauswahl ohne bestaetigten Dokumentdialog geschlossen '
+                        '(Shiftbase-Antwort '+recent_codes+', Hinweis '+ui_code+'). '
+                        'Uploadstatus unklar: persoenliche Mitarbeiterakte pruefen, '
+                        'NICHT blind erneut senden.')
             else:
                 files_since=None
 
@@ -12543,10 +12560,13 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         _sbpay_assert_shiftbase_recipient(user_id, employee_name, force=False)
         before_submit()
         stage = 'FILE_SELECTED'
-        uploads.set_input_files({'name':file_name, 'mimeType':'application/pdf','buffer':content})
-        # Details may be delayed by the Shiftbase PDF-preview conversion.
-        # A ready dialog continues immediately; only an actual stall waits.
-        _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000)
+        # Subscribe to upload-related HTTP responses BEFORE selecting the
+        # PDF: Shiftbase may reject the file during set_input_files itself.
+        # Exactly one browser selection; never retry or change the recipient.
+        _sbpay_wait_for_details_after_selection(
+            page, user_id, timeout_ms=45000,
+            select_file=lambda: uploads.set_input_files({
+                'name':file_name, 'mimeType':'application/pdf', 'buffer':content}))
         stage = 'DETAIL_DIALOG_SCOPE'
         detail_scope = _sbpay_upload_dialog_scope(page, user_id, 'details')
         # Explicitly identify the new details view from the user's UI.
