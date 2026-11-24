@@ -11931,6 +11931,11 @@ def _sbpay_details_select_payroll_category(scope, page, user_id):
     if from_group_native is not None:
         # Native selects require the exact *displayed label*, not guessed IDs.
         try:
+            chosen = from_group_native.evaluate(
+                '(el) => el.selectedOptions && el.selectedOptions.length === 1 '
+                '? el.selectedOptions[0].textContent.trim() : ""')
+            if chosen == expected:
+                return expected
             from_group_native.select_option(label=expected, timeout=8000)
             chosen = from_group_native.evaluate(
                 '(el) => el.selectedOptions && el.selectedOptions.length === 1 '
@@ -11950,7 +11955,11 @@ def _sbpay_details_select_payroll_category(scope, page, user_id):
                 re.compile(r'^\s*Kategorie ausw[aä]hlen\s*$', re.I)))
         if trigger is None:
             raise ShiftbaseIntegrationError('Kategorie-Dropdown nicht eindeutig. Nicht speichern.')
-        trigger.click()
+        # A combobox whose own displayed text exactly equals the required
+        # category is already set; do not reopen it. Other text is no proof.
+        if trigger.inner_text(timeout=2000).strip() == expected:
+            return expected
+        trigger.click(timeout=8000)
         if _sbpay_employee_file_stage(page.url, user_id) != 'details':
             raise ShiftbaseIntegrationError('Mitarbeiter-Dateidialog bei Kategorie-Auswahl verlassen. Nicht speichern.')
         # Some custom select popovers are mounted outside the modal DOM.
@@ -11962,7 +11971,7 @@ def _sbpay_details_select_payroll_category(scope, page, user_id):
             option = _sbpay_unique_visible(page.get_by_text(expected, exact=True))
         if option is None:
             raise ShiftbaseIntegrationError('Kategorie Gehaltsabrechnung und Gehalt fehlt/ist mehrfach vorhanden. Nicht speichern.')
-        option.click()
+        option.click(timeout=8000)
         if _sbpay_employee_file_stage(page.url, user_id) != 'details':
             raise ShiftbaseIntegrationError('Mitarbeiter-Dateidialog nach Kategorie-Auswahl verlassen. Nicht speichern.')
         # A merely clicked option does not prove selection. The exact text must
@@ -12609,6 +12618,15 @@ def _sbpay_browser_upload_once(contract, batch, row, content, before_submit=None
                                    title, file_name)
 
 
+def _sbpay_fast_recipient_read(user_id, employee_name):
+    """Bound only the payroll API GET; never use stale data or retry a write."""
+    token = _SB_STEP_READ_TIMEOUT.set(8)
+    try:
+        _sbpay_assert_shiftbase_recipient(user_id, employee_name, force=False)
+    finally:
+        _SB_STEP_READ_TIMEOUT.reset(token)
+
+
 def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
                                        before_submit, title, file_name):
     """Execute exactly one employee's upload in an isolated incognito context.
@@ -12619,9 +12637,22 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
     """
     user_id = str(row['shiftbase_user_id'])
     employee_name = str(row['employee_name'])
+    from concurrent.futures import ThreadPoolExecutor
     stage = 'NEW_ISOLATED_CONTEXT'
     context = None
+    started = phase_started = _sbpay_time.monotonic()
+    timings = []
+    reader = read_future = None
+    def advance(next_stage):
+        nonlocal stage, phase_started
+        now = _sbpay_time.monotonic()
+        timings.append((stage, round(now - phase_started, 2)))
+        stage, phase_started = next_stage, now
     try:
+        # Only the independent, read-only API check overlaps navigation.
+        # The browser thread alone owns all browser operations and all writes.
+        reader = ThreadPoolExecutor(max_workers=1, thread_name_prefix='sbpay-id-read')
+        read_future = reader.submit(_sbpay_fast_recipient_read, user_id, employee_name)
         context = browser.new_context(storage_state=contract['state'], accept_downloads=False,
                                           service_workers='block', viewport={'width':1600,'height':900})
         page = context.new_page()
@@ -12629,11 +12660,13 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         # IMPORTANT: on the current Shiftbase UI, the personal files are
         # /employees/<uid>/files, NOT /universal/employees/<uid> / Overview.
         # Never fall back to company files or another employee profile.
-        stage = 'PROFILE_OPEN'
+        advance('PROFILE_OPEN')
         name = _sbpay_open_verified_employee_files(
             page, contract['origin'], user_id, employee_name)
         personal_files_area = page
-        stage = 'ADD_BUTTON'
+        advance('API_PREFLIGHT_JOIN')
+        read_future.result()  # fail closed before opening file picker
+        advance('ADD_BUTTON')
         add_button = _sbpay_personal_file_tab_add_button(page, user_id)
         if not name.first.is_visible() or not _sbpay_is_exact_employee_files_url(page.url, user_id):
             raise ShiftbaseIntegrationError('Empfaenger/Dateien-URL vor dem Upload nicht mehr bestaetigt.')
@@ -12643,7 +12676,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             raise ShiftbaseIntegrationError('Lohnzettel dieses Monats bereits in den persoenlichen Mitarbeiterdateien sichtbar; vor neuem Versand pruefen.')
         if len(content) > 5 * 1024 * 1024:
             raise ShiftbaseIntegrationError('PDF ist groesser als das Shiftbase-Limit von 5 MB. Kein Upload.')
-        stage = 'OPEN_FILE_PICKER'
+        advance('OPEN_FILE_PICKER')
         add_button.click()
         try:
             _sbpay_wait_for_employee_file_stage(page, user_id, 'upload', timeout_ms=10000)
@@ -12651,7 +12684,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             if _sbpay_is_session_error(exc):
                 raise
             raise ShiftbaseIntegrationError('Persoenliche Dateiauswahl nicht geoeffnet. Kein Upload.') from exc
-        stage = 'FILE_PICKER'
+        advance('FILE_PICKER')
         upload_scope = _sbpay_upload_dialog_scope(page, user_id, 'upload')
         uploads = upload_scope.locator('input[type="file"]')
         try:
@@ -12667,13 +12700,20 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             raise ShiftbaseIntegrationError('Vor der Dateiauswahl fehlt die persistente Schreibsperre.')
         if not name.first.is_visible() or _sbpay_employee_file_stage(page.url, user_id) != 'upload':
             raise ShiftbaseIntegrationError('Empfaenger vor Dateiauswahl nicht mehr eindeutig. Kein Upload.')
-        stage = 'LIVE_ID_AND_WRITE_CLAIM'
+        advance('LIVE_ID_AND_WRITE_CLAIM')
         # Directory snapshot is shared for up to 40 seconds, but this precise
         # employee's profile URL and full visible name were checked live above.
         # Any mismatch, missing ID, or duplicate remains a hard stop.
-        _sbpay_assert_shiftbase_recipient(user_id, employee_name, force=False)
+        _sbpay_fast_recipient_read(user_id, employee_name)
+        # Revalidate after the potentially slow API call, then persist the claim.
+        if (_sbpay_employee_file_stage(page.url, user_id) != 'upload' or
+                not name.first.is_visible() or uploads.count() != 1):
+            raise ShiftbaseIntegrationError('Empfaenger/Dateifeld nach API-Abgleich nicht mehr eindeutig. Kein Upload.')
         before_submit()
-        stage = 'FILE_SELECTED'
+        if (_sbpay_employee_file_stage(page.url, user_id) != 'upload' or
+                not name.first.is_visible() or uploads.count() != 1):
+            raise ShiftbaseIntegrationError('Empfaenger/Dateifeld nach Schreibsperre nicht mehr eindeutig. Kein Upload.')
+        advance('FILE_SELECTED')
         # Subscribe to upload-related HTTP responses BEFORE selecting the
         # PDF: Shiftbase may reject the file during set_input_files itself.
         # Exactly one browser selection; never retry or change the recipient.
@@ -12681,27 +12721,25 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             page, user_id, timeout_ms=45000,
             select_file=lambda: uploads.set_input_files({
                 'name':file_name, 'mimeType':'application/pdf', 'buffer':content}))
-        stage = 'DETAIL_DIALOG_SCOPE'
+        advance('DETAIL_DIALOG_SCOPE')
         detail_scope = _sbpay_upload_dialog_scope(page, user_id, 'details')
-        # Explicitly identify the new details view from the user's UI.
-        try:
-            detail_scope.get_by_text(re.compile(r'^Dateianh[aä]nge$|^File attachments$', re.I)).first.wait_for(
-                state='visible', timeout=10_000)
-        except Exception as exc:
-            raise ShiftbaseIntegrationError(
-                'Dateianhaenge nicht eindeutig sichtbar. Uploadstatus unklar.') from exc
-        stage = 'DETAIL_TITLE'
+        # The selection wait already proved the visible heading; recheck it
+        # inside the bounded employee-specific scope, without another long wait.
+        if _sbpay_unique_visible(detail_scope.get_by_text(re.compile(
+                r'^Dateianh[aä]nge$|^File attachments$', re.I))) is None:
+            raise ShiftbaseIntegrationError('Dateianhaenge nicht eindeutig sichtbar. Uploadstatus unklar.')
+        advance('DETAIL_TITLE')
         title_field = _sbpay_detail_title_field(detail_scope)
         title_field.fill(title)
         if title_field.input_value().strip() != title:
             raise ShiftbaseIntegrationError('Dokumenttitel konnte nicht eindeutig gesetzt werden. Uploadstatus unklar.')
-        stage = 'DETAIL_VISIBILITY'
+        advance('DETAIL_VISIBILITY')
         visibility = _sbpay_details_visibility_control(detail_scope)
         visibility_control_verified = visibility is not None
         if visibility is not None:
             try:
                 if not visibility.is_checked():
-                    visibility.check()  # one idempotent metadata operation
+                    visibility.check(timeout=8000)  # one idempotent metadata operation
             except Exception as exc:
                 # Shiftbase may redraw the checkbox after applying the change.
                 # Never assume success: re-read the verified modal instead.
@@ -12718,21 +12756,24 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
                     'Uploadstatus unklar; keine Speicherung.')
         # Category is a REQUIRED field in the Nov 2026 Shiftbase form.
         # This must succeed before clicking the final confirmation button.
-        stage = 'DETAIL_CATEGORY'
+        advance('DETAIL_CATEGORY')
         # Only metadata selection may be repeated after a transient UI redraw;
         # nothing has been saved yet. Re-validate the same employee and modal.
         try:
             _sbpay_details_select_payroll_category(detail_scope, page, user_id)
-        except Exception:
-            if (_sbpay_employee_file_stage(page.url,user_id) != 'details' or
+        except Exception as exc:
+            # A second full timeout cannot be justified by an ambiguous field.
+            # Retry only a transient redraw, never selection/Save of the PDF.
+            cause = exc.__cause__ or exc
+            if (_sbpay_browser_action_reason(cause) != 'UI_ELEMENT_NEU_GELADEN' or
+                    _sbpay_employee_file_stage(page.url,user_id) != 'details' or
                     not name.first.is_visible()):
                 raise
-            page.wait_for_timeout(300)
             detail_scope = _sbpay_upload_dialog_scope(page,user_id,'details')
             _sbpay_details_select_payroll_category(detail_scope, page, user_id)
         # Screenshot of current UI has no checkbox: preserve this fact and
         # require a manual employee-view verification after saving one file.
-        stage = 'DETAIL_FINAL_BUTTON'
+        advance('DETAIL_FINAL_BUTTON')
         save_button = _sbpay_detail_save_button(detail_scope)
         if (_sbpay_employee_file_stage(page.url, user_id) != 'details' or
                 not name.first.is_visible() or not save_button.is_enabled()):
@@ -12740,7 +12781,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         # Identity already checked against fresh API users BEFORE choosing
         # the file; the active browser page must still show the same person.
         # Avoid another long API directory fetch after PDF bytes were sent.
-        stage = 'FINAL_SAVE_CLICKED'
+        advance('FINAL_SAVE_CLICKED')
         # Exactly ONE final Save. Playwright can time out while Shiftbase has
         # already accepted the click; NEVER click it twice. Read the page only.
         click_problem = None
@@ -12749,7 +12790,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         except Exception as exc:
             click_problem = _sbpay_browser_action_reason(exc)
             app.logger.warning('SBPAY_FINAL_SAVE_CLICK_DIAGNOSTIC reason=%s',click_problem)
-        stage = 'VERIFY_FILE_IN_PROFILE'
+        advance('VERIFY_FILE_IN_PROFILE')
         # A visible document in the correct employee's personal file list is
         # the necessary UI evidence, regardless of the click's own result.
         if not _sbpay_final_document_observed(page,user_id,employee_name,title,
@@ -12775,6 +12816,9 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             stage + ': '+reason+'. Mitarbeiterdateien pruefen; '
             'kein automatischer Wiederholungsversuch.') from exc
     finally:
+        advance('CLEANUP')
+        if reader is not None:
+            reader.shutdown(wait=True, cancel_futures=True)
         # Isolation is mandatory, including after failed or unknown uploads.
         # Closing the incognito context also destroys its pages and cookies.
         if context is not None:
@@ -12782,6 +12826,10 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
                 context.close()
             except Exception:
                 _sbpay_fast_browser_invalidate()
+        advance('DONE')
+        app.logger.info('SBPAY_UPLOAD_TIMING total_s=%.2f %s',
+                        _sbpay_time.monotonic()-started,
+                        ' '.join('%s=%.2f' % pair for pair in timings))
 
 
 
@@ -13360,6 +13408,7 @@ send.addEventListener('click',async()=>{
  try{
   for(const recipient of picked){
    const number=recipient.number;
+   const recipientStarted=performance.now();
    const params=new URLSearchParams();
    params.set('csrf_token',CSRF);params.set('mode','single');params.set('page_no',number);
    let reason='',result=null,globalFailure='';
@@ -13414,8 +13463,9 @@ send.addEventListener('click',async()=>{
       'Im persoenlichen Profil gesehen');
    }
    const seconds=((performance.now()-startTime)/1000).toFixed(1);
-   info.textContent=processed+' von '+picked.length+' geprueft. '+success.length+
-    ' erfolgreich, '+problems.length+' mit Problemen. Bisher '+seconds+' s.';
+   info.textContent=processed+' von '+picked.length+' bearbeitet. '+success.length+
+    ' erfolgreich, '+problems.length+' mit Problemen. Bisher '+seconds+' s. Letzter Uploadversuch: '+
+    ((performance.now()-recipientStarted)/1000).toFixed(1)+' s.';
    if(globalFailure){globalReason=globalFailure;break;}
   }
  }finally{
@@ -13524,6 +13574,8 @@ def admin_shiftbase_payroll_upload_step(batch_id):
         with db_conn() as conn:
             batch, row, driver, content = _sbpay_verified_pdf(conn,batch_id,page_no)
         if contract.get('mode') == 'browser':
+            app.logger.info('SBPAY_PDF_PREFLIGHT_TIMING elapsed_s=%.2f',
+                            _sbpay_time.monotonic()-started_at)
             def mark_before_browser_save():
                 # An interrupted connection after this point is UNKNOWN, never
                 # automatically resent; the file might already exist in Shiftbase.
