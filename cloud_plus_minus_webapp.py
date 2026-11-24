@@ -11510,6 +11510,36 @@ def _sbpay_browser_contract():
             'session_revision':revision,'session_source':source}
 
 
+def _sbpay_session_failure_reason(exc, phase):
+    """Return fixed diagnostic codes only. Never print exception text or state."""
+    import errno
+    if phase == 'STORE' and len(os.environ.get('PORTAL_SECRET_KEY', '').encode('utf-8')) < 32:
+        return 'PORTAL_SECRET_KEY_MISSING_OR_SHORT'
+    if isinstance(exc, ImportError):
+        return 'CRYPTOGRAPHY_OR_DEPENDENCY_UNAVAILABLE'
+    if isinstance(exc, OSError):
+        return {errno.EACCES:'FILESYSTEM_PERMISSION_DENIED',
+                errno.EPERM:'FILESYSTEM_PERMISSION_DENIED',
+                errno.EROFS:'FILESYSTEM_READ_ONLY',
+                errno.ENOSPC:'FILESYSTEM_FULL',
+                errno.EDQUOT:'FILESYSTEM_QUOTA',
+                errno.ENOENT:'FILESYSTEM_PATH_MISSING'}.get(exc.errno,'FILESYSTEM_IO_ERROR')
+    if type(exc).__name__ == 'InvalidToken':
+        return 'ENCRYPTED_SESSION_NOT_READABLE'
+    if isinstance(exc, ValueError):
+        # Match only our own constant validation errors. Do not log raw text.
+        return {'Sitzungsdaten zu gross.':'STATE_TOO_LARGE',
+                'Gespeicherte Sitzung zu gross.':'STATE_TOO_LARGE',
+                'Sitzungsexport fehlt oder ist zu gross.':'BOOTSTRAP_MISSING_OR_TOO_LARGE',
+                'Ungueltige Sitzungsdaten.':'STATE_MISSING_COOKIES_OR_INVALID',
+                'Ungueltiges Sitzungsformat.':'STATE_FORMAT_INVALID',
+                'Ungueltiges Cookie.':'STATE_COOKIE_INVALID',
+                'Nur Shiftbase-Sitzungen sind erlaubt.':'STATE_SCOPE_INVALID',
+                'Ungueltiger Browserspeicher.':'STATE_STORAGE_INVALID',
+                'Dauerhafter PORTAL_SECRET_KEY fehlt oder ist zu kurz.':'PORTAL_SECRET_KEY_MISSING_OR_SHORT'}.get(str(exc),'STATE_OR_CONFIGURATION_INVALID')
+    return 'UNEXPECTED_ERROR'
+
+
 def _sbpay_session_refresh_verified(context, contract):
     """Best effort: capture rotated state after a verified personal-profile read.
 
@@ -11518,8 +11548,10 @@ def _sbpay_session_refresh_verified(context, contract):
     """
     if not contract.get('session_revision'):
         return
+    phase='CAPTURE'
     try:
         state=context.storage_state()
+        phase='SCOPE_AND_VALIDATE'
         state={'cookies':[c for c in state.get('cookies',[]) if
                           str(c.get('domain','')).lstrip('.').lower() == 'shiftbase.com' or
                           str(c.get('domain','')).lstrip('.').lower().endswith('.shiftbase.com')],
@@ -11527,15 +11559,19 @@ def _sbpay_session_refresh_verified(context, contract):
                           ('https://shiftbase.com','https://app.shiftbase.com')]}
         revision=_sbpay_session_revision(state)
         with _SBPAY_SESSION_LOCK:
+            phase='LOAD_CURRENT'
             current,source=_sbpay_session_load()
             if _sbpay_session_revision(current)!=contract['session_revision']:
                 return
             if source=='cloud' and revision==contract['session_revision']:
                 return
+            phase='STORE'
             _sbpay_session_store(state)
-    except Exception:
+            app.logger.warning('SBPAY_SESSION_REFRESH_SAVED')
+    except Exception as exc:
         # Never let optional state persistence change a confirmed delivery.
-        app.logger.warning('SBPAY_SESSION_REFRESH_NOT_SAVED')
+        app.logger.warning('SBPAY_SESSION_REFRESH_NOT_SAVED phase=%s reason=%s',
+                           phase,_sbpay_session_failure_reason(exc,phase))
 
 
 def _sbpay_session_verify_candidate(state):
@@ -11630,24 +11666,35 @@ def admin_shiftbase_payroll_session():
         return _sbpay_session_page(batch_id,'Sitzungsimport ist nur ueber HTTPS erlaubt.'),400
     try:
         _sbpay_session_cipher()  # stable encryption key required BEFORE live verification
+    except Exception as exc:
+        reason=_sbpay_session_failure_reason(exc,'STORE')
+        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED phase=ENCRYPTION reason=%s',reason)
+        return _sbpay_session_page(batch_id,'Sitzungsverschluesselung nicht eingerichtet ('+reason+'). Nichts gespeichert.'),503
+    try:
         state=_sbpay_decode_session_export(request.form.get('session_export',''))
     except Exception:
-        return _sbpay_session_page(batch_id,'Sitzungsexport ungueltig oder Verschluesselung nicht eingerichtet. Nichts gespeichert.'),400
+        return _sbpay_session_page(batch_id,'Sitzungsexport ungueltig. Nichts gespeichert.'),400
     # Concurrent requests may not replace a manually renewed session silently.
     with _SBPAY_SESSION_LOCK:
         try:
             previous=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
         except OSError:
             return _sbpay_session_page(batch_id,'Sitzungsspeicher nicht lesbar.'),503
+    phase='LIVE_VERIFY'
     try:
         verified=_sbpay_session_verify_candidate(state)
+        phase='STORE'
         with _SBPAY_SESSION_LOCK:
             current=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
             if current!=previous:
                 return _sbpay_session_page(batch_id,'Die Sitzung wurde inzwischen aktualisiert. Bitte erneut versuchen.'),409
             _sbpay_session_store(verified)
     except Exception as exc:
-        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED type=%s',type(exc).__name__)
+        if phase=='STORE':
+            reason=_sbpay_session_failure_reason(exc,phase)
+            app.logger.warning('SBPAY_SESSION_IMPORT_FAILED phase=STORE reason=%s',reason)
+            return _sbpay_session_page(batch_id,'Anmeldung live bestaetigt, aber Sitzungsspeicherung fehlgeschlagen ('+reason+'). Serverkonfiguration pruefen; keine PDF gesendet.'),503
+        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED phase=LIVE_VERIFY type=%s',type(exc).__name__)
         return _sbpay_session_page(batch_id,'Anmeldung oder Berechtigung konnte nicht live bestaetigt werden. Die bisherige Sitzung bleibt erhalten. Bitte im Exportprogramm neu anmelden und erneut versuchen.'),400
     return _sbpay_session_page(batch_id,'Shiftbase-Anmeldung live bestaetigt und sicher gespeichert. Du kannst direkt weiterarbeiten. Es wurde keine PDF gesendet.',True)
 
@@ -12835,6 +12882,9 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         now = _sbpay_time.monotonic()
         timings.append((stage, round(now - phase_started, 2)))
         stage, phase_started = next_stage, now
+        # Explicitly visible with Gunicorn/Flask's usual WARNING threshold.
+        app.logger.warning('SBPAY_UPLOAD_PHASE phase=%s total_s=%.2f',stage,now-started)
+    app.logger.warning('SBPAY_UPLOAD_PHASE phase=%s total_s=0.00',stage)
     try:
         # Only the independent, read-only API check overlaps navigation.
         # The browser thread alone owns all browser operations and all writes.
@@ -13020,7 +13070,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             except Exception:
                 _sbpay_fast_browser_invalidate()
         advance('DONE')
-        app.logger.info('SBPAY_UPLOAD_TIMING total_s=%.2f %s',
+        app.logger.warning('SBPAY_UPLOAD_TIMING total_s=%.2f %s',
                         _sbpay_time.monotonic()-started,
                         ' '.join('%s=%.2f' % pair for pair in timings))
 
@@ -13845,6 +13895,7 @@ def _sbpay_upload_step_work(batch_id,form):
             return _sbpay_no_cache(jsonify({'done':False,'state':'bereits in Bearbeitung'}))
     # Preflight is outside the transaction. Errors are recorded and never retried.
     started_at = _sbpay_time.monotonic()
+    app.logger.warning('SBPAY_UPLOAD_START page_no=%s attempt=%s',page_no,attempt_id[:12])
     diagnostic = ''
     document_id=''
     browser_reused = False
@@ -13853,7 +13904,7 @@ def _sbpay_upload_step_work(batch_id,form):
         with db_conn() as conn:
             batch, row, driver, content = _sbpay_verified_pdf(conn,batch_id,page_no)
         if contract.get('mode') == 'browser':
-            app.logger.info('SBPAY_PDF_PREFLIGHT_TIMING elapsed_s=%.2f',
+            app.logger.warning('SBPAY_PDF_PREFLIGHT_TIMING elapsed_s=%.2f',
                             _sbpay_time.monotonic()-started_at)
             def mark_before_browser_save():
                 # An interrupted connection after this point is UNKNOWN, never
@@ -13882,8 +13933,8 @@ def _sbpay_upload_step_work(batch_id,form):
                           else 'Unbekannter Browserfehler. Render-Logs auf Fehlertyp pruefen.')
         diagnostic = safe_preflight
         session_required = _sbpay_is_session_error(exc)
-        app.logger.warning('Payroll Shiftbase browser send interrupted: type=%s reason=%s',
-                           type(exc).__name__, diagnostic[:200])
+        app.logger.warning('SBPAY_UPLOAD_RESULT page_no=%s outcome=interrupted type=%s session_required=%s',
+                           page_no,type(exc).__name__,session_required)
         # BEFORE set_input_files, a browser attempt is provably write-free.
         # Once file bytes enter the DOM, upload may already have started even
         # without clicking Save. Keep that claim forever until manual review.
@@ -13919,6 +13970,8 @@ def _sbpay_upload_step_work(batch_id,form):
         _sbpay_record_attempt_diagnostic(conn,batch_id,page_no,attempt_id,state,
             diagnostic if state=='unknown' else '',_sbpay_time.monotonic()-started_at)
         conn.commit()
+    app.logger.warning('SBPAY_UPLOAD_RESULT page_no=%s outcome=%s total_s=%.2f',
+                       page_no,state,_sbpay_time.monotonic()-started_at)
     return _sbpay_no_cache(jsonify({'done':False,'state':state,
                                     'elapsed_seconds':round(_sbpay_time.monotonic()-started_at, 1),
                                     'browser_reused':browser_reused,
