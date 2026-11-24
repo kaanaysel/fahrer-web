@@ -11622,6 +11622,135 @@ def _sbpay_session_verify_candidate(state):
             browser.close()
 
 
+# One-time, admin-authorized handoff from the local Windows browser helper.
+# Only the hash of the short-lived capability is stored in the database.
+# Session contents are never stored in the pairing table or returned to JS.
+def _sbpay_pair_https():
+    return request.is_secure or (os.environ.get('RENDER','').lower()=='true' and
+                                 request.headers.get('X-Forwarded-Proto','').lower()=='https')
+
+
+def _sbpay_pair_schema(conn):
+    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_session_pairings (
+        id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '')''')
+
+
+def _sbpay_pair_hash(value):
+    return _sbpay_hashlib.sha256(value.encode('ascii')).hexdigest()
+
+
+def _sbpay_pair_result(state, message, status=200, **extra):
+    return _sbpay_no_cache(jsonify(dict(state=state,message=message,**extra))),status
+
+
+@app.post('/admin/shiftbase/lohnzettel/sitzung/automatisch')
+@admin_login_required
+def admin_shiftbase_payroll_pair():
+    _sbpay_token_check()
+    if not _sbpay_pair_https():
+        return _sbpay_pair_result('error','Nur ueber HTTPS verfuegbar.',400)
+    owner=_sbpay_pair_hash(_sb_csrf_token())
+    action=request.form.get('action','')
+    now=int(_sbpay_time.time())
+    with db_conn() as conn:
+        _sbpay_pair_schema(conn)
+        if action=='start':
+            if os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED','').strip()!='1':
+                return _sbpay_pair_result('error','Browser-Integration deaktiviert.',503)
+            try:
+                _sbpay_session_cipher()
+            except Exception as exc:
+                return _sbpay_pair_result('error','Sitzungsspeicherung nicht eingerichtet ('+_sbpay_session_failure_reason(exc,'STORE')+').',503)
+            conn.execute('DELETE FROM shiftbase_session_pairings WHERE expires_at<?',(now-3600,))
+            # Do not cancel an already running verification on another tab.
+            running=conn.execute("SELECT id FROM shiftbase_session_pairings WHERE owner=? AND state='verifying' AND expires_at>?",(owner,now)).fetchone()
+            if running:
+                return _sbpay_pair_result('verifying','Eine Anmeldung wird bereits geprueft.',pair_id=running['id'])
+            conn.execute("UPDATE shiftbase_session_pairings SET state='cancelled' WHERE owner=? AND state='waiting'",(owner,))
+            token=secrets.token_urlsafe(32)
+            pid=_sbpay_pair_hash(token)
+            conn.execute('INSERT INTO shiftbase_session_pairings(id,owner,expires_at,state) VALUES(?,?,?,?)',(pid,owner,now+900,'waiting'))
+            conn.commit()
+            return _sbpay_pair_result('waiting','Bitte Shiftbase im geoeffneten Fenster anmelden.',pair_id=pid,launch='plusminus-shiftbase://connect/'+token)
+        pid=str(request.form.get('pair_id',''))
+        if action not in ('poll','cancel') or not re.fullmatch(r'[a-f0-9]{64}',pid):
+            return _sbpay_pair_result('error','Ungueltiger Auftrag.',400)
+        row=conn.execute('SELECT * FROM shiftbase_session_pairings WHERE id=? AND owner=?',(pid,owner)).fetchone()
+        if not row:
+            return _sbpay_pair_result('error','Verbindungsauftrag nicht gefunden.',404)
+        if action=='cancel':
+            conn.execute("UPDATE shiftbase_session_pairings SET state='cancelled' WHERE id=? AND state='waiting'",(pid,))
+            conn.commit()
+            row=conn.execute('SELECT * FROM shiftbase_session_pairings WHERE id=?',(pid,)).fetchone()
+        if row['expires_at']<=now and row['state'] in ('waiting','verifying'):
+            return _sbpay_pair_result('expired','Verbindung abgelaufen. Bitte neu starten.')
+        return _sbpay_pair_result(row['state'],row['message'] or {'waiting':'Warte auf Shiftbase-Anmeldung…','verifying':'Cloud prueft die Anmeldung…','cancelled':'Verbindung abgebrochen.'}.get(row['state'],''))
+
+
+@app.post('/shiftbase/session-handoff')
+def sbpay_local_session_handoff():
+    # This endpoint requires the single-use capability issued by an authenticated
+    # administrator, never an API token, password, or Flask session cookie.
+    if not _sbpay_pair_https() or os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED','').strip()!='1':
+        return _sbpay_pair_result('error','Verbindung nicht verfuegbar.',403)
+    token=request.headers.get('Authorization','')
+    if not re.fullmatch(r'Bearer [A-Za-z0-9_-]{43}',token):
+        return _sbpay_pair_result('error','Verbindung nicht autorisiert.',403)
+    pid=_sbpay_pair_hash(token[7:])
+    if request.content_length is None or not 0<request.content_length<=_SBPAY_SESSION_MAX or not request.is_json:
+        return _sbpay_pair_result('error','Ungueltige Sitzungsdaten.',400)
+    with db_conn() as conn:
+        _sbpay_pair_schema(conn)
+        row=conn.execute('SELECT state,expires_at FROM shiftbase_session_pairings WHERE id=?',(pid,)).fetchone()
+        if not row or row['state']!='waiting' or row['expires_at']<=int(_sbpay_time.time()):
+            return _sbpay_pair_result('error','Verbindung abgelaufen oder bereits benutzt.',409)
+        try:
+            state=request.get_json()
+            _sbpay_validate_storage_state(state)
+            _sbpay_session_cipher()
+        except Exception:
+            return _sbpay_pair_result('error','Sitzungsdaten oder Verschluesselung ungueltig.',400)
+        # Atomic claim: a second POST cannot trigger another verification.
+        claimed=conn.execute("UPDATE shiftbase_session_pairings SET state='verifying', expires_at=? WHERE id=? AND state='waiting' AND expires_at>?",(int(_sbpay_time.time())+300,pid,int(_sbpay_time.time())))
+        conn.commit()
+        if claimed.rowcount!=1:
+            return _sbpay_pair_result('error','Verbindung bereits benutzt.',409)
+    def finish(result,message):
+        with db_conn() as conn:
+            conn.execute("UPDATE shiftbase_session_pairings SET state=?,message=? WHERE id=? AND state='verifying'",(result,message,pid))
+            conn.commit()
+    def verify():
+        with app.app_context():
+            phase='READ_CURRENT'
+            try:
+                with _SBPAY_SESSION_LOCK:
+                    previous=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
+                phase='LIVE_VERIFY'
+                verified=_sbpay_session_verify_candidate(state)
+                phase='STORE'
+                with _SBPAY_SESSION_LOCK:
+                    with db_conn() as conn:
+                        row=conn.execute('SELECT state,expires_at FROM shiftbase_session_pairings WHERE id=?',(pid,)).fetchone()
+                    current=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
+                    if not row or row['state']!='verifying' or row['expires_at']<=int(_sbpay_time.time()) or current!=previous:
+                        finish('error','Anmeldung inzwischen geaendert oder abgelaufen. Bitte erneut verbinden.')
+                        return
+                    _sbpay_session_store(verified)
+                finish('success','Shiftbase-Anmeldung live bestaetigt und sicher gespeichert. Keine PDF gesendet.')
+            except Exception as exc:
+                reason=_sbpay_session_failure_reason(exc,phase)
+                app.logger.warning('SBPAY_PAIR_FAILED phase=%s reason=%s',phase,reason)
+                try: finish('error','Anmeldung konnte nicht gespeichert werden ('+phase+': '+reason+'). Bitte erneut verbinden oder manuellen Import verwenden.')
+                except Exception: app.logger.warning('SBPAY_PAIR_RESULT_FAILED')
+    try:
+        threading.Thread(target=verify,name='sbpay-session-pair',daemon=True).start()
+    except Exception:
+        finish('error','Serverpruefung konnte nicht gestartet werden.')
+        return _sbpay_pair_result('error','Serverpruefung konnte nicht gestartet werden.',503)
+    return _sbpay_pair_result('verifying','Sitzung uebergeben. Die Cloud prueft jetzt die Anmeldung.',202)
+
+
 def _sbpay_session_page(batch_id='',message='',success=False):
     contract=_sbpay_browser_contract()
     source=contract.get('session_source') if contract else None
@@ -11631,18 +11760,43 @@ def _sbpay_session_page(batch_id='',message='',success=False):
           '<p><b>'+str(_sbpay_escape(configured))+'</b> Die tatsaechliche Gueltigkeit wird beim Zugriff auf Shiftbase geprueft.</p>']
     if message:
         body.append('<div role="status" class="flash '+('ok' if success else 'err')+'">'+str(_sbpay_escape(message))+'</div>')
-    body.extend(['<p>Nur bei einer abgelaufenen Anmeldung: Starte dein vorhandenes Windows-Sitzungsexportprogramm, '
+    body.extend(['<div class="card" style="box-shadow:none;background:#f0f6ff;margin-top:16px">',
+                 '<h3>Einfach verbinden (Windows)</h3><p>Einmal die Windows-Verbindungshilfe installieren. Danach hier klicken und im offiziellen Shiftbase-Fenster anmelden. Kein Kopieren oder Einfuegen mehr.</p>',
+                 '<div class="actions"><button type="button" id="sbpay-auto-start" class="primary">Shiftbase automatisch verbinden</button>',
+                 '<a id="sbpay-auto-launch" class="btn small" hidden style="display:none">Shiftbase-Fenster oeffnen</a>',
+                 '<button type="button" class="btn small" id="sbpay-auto-cancel" hidden style="display:none">Abbrechen</button></div>',
+                 '<p id="sbpay-auto-status" role="status" aria-live="polite" class="muted">Bereit. Wenn Windows nach dem Oeffnen der Verbindungshilfe fragt, bestaetigen.</p>',
+                 '<p class="muted" id="sbpay-auto-help">Falls noch nicht installiert: Windows-Verbindungshilfe aus dem mitgelieferten ZIP einmal einrichten.</p></div>',
+                 '<details id="sbpay-manual"><summary>Manueller Sitzungsexport (Alternative)</summary>',
+                 '<p>Nur bei einer abgelaufenen Anmeldung: Starte dein vorhandenes Windows-Sitzungsexportprogramm, '
                  'melde dich im offiziellen Shiftbase-Fenster an und kopiere den neuen Sitzungswert. '
                  'Passwort und MFA bleiben ausschliesslich bei Shiftbase.</p>',
                  '<form method="post" autocomplete="off" id="sbpay-session-form">',
                  '<input type="hidden" name="csrf_token" value="'+str(_sbpay_escape(_sb_csrf_token()))+'">',
                  '<input type="hidden" name="batch_id" value="'+str(_sbpay_escape(batch_id if re.fullmatch(r'[a-f0-9]{32}',batch_id) else ''))+'">',
                  '<label>Neuer Sitzungsexport (Base64 oder Playwright-JSON)<textarea name="session_export" required maxlength="400000" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Sitzungswert hier einfuegen"></textarea></label>',
-                 '<div class="actions"><button type="submit" class="primary">Sitzung pruefen und speichern</button>',
-                 '<a class="btn small" href="'+back+'">Zurueck zu den Lohnzetteln</a></div></form>',
+                 '<div class="actions"><button type="submit" class="primary">Sitzung pruefen und speichern</button></div></form>',
                  '<p id="sbpay-session-status" class="muted">Die Cloud prueft den Zugang ohne Upload. Nach Erfolg ist kein Render-Aufruf und kein Neustart erforderlich.</p>',
-                 '<p class="muted">Die Sitzung ist ein geheimer Zugangsschluessel. Nur hier einfuegen, nicht per E-Mail oder Chat teilen. Ein normaler Shiftbase-Login in einem anderen Tab uebertraegt die Sitzung nicht automatisch.</p></div>',
-                 """<script>document.getElementById('sbpay-session-form').addEventListener('submit',function(){this.querySelector('button').disabled=true;document.getElementById('sbpay-session-status').textContent='Shiftbase-Zugang wird geprueft… Bitte Seite offen lassen.';});</script>"""])
+                 '<p class="muted">Die Sitzung ist ein geheimer Zugangsschluessel. Nicht per E-Mail oder Chat teilen.</p></details>',
+                 '<div class="actions"><a class="btn small" href="'+back+'">Zurueck zu den Lohnzetteln</a></div></div>',
+                 '''<script>
+(function(){
+ const form=document.getElementById('sbpay-session-form'), start=document.getElementById('sbpay-auto-start'), launch=document.getElementById('sbpay-auto-launch'), cancel=document.getElementById('sbpay-auto-cancel'), status=document.getElementById('sbpay-auto-status');
+ const csrf=form.elements.csrf_token.value, endpoint='''+json.dumps(url_for('admin_shiftbase_payroll_pair'))+''', back='''+json.dumps(back)+''';
+ let id='',generation=0,timer=null,deadline=0;
+ function visible(el,show){el.hidden=!show;el.style.display=show?'inline-block':'none';}
+ async function req(action){const data=new URLSearchParams({csrf_token:csrf,action:action,pair_id:id});const r=await fetch(endpoint,{method:'POST',body:data,credentials:'same-origin',cache:'no-store'});return await r.json();}
+ function reset(message){clearTimeout(timer);start.disabled=false;visible(launch,false);visible(cancel,false);launch.removeAttribute('href');status.textContent=message;}
+ function apply(data,g){if(g!==generation)return;status.textContent=data.message||'';
+   if(data.state==='success'){reset(data.message+' Du wirst zurueckgeleitet.');start.disabled=true;window.setTimeout(()=>location.assign(back),1500);return;}
+   if(data.state==='waiting'||data.state==='verifying'){if(data.state==='verifying'){visible(launch,false);visible(cancel,false);}clearTimeout(timer);timer=setTimeout(()=>poll(g),2000);return;}
+   reset(data.message||'Verbindung beendet.');}
+ async function poll(g){if(g!==generation)return;if(Date.now()>deadline){reset('Zeitlimit erreicht. Bitte Status pruefen oder erneut verbinden.');return;}try{apply(await req('poll'),g);}catch(e){if(g!==generation)return;status.textContent='Verbindung zur Cloud kurz unterbrochen. Status wird erneut abgefragt…';timer=setTimeout(()=>poll(g),3000);}}
+ start.addEventListener('click',async()=>{const g=++generation;start.disabled=true;status.textContent='Verbindung wird vorbereitet…';deadline=Date.now()+20*60*1000;try{const data=await req('start');if(g!==generation)return;id=data.pair_id||'';if(data.state==='waiting'&&/^plusminus-shiftbase:\\/\\/connect\\/[A-Za-z0-9_-]{43}$/.test(data.launch||'')){launch.href=data.launch;visible(launch,true);visible(cancel,true);apply(data,g);launch.click();status.textContent='Shiftbase-Fenster wird geoeffnet. Falls nichts passiert: auf Shiftbase-Fenster oeffnen klicken oder Verbindungshilfe installieren.';}else{apply(data,g);}}catch(e){reset('Cloud nicht erreichbar. Bitte erneut versuchen.');}});
+ cancel.addEventListener('click',async()=>{const g=++generation;clearTimeout(timer);try{apply(await req('cancel'),g);}catch(e){reset('Abbruch nicht bestaetigt. Bitte Seite neu laden.');}});
+ form.addEventListener('submit',function(){this.querySelector('button').disabled=true;document.getElementById('sbpay-session-status').textContent='Shiftbase-Zugang wird geprueft… Bitte Seite offen lassen.';});
+})();
+</script>'''])
     resp=_sbpay_no_cache(make_response(base_page('Shiftbase-Anmeldung',''.join(body),'shiftbase_payroll')))
     resp.headers['X-Frame-Options']='DENY'
     resp.headers['Content-Security-Policy']="frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
