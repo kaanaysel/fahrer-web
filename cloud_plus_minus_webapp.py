@@ -9950,6 +9950,10 @@ def admin_shiftbase_payroll_batch(batch_id):
         checked = {int(r['page_no']): dict(r) for r in conn.execute(
             'SELECT * FROM shiftbase_payroll_livechecks WHERE batch_id=?',
             (batch_id,)).fetchall()}
+        _sbpay_attempt_diagnostic_schema(conn)
+        diagnostics = {int(r['page_no']):dict(r) for r in conn.execute(
+            'SELECT * FROM shiftbase_payroll_attempt_diagnostics WHERE batch_id=?',
+            (batch_id,)).fetchall()}
     # Auto-verify exactly once after import (read-only and no file transfer).
     # It runs in a separate browser request to avoid the 30s upload timeout.
     auto_verify = bool(rows) and not checked
@@ -10220,12 +10224,15 @@ def admin_shiftbase_payroll_batch(batch_id):
                       '<div class="sbpay-alias-result" role="status" aria-live="polite" '
                       'style="margin-top:8px;font-size:13px;min-height:1em"></div>'
                       '</form></details>')
+        detail = _sbpay_attempt_diagnostic_text(history.get(page_no,{}),diagnostics.get(page_no,{}))
+        detail_html = ('<small style="display:block;margin-top:6px;color:#475467;overflow-wrap:anywhere">'+
+                       str(_sbpay_escape(detail))+'</small>') if detail else ''
         h.append('<tr id="sbpay-person-'+str(page_no)+'" style="background:'+color+'" data-page="'+str(page_no)+'">'
                  '<td>'+checkbox+'</td><td><b>'+display_name+'</b>'
                  '<small style="display:block;color:#667085">Personal-Nr. '+str(_sbpay_escape(row['personal_no']))
                  +' · Originalseiten '+str(_sbpay_escape(source_pages))+'</small></td>'
                  '<td>'+target+'</td><td>'+preview+'</td>'
-                 '<td class="sbpay-status"><b>'+str(_sbpay_escape(status))+'</b></td>'
+                 '<td class="sbpay-status"><b>'+str(_sbpay_escape(status))+'</b>'+detail_html+'</td>'
                  '<td>'+manual+'</td></tr>')
     h.append('</tbody></table></div>')
     h.append(_sbpay_alias_form_script())
@@ -10974,6 +10981,45 @@ def _sbpay_delivery_schema(conn):
         state TEXT NOT NULL, document_id TEXT NOT NULL DEFAULT '',
         started_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         PRIMARY KEY (batch_id, page_no))''')
+
+
+
+def _sbpay_attempt_diagnostic_schema(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS shiftbase_payroll_attempt_diagnostics (
+        batch_id TEXT NOT NULL, page_no INTEGER NOT NULL,
+        attempt_id TEXT NOT NULL, outcome TEXT NOT NULL,
+        diagnostic TEXT NOT NULL, elapsed_seconds REAL NOT NULL,
+        recorded_at TEXT NOT NULL, PRIMARY KEY(batch_id,page_no))""")
+
+
+def _sbpay_record_attempt_diagnostic(conn,batch_id,page_no,attempt_id,outcome,diagnostic,elapsed):
+    # Only caller-generated, bounded messages. No raw Playwright exceptions,
+    # response bodies, PDF text, tokens or browser state are passed here.
+    _sbpay_attempt_diagnostic_schema(conn)
+    conn.execute("""INSERT INTO shiftbase_payroll_attempt_diagnostics
+        (batch_id,page_no,attempt_id,outcome,diagnostic,elapsed_seconds,recorded_at)
+        VALUES(?,?,?,?,?,?,?) ON CONFLICT(batch_id,page_no) DO UPDATE SET
+        attempt_id=excluded.attempt_id,outcome=excluded.outcome,
+        diagnostic=excluded.diagnostic,elapsed_seconds=excluded.elapsed_seconds,
+        recorded_at=excluded.recorded_at""",
+        (batch_id,page_no,attempt_id,outcome,str(diagnostic or '')[:250],
+         max(0.0,float(elapsed)),now_iso()))
+
+
+def _sbpay_attempt_diagnostic_text(delivery,diagnostic):
+    # Historical records without a saved reason must not acquire an invented one.
+    state=str(delivery.get('state') or '')
+    if state and str(delivery.get('attempt_id')) != str(diagnostic.get('attempt_id')):
+        diagnostic={}
+    if state=='unknown':
+        if diagnostic.get('outcome')=='unknown' and diagnostic.get('diagnostic'):
+            return str(diagnostic['diagnostic'])+' ('+str(round(float(diagnostic['elapsed_seconds']),1))+' s)'
+        return 'Alter Versuch: genauer Fehlergrund wurde bisher nicht dauerhaft gespeichert. Versandbericht / Render-Logs prüfen.'
+    if state in ('preparing','sending'):
+        return 'Versuch noch nicht abgeschlossen oder unterbrochen. Nicht erneut senden; laufenden Vorgang prüfen.'
+    if not state and diagnostic.get('outcome')=='preflight_failed' and diagnostic.get('diagnostic'):
+        return 'Letzter Versuch vor Dateiauswahl beendet (kein Upload gestartet): '+str(diagnostic['diagnostic'])
+    return ''
 
 
 def _sbpay_upload_contract():
@@ -12241,6 +12287,34 @@ def _sbpay_final_document_observed(page, user_id, employee_name, title, timeout_
     return False
 
 
+
+def _sbpay_final_readback(context,page,origin,user_id,employee_name,title):
+    """One bounded READ-ONLY recovery of a possibly accepted Save.
+
+    Never navigate the existing pending-save page, click, select a PDF, or
+    infer absence from a timeout. The new tab must prove exact personal URL,
+    expected employee name and visible unique title, as in normal verification.
+    """
+    check=None
+    try:
+        if _sbpay_employee_file_stage(page.url,user_id) not in ('files','details'):
+            return False
+        if origin != 'https://app.shiftbase.com' or not re.fullmatch(r'[0-9]{1,20}',str(user_id)):
+            return False
+        check=context.new_page()
+        check.set_default_timeout(4000)
+        check.goto(origin+'/employees/'+str(user_id)+'/files',wait_until='domcontentloaded',timeout=10000)
+        if not _sbpay_is_exact_employee_files_url(check.url,user_id):
+            return False
+        return bool(_sbpay_final_document_observed(check,user_id,employee_name,title,timeout_ms=6000))
+    except Exception:
+        return False
+    finally:
+        if check is not None:
+            try: check.close()
+            except Exception: pass
+
+
 def _sbpay_browser_diagnostic():
     """No Shiftbase login, navigation, personal data or upload; admin-only check."""
     from importlib import metadata
@@ -12795,10 +12869,16 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         # the necessary UI evidence, regardless of the click's own result.
         if not _sbpay_final_document_observed(page,user_id,employee_name,title,
                                                timeout_ms=24000 if click_problem is None else 12000):
-            raise ShiftbaseIntegrationError(
-                'FINAL_SAVE_UNCONFIRMED: Speichern/Dateiliste nicht eindeutig bestaetigt'
-                +(' ('+click_problem+')' if click_problem else '')
-                +'. Mitarbeiterdateien pruefen; NICHT erneut senden.')
+            advance('FINAL_READ_ONLY_RECOVERY')
+            if not _sbpay_final_readback(context,page,contract['origin'],user_id,employee_name,title):
+                raise ShiftbaseIntegrationError(
+                    'FINAL_SAVE_UNCONFIRMED: Speichern/Dateiliste nicht eindeutig bestaetigt'
+                    +(' ('+click_problem+')' if click_problem else '')
+                    +'. Mitarbeiterdateien pruefen; NICHT erneut senden.')
+            # The independent read found a title, not proof of the file's
+            # contents or employee-side visibility. Keep it locked against resend.
+            visibility_control_verified=False
+            app.logger.info('SBPAY_FINAL_READBACK_TITLE_OBSERVED')
         # This is NOT a provider-confirmed document ID. In the current UI,
         # employee visibility cannot be proven when no checkbox is shown.
         _sbpay_session_refresh_verified(context,contract)
@@ -13375,7 +13455,7 @@ function renderReport(success,problems,remaining,visibilityPending,globalReason,
    'Sammelversand wegen eines uebergreifenden Problems angehalten: '+globalReason+
    ' Bereits unklare Uploads nicht wiederholen.':
    problems.length?
-   'Bitte die oben genannten Mitarbeiter einzeln in Shiftbase pruefen bzw. ihre Zuordnung korrigieren. '+
+   'Bitte Nur Fehler / gesperrte Uploads pruefen nutzen. Namenszuordnung nur bei einem Identitaetsfehler korrigieren. '+
    'Ein unklarer Upload darf nicht blind erneut gesendet werden.':
    'Alle ausgewaehlten PDFs verarbeitet. '+visibilityPending+
    ' x Mitarbeitersichtbarkeit im Mitarbeiterkonto noch selbst pruefen.';
@@ -13617,6 +13697,8 @@ def admin_shiftbase_payroll_upload_step(batch_id):
                     rconn.execute('''DELETE FROM shiftbase_payroll_deliveries
                       WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='preparing' ''',
                       (batch_id,page_no,attempt_id))
+                    _sbpay_record_attempt_diagnostic(rconn,batch_id,page_no,attempt_id,
+                        'preflight_failed',safe_preflight,_sbpay_time.monotonic()-started_at)
                     rconn.commit()
                     return _sbpay_no_cache(jsonify({'done':False,'session_required':session_required,'error':
                         'Browser-Vorpruefung: '+safe_preflight+' Kein Upload gestartet. '
@@ -13629,6 +13711,8 @@ def admin_shiftbase_payroll_upload_step(batch_id):
             SET state=?,document_id=?,updated_at=?
             WHERE batch_id=? AND page_no=? AND attempt_id=?''',
             (state,document_id,now_iso(),batch_id,page_no,attempt_id))
+        _sbpay_record_attempt_diagnostic(conn,batch_id,page_no,attempt_id,state,
+            diagnostic if state=='unknown' else '',_sbpay_time.monotonic()-started_at)
         conn.commit()
     return _sbpay_no_cache(jsonify({'done':False,'state':state,
                                     'elapsed_seconds':round(_sbpay_time.monotonic()-started_at, 1),
