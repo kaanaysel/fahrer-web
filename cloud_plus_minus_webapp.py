@@ -9963,9 +9963,8 @@ def admin_shiftbase_payroll_batch(batch_id):
     pay_names = _sbpay_count(_sbpay_norm(r['employee_name']) for r in rows)
     pay_numbers = _sbpay_count(str(r['personal_no']) for r in rows)
     can_upload = _sbpay_upload_contract() is not None
-    problem_recheck_count = sum(1 for row in rows if
-        _sbpay_is_problem(history.get(int(row['page_no']),{}).get('state',''),
-                          diagnostics.get(int(row['page_no']),{}).get('outcome','')))
+    problem_recheck_count = sum(1 for attempt in history.values()
+        if attempt.get('state') in _SBPAY_REMOTE_RECHECK_PROBLEM_STATES)
     items = []
     ready_count = blocked_count = finished_count = unclear_count = 0
     for row in rows:
@@ -10033,7 +10032,7 @@ def admin_shiftbase_payroll_batch(batch_id):
          '<div class="kpi">Originalseiten<b>'+str(batch['page_count'])+'</b></div>',
          '<div class="kpi">Einzel-PDFs<b>'+str(len(rows))+'</b></div>',
          '<div class="kpi">Bereit<b id="sbpay-ready-count">'+str(ready_count)+'</b></div>',
-         '<div class="kpi">Versendet / pruefen<b id="sbpay-delivery-count">'+str(finished_count)+' / '+str(unclear_count)+'</b></div>',
+         '<div class="kpi">Versendet / pruefen<b>'+str(finished_count)+' / '+str(unclear_count)+'</b></div>',
          '</div>']
     if auto_verify:
         h.append('<div class="flash ok" id="sbpay-auto-check">Die PDFs wurden getrennt. '
@@ -10090,8 +10089,8 @@ def admin_shiftbase_payroll_batch(batch_id):
              '<span id="sbpay-sync-status" role="status" aria-live="polite" '
              'style="font-size:13px;color:#475467">Kein Dateiabgleich gestartet.</span></div>'
              '<small style="display:block;color:#667085;margin:-3px 0 12px">'
-             'Die Fehlerpruefung kontrolliert auch gescheiterte Vorpruefungen und unterbrochene Versuche sowie gesperrte, unklare oder bereits im Profil '
-             'gesehene Uploads, auch bei gruener Zeile. Per API bestaetigte Uploads '
+             'Die Fehlerpruefung kontrolliert nur gesperrte, unklare oder bereits im Profil '
+             'gesehene Uploads, auch bei gruener Zeile. Bestaetigt versendete Lohnzettel '
              'werden ausgelassen. Freigabe nur nach zwei unabhaengigen Nachweisen, dass '
              'die Monatsdatei in der richtigen Mitarbeiterakte fehlt. Frische unklare '
              'Versuche behalten eine 10-Minuten-Sicherheitssperre. Es wird nichts gesendet.</small>'
@@ -10114,10 +10113,10 @@ def admin_shiftbase_payroll_batch(batch_id):
              'Ein unklarer Upload wird niemals automatisch wiederholt. Die Mitarbeitersichtbarkeit '
              'wird weiterhin gesondert ausgewiesen.</p>')
     h.append('<div style="margin:12px 0;padding:12px;background:#f6f9ff;border:1px solid #d8e5f8;border-radius:12px">'
-             '<div id="sbpay-progress-label" style="font-size:13px;font-weight:750">Versandfortschritt</div>'
+             '<div style="font-size:13px;font-weight:750">Fortschritt</div>'
              '<progress id="sbpay-meter" max="1" value="0" style="width:100%;height:19px"></progress>'
              '<p id="sbpay-progress" role="status" aria-live="polite" '
-             'style="margin:4px 0;color:#344054">Bereit fuer Dateipruefung oder Versand.</p>'
+             'style="margin:4px 0;color:#344054">Noch kein Versand gestartet.</p>'
              '<section id="sbpay-send-report" hidden aria-label="Ergebnis des Sammelversands" '
              'style="margin-top:12px;padding:12px;background:white;border:1px solid #d0d5dd;border-radius:9px">'
              '<b>Versandbericht</b><p id="sbpay-report-counts" aria-live="polite"></p>'
@@ -10228,7 +10227,7 @@ def admin_shiftbase_payroll_batch(batch_id):
         detail = _sbpay_attempt_diagnostic_text(history.get(page_no,{}),diagnostics.get(page_no,{}))
         detail_html = ('<small style="display:block;margin-top:6px;color:#475467;overflow-wrap:anywhere">'+
                        str(_sbpay_escape(detail))+'</small>') if detail else ''
-        h.append('<tr id="sbpay-person-'+str(page_no)+'" style="background:'+color+'" data-page="'+str(page_no)+'" data-delivery="'+str(_sbpay_escape(history.get(page_no,{}).get('state','')))+'">'
+        h.append('<tr id="sbpay-person-'+str(page_no)+'" style="background:'+color+'" data-page="'+str(page_no)+'">'
                  '<td>'+checkbox+'</td><td><b>'+display_name+'</b>'
                  '<small style="display:block;color:#667085">Personal-Nr. '+str(_sbpay_escape(row['personal_no']))
                  +' · Originalseiten '+str(_sbpay_escape(source_pages))+'</small></td>'
@@ -10281,12 +10280,7 @@ def admin_shiftbase_payroll_batch(batch_id):
 # the convenience button.  A green row may still be 'observed_ui': the file was
 # observed in the manager view but employee visibility needs separate review.
 _SBPAY_REMOTE_RECHECK_PROBLEM_STATES = frozenset((
-    'unknown', 'found_remote', 'observed_ui_visibility_unverified', 'observed_ui',
-    'preparing', 'sending'))
-
-
-def _sbpay_is_problem(state, outcome):
-    return state in _SBPAY_REMOTE_RECHECK_PROBLEM_STATES or (not state and outcome=='preflight_failed')
+    'unknown', 'found_remote', 'observed_ui_visibility_unverified', 'observed_ui'))
 
 
 def _sbpay_remote_check_schema(conn):
@@ -10342,84 +10336,12 @@ def _sbpay_remote_recheck_candidate(conn, batch_id, page_no):
     return batch,trusted_row
 
 
-# Slow Playwright work must not occupy a Gunicorn HTTP request. The UI starts
-# exactly one job and polls a durable result. A lost poll is never a new upload.
-def _sbpay_http_job_schema(conn):
-    conn.execute("""CREATE TABLE IF NOT EXISTS shiftbase_payroll_http_jobs (
-        id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, kind TEXT NOT NULL,
-        state TEXT NOT NULL, response_json TEXT NOT NULL DEFAULT '',
-        http_status INTEGER NOT NULL DEFAULT 202, created_at TEXT NOT NULL)""")
-
-
-def _sbpay_http_job(batch_id, kind, work):
-    action = str(request.form.get('job_action') or '')
-    if not action:
-        return work(dict(request.form))
-    if action not in ('start','poll'):
-        return _sbpay_no_cache(jsonify({'ok':False,'error':'Unbekannte Auftragsaktion.'})),400
-    job_id = str(request.form.get('job_id') or '')
-    if not re.fullmatch(r'[a-f0-9]{32}', job_id):
-        return _sbpay_no_cache(jsonify({'ok':False,'error':'Ungueltige Auftrags-ID.'})),400
-    with db_conn() as conn:
-        _sbpay_http_job_schema(conn)
-        created = False
-        if action=='start':
-            _sbpay_batch_data(conn,batch_id)
-            inserted=conn.execute("""INSERT INTO shiftbase_payroll_http_jobs
-                (id,batch_id,kind,state,created_at) VALUES(?,?,?,?,?)
-                ON CONFLICT(id) DO NOTHING""",(job_id,batch_id,kind,'running',now_iso()))
-            created = inserted.rowcount == 1
-        job=conn.execute("""SELECT * FROM shiftbase_payroll_http_jobs
-            WHERE id=? AND batch_id=? AND kind=?""",(job_id,batch_id,kind)).fetchone()
-        conn.commit()
-    if not job:
-        return _sbpay_no_cache(jsonify({'ok':False,'error':'Auftrag nicht gefunden; Mitarbeiterakte pruefen. Nicht blind erneut senden.'})),404
-    if created:
-        form=dict(request.form)
-        def execute():
-            with app.app_context():
-                try:
-                    response=app.make_response(work(form))
-                    data=response.get_json(silent=True)
-                    if not isinstance(data,dict):
-                        raise ValueError('Non-JSON job result')
-                    code=response.status_code
-                except Exception as exc:
-                    app.logger.warning('SBPAY_HTTP_JOB_FAILED kind=%s type=%s',kind,type(exc).__name__)
-                    data={'ok':False,'error':'Serverauftrag unterbrochen. Mitarbeiterakte pruefen; nicht blind erneut senden.'}
-                    code=503
-                try:
-                    with db_conn() as conn:
-                        conn.execute("""UPDATE shiftbase_payroll_http_jobs SET
-                          state='done',response_json=?,http_status=? WHERE id=?""",
-                          (json.dumps(data,ensure_ascii=False),code,job_id))
-                        conn.commit()
-                except Exception as exc:
-                    app.logger.warning('SBPAY_HTTP_JOB_RESULT_FAILED kind=%s type=%s',kind,type(exc).__name__)
-        try:
-            threading.Thread(target=execute,name='sbpay-'+kind,daemon=True).start()
-        except Exception:
-            with db_conn() as conn:
-                conn.execute("""UPDATE shiftbase_payroll_http_jobs SET state='done',
-                    response_json=?,http_status=503 WHERE id=?""",
-                    (json.dumps({'ok':False,'error':'Serverauftrag konnte nicht gestartet werden.'}),job_id))
-                conn.commit()
-            return _sbpay_no_cache(jsonify({'ok':False,'error':'Serverauftrag konnte nicht gestartet werden.'})),503
-    if job['state']=='done':
-        return _sbpay_no_cache(jsonify(json.loads(job['response_json']))),int(job['http_status'])
-    return _sbpay_no_cache(jsonify({'ok':True,'job_pending':True})),202
-
-
 @app.post('/admin/shiftbase/lohnzettel/<batch_id>/dateien-abgleichen/start')
 @admin_login_required
 def admin_shiftbase_payroll_sync_manifest(batch_id):
     """Fresh directory check + list of exactly verified private file targets."""
     _sbpay_token_check()
-    return _sbpay_http_job(batch_id,'manifest',lambda form: _sbpay_sync_manifest_work(batch_id,form))
-
-
-def _sbpay_sync_manifest_work(batch_id,form):
-    scope = str(form.get('scope') or 'all').strip()
+    scope = str(request.form.get('scope') or 'all').strip()
     if scope not in ('all', 'problems'):
         return _sbpay_no_cache(jsonify({'ok':False,'error':'Unbekannter Pruefmodus.'})),400
     if _sbpay_browser_contract() is None:
@@ -10437,16 +10359,12 @@ def _sbpay_sync_manifest_work(batch_id,form):
             prior = {int(d['page_no']):str(d['state']) for d in conn.execute(
                 'SELECT page_no,state FROM shiftbase_payroll_deliveries WHERE batch_id=?',
                 (batch_id,)).fetchall()}
-            _sbpay_attempt_diagnostic_schema(conn)
-            outcomes={int(d['page_no']):str(d['outcome']) for d in conn.execute(
-                'SELECT page_no,outcome FROM shiftbase_payroll_attempt_diagnostics WHERE batch_id=?',
-                (batch_id,)).fetchall()}
             pages=[]
             uncheckable=[]
             for row in rows:
                 number=int(row['page_no'])
                 if (scope == 'problems' and
-                        not _sbpay_is_problem(prior.get(number,''),outcomes.get(number,''))):
+                        prior.get(number) not in _SBPAY_REMOTE_RECHECK_PROBLEM_STATES):
                     continue
                 try:
                     _sbpay_remote_recheck_candidate(conn,batch_id,number)
@@ -10476,11 +10394,7 @@ def admin_shiftbase_payroll_sync_one(batch_id):
     attempt ID prevents changing a concurrently updated delivery record.
     """
     _sbpay_token_check()
-    return _sbpay_http_job(batch_id,'inspect',lambda form: _sbpay_sync_one_work(batch_id,form))
-
-
-def _sbpay_sync_one_work(batch_id,form):
-    raw = str(form.get('page_no') or '')
+    raw = str(request.form.get('page_no') or '')
     if not re.fullmatch(r'[1-9][0-9]{0,5}',raw):
         return _sbpay_no_cache(jsonify({'ok':False,'error':'Unbekannte Seite.'})),400
     page_no = int(raw)
@@ -10501,32 +10415,13 @@ def _sbpay_sync_one_work(batch_id,form):
         previous = conn.execute("""SELECT * FROM shiftbase_payroll_deliveries
             WHERE batch_id=? AND page_no=?""",(batch_id,page_no)).fetchone()
         if previous and previous['state'] in ('sending','preparing'):
-            age=_sbpay_remote_elapsed(previous['updated_at'])
-            if age is None or age < 600:
-                return _sbpay_no_cache(jsonify({'ok':True,'result':'held','diagnostic':
-                    'Laufender oder frischer unterbrochener Versandversuch; Schreibsperre bleibt bestehen.'}))
-            if previous['state']=='preparing':
-                # Revoke an old pre-write claim atomically. The upload's mandatory
-                # preparing->sending CAS prevents its worker from selecting a file.
-                # Keep a conservative unknown lock and the two-read release rule.
-                changed=conn.execute("""UPDATE shiftbase_payroll_deliveries SET state='unknown'
-                    WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='preparing' AND updated_at=?""",
-                    (batch_id,page_no,previous['attempt_id'],previous['updated_at']))
-                if changed.rowcount!=1:
-                    return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
-                conn.commit()
-                previous=conn.execute("""SELECT * FROM shiftbase_payroll_deliveries
-                    WHERE batch_id=? AND page_no=?""",(batch_id,page_no)).fetchone()
-                if not previous or previous['state']!='unknown':
-                    return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
-            # Old sending: positive title evidence can reconcile it; absence alone
-            # cannot release a possibly still active write.
+            return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
         if previous and previous['state'] in ('confirmed',):
             # API-confirmed uploads must be reconciled using the verified API,
             # never infer deletion from a browser title search alone.
             return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
         if previous and previous['state'] not in ('unknown','observed_ui',
-                'observed_ui_visibility_unverified','found_remote','sending'):
+                'observed_ui_visibility_unverified','found_remote'):
             return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
         attempt_id = str(previous['attempt_id']) if previous else ''
         state = str(previous['state']) if previous else ''
@@ -10544,8 +10439,7 @@ def _sbpay_sync_one_work(batch_id,form):
         if _sbpay_is_session_error(exc):
             return _sbpay_no_cache(jsonify({'ok':False,'error':_SBPAY_SESSION_RENEW_MESSAGE,
                                             'session_required':True})), 409
-        return _sbpay_no_cache(jsonify({'ok':True,'result':'uncertain','diagnostic':
-            str(exc)[:220] if isinstance(exc,ShiftbaseIntegrationError) else 'Browserfehler: '+type(exc).__name__}))
+        return _sbpay_no_cache(jsonify({'ok':True,'result':'uncertain'}))
     if observed not in ('present','absent'):
         with db_conn() as conn:
             _sbpay_remote_check_schema(conn)
@@ -10585,25 +10479,19 @@ def _sbpay_sync_one_work(batch_id,form):
                   (batch_id,page_no,attempt_id,action,recorded_at)
                   VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING""",
                   (batch_id,page_no,new_id,'existing_remote_title_seen',now_iso()))
-            elif state in ('unknown','sending'):
-                changed=conn.execute("""UPDATE shiftbase_payroll_deliveries SET
+            elif state=='unknown':
+                conn.execute("""UPDATE shiftbase_payroll_deliveries SET
                   state='found_remote',document_id='remote:visible_title',updated_at=?
-                  WHERE batch_id=? AND page_no=? AND attempt_id=? AND state=? AND updated_at=?""",
-                  (now_iso(),batch_id,page_no,attempt_id,state,updated))
-                if changed.rowcount!=1:
-                    return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
+                  WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='unknown' """,
+                  (now_iso(),batch_id,page_no,attempt_id))
             conn.commit()
             return _sbpay_no_cache(jsonify({'ok':True,'result':'found'}))
         if original is None:
             return _sbpay_no_cache(jsonify({'ok':True,'result':'available'}))
-        if state=='sending':
-            return _sbpay_no_cache(jsonify({'ok':True,'result':'held','diagnostic':
-                'Alter Schreibversuch ohne Abschluss; keine Monatsdatei sichtbar, aber Versandende nicht sicher belegt. Sperre bleibt.'}))
         elapsed = _sbpay_remote_elapsed(updated)
         cooldown = 600 if state=='unknown' else 60
         if elapsed is None or elapsed < cooldown:
-            return _sbpay_no_cache(jsonify({'ok':True,'result':'held','diagnostic':
-                'Sicherheitssperre nach letztem Versuch noch aktiv.'}))
+            return _sbpay_no_cache(jsonify({'ok':True,'result':'held'}))
         old = conn.execute("""SELECT * FROM shiftbase_payroll_remote_absence
              WHERE batch_id=? AND page_no=?""",(batch_id,page_no)).fetchone()
         age = _sbpay_remote_elapsed(old['checked_at']) if old else None
@@ -11510,36 +11398,6 @@ def _sbpay_browser_contract():
             'session_revision':revision,'session_source':source}
 
 
-def _sbpay_session_failure_reason(exc, phase):
-    """Return fixed diagnostic codes only. Never print exception text or state."""
-    import errno
-    if phase == 'STORE' and len(os.environ.get('PORTAL_SECRET_KEY', '').encode('utf-8')) < 32:
-        return 'PORTAL_SECRET_KEY_MISSING_OR_SHORT'
-    if isinstance(exc, ImportError):
-        return 'CRYPTOGRAPHY_OR_DEPENDENCY_UNAVAILABLE'
-    if isinstance(exc, OSError):
-        return {errno.EACCES:'FILESYSTEM_PERMISSION_DENIED',
-                errno.EPERM:'FILESYSTEM_PERMISSION_DENIED',
-                errno.EROFS:'FILESYSTEM_READ_ONLY',
-                errno.ENOSPC:'FILESYSTEM_FULL',
-                errno.EDQUOT:'FILESYSTEM_QUOTA',
-                errno.ENOENT:'FILESYSTEM_PATH_MISSING'}.get(exc.errno,'FILESYSTEM_IO_ERROR')
-    if type(exc).__name__ == 'InvalidToken':
-        return 'ENCRYPTED_SESSION_NOT_READABLE'
-    if isinstance(exc, ValueError):
-        # Match only our own constant validation errors. Do not log raw text.
-        return {'Sitzungsdaten zu gross.':'STATE_TOO_LARGE',
-                'Gespeicherte Sitzung zu gross.':'STATE_TOO_LARGE',
-                'Sitzungsexport fehlt oder ist zu gross.':'BOOTSTRAP_MISSING_OR_TOO_LARGE',
-                'Ungueltige Sitzungsdaten.':'STATE_MISSING_COOKIES_OR_INVALID',
-                'Ungueltiges Sitzungsformat.':'STATE_FORMAT_INVALID',
-                'Ungueltiges Cookie.':'STATE_COOKIE_INVALID',
-                'Nur Shiftbase-Sitzungen sind erlaubt.':'STATE_SCOPE_INVALID',
-                'Ungueltiger Browserspeicher.':'STATE_STORAGE_INVALID',
-                'Dauerhafter PORTAL_SECRET_KEY fehlt oder ist zu kurz.':'PORTAL_SECRET_KEY_MISSING_OR_SHORT'}.get(str(exc),'STATE_OR_CONFIGURATION_INVALID')
-    return 'UNEXPECTED_ERROR'
-
-
 def _sbpay_session_refresh_verified(context, contract):
     """Best effort: capture rotated state after a verified personal-profile read.
 
@@ -11548,10 +11406,8 @@ def _sbpay_session_refresh_verified(context, contract):
     """
     if not contract.get('session_revision'):
         return
-    phase='CAPTURE'
     try:
         state=context.storage_state()
-        phase='SCOPE_AND_VALIDATE'
         state={'cookies':[c for c in state.get('cookies',[]) if
                           str(c.get('domain','')).lstrip('.').lower() == 'shiftbase.com' or
                           str(c.get('domain','')).lstrip('.').lower().endswith('.shiftbase.com')],
@@ -11559,19 +11415,15 @@ def _sbpay_session_refresh_verified(context, contract):
                           ('https://shiftbase.com','https://app.shiftbase.com')]}
         revision=_sbpay_session_revision(state)
         with _SBPAY_SESSION_LOCK:
-            phase='LOAD_CURRENT'
             current,source=_sbpay_session_load()
             if _sbpay_session_revision(current)!=contract['session_revision']:
                 return
             if source=='cloud' and revision==contract['session_revision']:
                 return
-            phase='STORE'
             _sbpay_session_store(state)
-            app.logger.warning('SBPAY_SESSION_REFRESH_SAVED')
-    except Exception as exc:
+    except Exception:
         # Never let optional state persistence change a confirmed delivery.
-        app.logger.warning('SBPAY_SESSION_REFRESH_NOT_SAVED phase=%s reason=%s',
-                           phase,_sbpay_session_failure_reason(exc,phase))
+        app.logger.warning('SBPAY_SESSION_REFRESH_NOT_SAVED')
 
 
 def _sbpay_session_verify_candidate(state):
@@ -11622,135 +11474,6 @@ def _sbpay_session_verify_candidate(state):
             browser.close()
 
 
-# One-time, admin-authorized handoff from the local Windows browser helper.
-# Only the hash of the short-lived capability is stored in the database.
-# Session contents are never stored in the pairing table or returned to JS.
-def _sbpay_pair_https():
-    return request.is_secure or (os.environ.get('RENDER','').lower()=='true' and
-                                 request.headers.get('X-Forwarded-Proto','').lower()=='https')
-
-
-def _sbpay_pair_schema(conn):
-    conn.execute('''CREATE TABLE IF NOT EXISTS shiftbase_session_pairings (
-        id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at INTEGER NOT NULL,
-        state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '')''')
-
-
-def _sbpay_pair_hash(value):
-    return _sbpay_hashlib.sha256(value.encode('ascii')).hexdigest()
-
-
-def _sbpay_pair_result(state, message, status=200, **extra):
-    return _sbpay_no_cache(jsonify(dict(state=state,message=message,**extra))),status
-
-
-@app.post('/admin/shiftbase/lohnzettel/sitzung/automatisch')
-@admin_login_required
-def admin_shiftbase_payroll_pair():
-    _sbpay_token_check()
-    if not _sbpay_pair_https():
-        return _sbpay_pair_result('error','Nur ueber HTTPS verfuegbar.',400)
-    owner=_sbpay_pair_hash(_sb_csrf_token())
-    action=request.form.get('action','')
-    now=int(_sbpay_time.time())
-    with db_conn() as conn:
-        _sbpay_pair_schema(conn)
-        if action=='start':
-            if os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED','').strip()!='1':
-                return _sbpay_pair_result('error','Browser-Integration deaktiviert.',503)
-            try:
-                _sbpay_session_cipher()
-            except Exception as exc:
-                return _sbpay_pair_result('error','Sitzungsspeicherung nicht eingerichtet ('+_sbpay_session_failure_reason(exc,'STORE')+').',503)
-            conn.execute('DELETE FROM shiftbase_session_pairings WHERE expires_at<?',(now-3600,))
-            # Do not cancel an already running verification on another tab.
-            running=conn.execute("SELECT id FROM shiftbase_session_pairings WHERE owner=? AND state='verifying' AND expires_at>?",(owner,now)).fetchone()
-            if running:
-                return _sbpay_pair_result('verifying','Eine Anmeldung wird bereits geprueft.',pair_id=running['id'])
-            conn.execute("UPDATE shiftbase_session_pairings SET state='cancelled' WHERE owner=? AND state='waiting'",(owner,))
-            token=secrets.token_urlsafe(32)
-            pid=_sbpay_pair_hash(token)
-            conn.execute('INSERT INTO shiftbase_session_pairings(id,owner,expires_at,state) VALUES(?,?,?,?)',(pid,owner,now+900,'waiting'))
-            conn.commit()
-            return _sbpay_pair_result('waiting','Bitte Shiftbase im geoeffneten Fenster anmelden.',pair_id=pid,launch='plusminus-shiftbase://connect/'+token)
-        pid=str(request.form.get('pair_id',''))
-        if action not in ('poll','cancel') or not re.fullmatch(r'[a-f0-9]{64}',pid):
-            return _sbpay_pair_result('error','Ungueltiger Auftrag.',400)
-        row=conn.execute('SELECT * FROM shiftbase_session_pairings WHERE id=? AND owner=?',(pid,owner)).fetchone()
-        if not row:
-            return _sbpay_pair_result('error','Verbindungsauftrag nicht gefunden.',404)
-        if action=='cancel':
-            conn.execute("UPDATE shiftbase_session_pairings SET state='cancelled' WHERE id=? AND state='waiting'",(pid,))
-            conn.commit()
-            row=conn.execute('SELECT * FROM shiftbase_session_pairings WHERE id=?',(pid,)).fetchone()
-        if row['expires_at']<=now and row['state'] in ('waiting','verifying'):
-            return _sbpay_pair_result('expired','Verbindung abgelaufen. Bitte neu starten.')
-        return _sbpay_pair_result(row['state'],row['message'] or {'waiting':'Warte auf Shiftbase-Anmeldung…','verifying':'Cloud prueft die Anmeldung…','cancelled':'Verbindung abgebrochen.'}.get(row['state'],''))
-
-
-@app.post('/shiftbase/session-handoff')
-def sbpay_local_session_handoff():
-    # This endpoint requires the single-use capability issued by an authenticated
-    # administrator, never an API token, password, or Flask session cookie.
-    if not _sbpay_pair_https() or os.environ.get('SHIFTBASE_PAYROLL_WEB_ENABLED','').strip()!='1':
-        return _sbpay_pair_result('error','Verbindung nicht verfuegbar.',403)
-    token=request.headers.get('Authorization','')
-    if not re.fullmatch(r'Bearer [A-Za-z0-9_-]{43}',token):
-        return _sbpay_pair_result('error','Verbindung nicht autorisiert.',403)
-    pid=_sbpay_pair_hash(token[7:])
-    if request.content_length is None or not 0<request.content_length<=_SBPAY_SESSION_MAX or not request.is_json:
-        return _sbpay_pair_result('error','Ungueltige Sitzungsdaten.',400)
-    with db_conn() as conn:
-        _sbpay_pair_schema(conn)
-        row=conn.execute('SELECT state,expires_at FROM shiftbase_session_pairings WHERE id=?',(pid,)).fetchone()
-        if not row or row['state']!='waiting' or row['expires_at']<=int(_sbpay_time.time()):
-            return _sbpay_pair_result('error','Verbindung abgelaufen oder bereits benutzt.',409)
-        try:
-            state=request.get_json()
-            _sbpay_validate_storage_state(state)
-            _sbpay_session_cipher()
-        except Exception:
-            return _sbpay_pair_result('error','Sitzungsdaten oder Verschluesselung ungueltig.',400)
-        # Atomic claim: a second POST cannot trigger another verification.
-        claimed=conn.execute("UPDATE shiftbase_session_pairings SET state='verifying', expires_at=? WHERE id=? AND state='waiting' AND expires_at>?",(int(_sbpay_time.time())+300,pid,int(_sbpay_time.time())))
-        conn.commit()
-        if claimed.rowcount!=1:
-            return _sbpay_pair_result('error','Verbindung bereits benutzt.',409)
-    def finish(result,message):
-        with db_conn() as conn:
-            conn.execute("UPDATE shiftbase_session_pairings SET state=?,message=? WHERE id=? AND state='verifying'",(result,message,pid))
-            conn.commit()
-    def verify():
-        with app.app_context():
-            phase='READ_CURRENT'
-            try:
-                with _SBPAY_SESSION_LOCK:
-                    previous=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
-                phase='LIVE_VERIFY'
-                verified=_sbpay_session_verify_candidate(state)
-                phase='STORE'
-                with _SBPAY_SESSION_LOCK:
-                    with db_conn() as conn:
-                        row=conn.execute('SELECT state,expires_at FROM shiftbase_session_pairings WHERE id=?',(pid,)).fetchone()
-                    current=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
-                    if not row or row['state']!='verifying' or row['expires_at']<=int(_sbpay_time.time()) or current!=previous:
-                        finish('error','Anmeldung inzwischen geaendert oder abgelaufen. Bitte erneut verbinden.')
-                        return
-                    _sbpay_session_store(verified)
-                finish('success','Shiftbase-Anmeldung live bestaetigt und sicher gespeichert. Keine PDF gesendet.')
-            except Exception as exc:
-                reason=_sbpay_session_failure_reason(exc,phase)
-                app.logger.warning('SBPAY_PAIR_FAILED phase=%s reason=%s',phase,reason)
-                try: finish('error','Anmeldung konnte nicht gespeichert werden ('+phase+': '+reason+'). Bitte erneut verbinden oder manuellen Import verwenden.')
-                except Exception: app.logger.warning('SBPAY_PAIR_RESULT_FAILED')
-    try:
-        threading.Thread(target=verify,name='sbpay-session-pair',daemon=True).start()
-    except Exception:
-        finish('error','Serverpruefung konnte nicht gestartet werden.')
-        return _sbpay_pair_result('error','Serverpruefung konnte nicht gestartet werden.',503)
-    return _sbpay_pair_result('verifying','Sitzung uebergeben. Die Cloud prueft jetzt die Anmeldung.',202)
-
-
 def _sbpay_session_page(batch_id='',message='',success=False):
     contract=_sbpay_browser_contract()
     source=contract.get('session_source') if contract else None
@@ -11760,43 +11483,18 @@ def _sbpay_session_page(batch_id='',message='',success=False):
           '<p><b>'+str(_sbpay_escape(configured))+'</b> Die tatsaechliche Gueltigkeit wird beim Zugriff auf Shiftbase geprueft.</p>']
     if message:
         body.append('<div role="status" class="flash '+('ok' if success else 'err')+'">'+str(_sbpay_escape(message))+'</div>')
-    body.extend(['<div class="card" style="box-shadow:none;background:#f0f6ff;margin-top:16px">',
-                 '<h3>Einfach verbinden (Windows)</h3><p>Einmal die Windows-Verbindungshilfe installieren. Danach hier klicken und im offiziellen Shiftbase-Fenster anmelden. Kein Kopieren oder Einfuegen mehr.</p>',
-                 '<div class="actions"><button type="button" id="sbpay-auto-start" class="primary">Shiftbase automatisch verbinden</button>',
-                 '<a id="sbpay-auto-launch" class="btn small" hidden style="display:none">Shiftbase-Fenster oeffnen</a>',
-                 '<button type="button" class="btn small" id="sbpay-auto-cancel" hidden style="display:none">Abbrechen</button></div>',
-                 '<p id="sbpay-auto-status" role="status" aria-live="polite" class="muted">Bereit. Wenn Windows nach dem Oeffnen der Verbindungshilfe fragt, bestaetigen.</p>',
-                 '<p class="muted" id="sbpay-auto-help">Falls noch nicht installiert: Windows-Verbindungshilfe aus dem mitgelieferten ZIP einmal einrichten.</p></div>',
-                 '<details id="sbpay-manual"><summary>Manueller Sitzungsexport (Alternative)</summary>',
-                 '<p>Nur bei einer abgelaufenen Anmeldung: Starte dein vorhandenes Windows-Sitzungsexportprogramm, '
+    body.extend(['<p>Nur bei einer abgelaufenen Anmeldung: Starte dein vorhandenes Windows-Sitzungsexportprogramm, '
                  'melde dich im offiziellen Shiftbase-Fenster an und kopiere den neuen Sitzungswert. '
                  'Passwort und MFA bleiben ausschliesslich bei Shiftbase.</p>',
                  '<form method="post" autocomplete="off" id="sbpay-session-form">',
                  '<input type="hidden" name="csrf_token" value="'+str(_sbpay_escape(_sb_csrf_token()))+'">',
                  '<input type="hidden" name="batch_id" value="'+str(_sbpay_escape(batch_id if re.fullmatch(r'[a-f0-9]{32}',batch_id) else ''))+'">',
                  '<label>Neuer Sitzungsexport (Base64 oder Playwright-JSON)<textarea name="session_export" required maxlength="400000" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Sitzungswert hier einfuegen"></textarea></label>',
-                 '<div class="actions"><button type="submit" class="primary">Sitzung pruefen und speichern</button></div></form>',
+                 '<div class="actions"><button type="submit" class="primary">Sitzung pruefen und speichern</button>',
+                 '<a class="btn small" href="'+back+'">Zurueck zu den Lohnzetteln</a></div></form>',
                  '<p id="sbpay-session-status" class="muted">Die Cloud prueft den Zugang ohne Upload. Nach Erfolg ist kein Render-Aufruf und kein Neustart erforderlich.</p>',
-                 '<p class="muted">Die Sitzung ist ein geheimer Zugangsschluessel. Nicht per E-Mail oder Chat teilen.</p></details>',
-                 '<div class="actions"><a class="btn small" href="'+back+'">Zurueck zu den Lohnzetteln</a></div></div>',
-                 '''<script>
-(function(){
- const form=document.getElementById('sbpay-session-form'), start=document.getElementById('sbpay-auto-start'), launch=document.getElementById('sbpay-auto-launch'), cancel=document.getElementById('sbpay-auto-cancel'), status=document.getElementById('sbpay-auto-status');
- const csrf=form.elements.csrf_token.value, endpoint='''+json.dumps(url_for('admin_shiftbase_payroll_pair'))+''', back='''+json.dumps(back)+''';
- let id='',generation=0,timer=null,deadline=0;
- function visible(el,show){el.hidden=!show;el.style.display=show?'inline-block':'none';}
- async function req(action){const data=new URLSearchParams({csrf_token:csrf,action:action,pair_id:id});const r=await fetch(endpoint,{method:'POST',body:data,credentials:'same-origin',cache:'no-store'});return await r.json();}
- function reset(message){clearTimeout(timer);start.disabled=false;visible(launch,false);visible(cancel,false);launch.removeAttribute('href');status.textContent=message;}
- function apply(data,g){if(g!==generation)return;status.textContent=data.message||'';
-   if(data.state==='success'){reset(data.message+' Du wirst zurueckgeleitet.');start.disabled=true;window.setTimeout(()=>location.assign(back),1500);return;}
-   if(data.state==='waiting'||data.state==='verifying'){if(data.state==='verifying'){visible(launch,false);visible(cancel,false);}clearTimeout(timer);timer=setTimeout(()=>poll(g),2000);return;}
-   reset(data.message||'Verbindung beendet.');}
- async function poll(g){if(g!==generation)return;if(Date.now()>deadline){reset('Zeitlimit erreicht. Bitte Status pruefen oder erneut verbinden.');return;}try{apply(await req('poll'),g);}catch(e){if(g!==generation)return;status.textContent='Verbindung zur Cloud kurz unterbrochen. Status wird erneut abgefragt…';timer=setTimeout(()=>poll(g),3000);}}
- start.addEventListener('click',async()=>{const g=++generation;start.disabled=true;status.textContent='Verbindung wird vorbereitet…';deadline=Date.now()+20*60*1000;try{const data=await req('start');if(g!==generation)return;id=data.pair_id||'';if(data.state==='waiting'&&/^plusminus-shiftbase:\\/\\/connect\\/[A-Za-z0-9_-]{43}$/.test(data.launch||'')){launch.href=data.launch;visible(launch,true);visible(cancel,true);apply(data,g);launch.click();status.textContent='Shiftbase-Fenster wird geoeffnet. Falls nichts passiert: auf Shiftbase-Fenster oeffnen klicken oder Verbindungshilfe installieren.';}else{apply(data,g);}}catch(e){reset('Cloud nicht erreichbar. Bitte erneut versuchen.');}});
- cancel.addEventListener('click',async()=>{const g=++generation;clearTimeout(timer);try{apply(await req('cancel'),g);}catch(e){reset('Abbruch nicht bestaetigt. Bitte Seite neu laden.');}});
- form.addEventListener('submit',function(){this.querySelector('button').disabled=true;document.getElementById('sbpay-session-status').textContent='Shiftbase-Zugang wird geprueft… Bitte Seite offen lassen.';});
-})();
-</script>'''])
+                 '<p class="muted">Die Sitzung ist ein geheimer Zugangsschluessel. Nur hier einfuegen, nicht per E-Mail oder Chat teilen. Ein normaler Shiftbase-Login in einem anderen Tab uebertraegt die Sitzung nicht automatisch.</p></div>',
+                 """<script>document.getElementById('sbpay-session-form').addEventListener('submit',function(){this.querySelector('button').disabled=true;document.getElementById('sbpay-session-status').textContent='Shiftbase-Zugang wird geprueft… Bitte Seite offen lassen.';});</script>"""])
     resp=_sbpay_no_cache(make_response(base_page('Shiftbase-Anmeldung',''.join(body),'shiftbase_payroll')))
     resp.headers['X-Frame-Options']='DENY'
     resp.headers['Content-Security-Policy']="frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
@@ -11820,35 +11518,24 @@ def admin_shiftbase_payroll_session():
         return _sbpay_session_page(batch_id,'Sitzungsimport ist nur ueber HTTPS erlaubt.'),400
     try:
         _sbpay_session_cipher()  # stable encryption key required BEFORE live verification
-    except Exception as exc:
-        reason=_sbpay_session_failure_reason(exc,'STORE')
-        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED phase=ENCRYPTION reason=%s',reason)
-        return _sbpay_session_page(batch_id,'Sitzungsverschluesselung nicht eingerichtet ('+reason+'). Nichts gespeichert.'),503
-    try:
         state=_sbpay_decode_session_export(request.form.get('session_export',''))
     except Exception:
-        return _sbpay_session_page(batch_id,'Sitzungsexport ungueltig. Nichts gespeichert.'),400
+        return _sbpay_session_page(batch_id,'Sitzungsexport ungueltig oder Verschluesselung nicht eingerichtet. Nichts gespeichert.'),400
     # Concurrent requests may not replace a manually renewed session silently.
     with _SBPAY_SESSION_LOCK:
         try:
             previous=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
         except OSError:
             return _sbpay_session_page(batch_id,'Sitzungsspeicher nicht lesbar.'),503
-    phase='LIVE_VERIFY'
     try:
         verified=_sbpay_session_verify_candidate(state)
-        phase='STORE'
         with _SBPAY_SESSION_LOCK:
             current=_SBPAY_SESSION_FILE.read_bytes() if _SBPAY_SESSION_FILE.exists() else None
             if current!=previous:
                 return _sbpay_session_page(batch_id,'Die Sitzung wurde inzwischen aktualisiert. Bitte erneut versuchen.'),409
             _sbpay_session_store(verified)
     except Exception as exc:
-        if phase=='STORE':
-            reason=_sbpay_session_failure_reason(exc,phase)
-            app.logger.warning('SBPAY_SESSION_IMPORT_FAILED phase=STORE reason=%s',reason)
-            return _sbpay_session_page(batch_id,'Anmeldung live bestaetigt, aber Sitzungsspeicherung fehlgeschlagen ('+reason+'). Serverkonfiguration pruefen; keine PDF gesendet.'),503
-        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED phase=LIVE_VERIFY type=%s',type(exc).__name__)
+        app.logger.warning('SBPAY_SESSION_IMPORT_FAILED type=%s',type(exc).__name__)
         return _sbpay_session_page(batch_id,'Anmeldung oder Berechtigung konnte nicht live bestaetigt werden. Die bisherige Sitzung bleibt erhalten. Bitte im Exportprogramm neu anmelden und erneut versuchen.'),400
     return _sbpay_session_page(batch_id,'Shiftbase-Anmeldung live bestaetigt und sicher gespeichert. Du kannst direkt weiterarbeiten. Es wurde keine PDF gesendet.',True)
 
@@ -12088,7 +11775,7 @@ def _sbpay_wait_for_details_after_selection(page, user_id, timeout_ms=45000, sel
                 # The old 1.5-second threshold incorrectly marked this normal
                 # transition as failure. Give the SPA a bounded grace period,
                 # but never infer a successful upload from the files route.
-                elif monotonic()-files_since >= 8.0 and error_codes:
+                elif monotonic()-files_since >= 8.0:
                     recent_codes=','.join(str(x) for x in http_statuses[-4:]) or 'keine'
                     ui_code=','.join(error_codes[-2:]) or 'keiner'
                     app.logger.warning(
@@ -12616,7 +12303,9 @@ def _sbpay_final_readback(context,page,origin,user_id,employee_name,title):
             return False
         check=context.new_page()
         check.set_default_timeout(4000)
-        _sbpay_open_verified_employee_files(check,origin,user_id,employee_name)
+        check.goto(origin+'/employees/'+str(user_id)+'/files',wait_until='domcontentloaded',timeout=10000)
+        if not _sbpay_is_exact_employee_files_url(check.url,user_id):
+            return False
         return bool(_sbpay_final_document_observed(check,user_id,employee_name,title,timeout_ms=6000))
     except Exception:
         return False
@@ -12885,14 +12574,11 @@ def _sbpay_remote_title_read(page, user_id, employee_name, title):
     name = page.get_by_text(_sbpay_profile_name_pattern(employee_name))
     if name.count() == 0 or not name.first.is_visible():
         return 'uncertain'
-    # Positive evidence can be read even when the Add action is unavailable.
-    # Exact personal-files URL + visible verified name are mandatory above.
-    exact = page.get_by_text(title, exact=True).filter(visible=True)
-    if exact.count():
-        return 'present'
-    # Absence still requires the original strict file-list and search proof.
+    # The personal Files header and Add action prove that this is the actual
+    # employee's private file list, not the company file repository.
     if _sbpay_personal_file_tab_add_button(page, user_id, timeout_ms=8000) is None:
         return 'uncertain'
+    exact = page.get_by_text(title, exact=True).filter(visible=True)
     if exact.count():
         return 'present'
     search = _sbpay_unique_visible(page.get_by_placeholder(_SBPAY_REMOTE_SEARCH))
@@ -13036,9 +12722,6 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
         now = _sbpay_time.monotonic()
         timings.append((stage, round(now - phase_started, 2)))
         stage, phase_started = next_stage, now
-        # Explicitly visible with Gunicorn/Flask's usual WARNING threshold.
-        app.logger.warning('SBPAY_UPLOAD_PHASE phase=%s total_s=%.2f',stage,now-started)
-    app.logger.warning('SBPAY_UPLOAD_PHASE phase=%s total_s=0.00',stage)
     try:
         # Only the independent, read-only API check overlaps navigation.
         # The browser thread alone owns all browser operations and all writes.
@@ -13224,7 +12907,7 @@ def _sbpay_browser_upload_with_browser(browser, contract, batch, row, content,
             except Exception:
                 _sbpay_fast_browser_invalidate()
         advance('DONE')
-        app.logger.warning('SBPAY_UPLOAD_TIMING total_s=%.2f %s',
+        app.logger.info('SBPAY_UPLOAD_TIMING total_s=%.2f %s',
                         _sbpay_time.monotonic()-started,
                         ' '.join('%s=%.2f' % pair for pair in timings))
 
@@ -13486,36 +13169,6 @@ const report=document.getElementById('sbpay-sync-report');
 const reportCounts=document.getElementById('sbpay-sync-report-counts');
 const reportNames=document.getElementById('sbpay-sync-report-names');
 const singleButtons=[...document.querySelectorAll('.sbpay-check-one')];
-async function sbpayJob(endpoint, form, onWait){
-  const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
-  const deadline=Date.now()+360000;
-  const poll=new URLSearchParams();poll.set('csrf_token',form.get('csrf_token'));poll.set('job_id',id);poll.set('job_action','poll');
-  form.set('job_id',id);form.set('job_action','start');
-  async function post(body){
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),20000);
-    try{return await fetch(endpoint,{method:'POST',body,credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'},signal:controller.signal});}
-    finally{clearTimeout(timer);}
-  }
-  let response;
-  try{response=await post(form);}catch(e){response=null;}
-  while(Date.now()<deadline){
-    if(response && ![202,502,504].includes(response.status))return response;
-    if(onWait)onWait();
-    await new Promise(resolve=>setTimeout(resolve,1800));
-    try{response=await post(poll);}catch(e){response=null;}
-  }
-  throw Error('Serverauftrag noch nicht bestaetigt. Keine Wiederholung gestartet.');
-}
-const syncMeter=document.getElementById('sbpay-meter');
-const syncInfo=document.getElementById('sbpay-progress');
-const syncLabel=document.getElementById('sbpay-progress-label');
-function syncProgress(done,total,message){
-  if(syncLabel)syncLabel.textContent='Fortschritt der Dateipruefung (kein Versand)';
-  if(syncMeter){syncMeter.max=Math.max(1,total);syncMeter.value=done;}
-  if(syncInfo)syncInfo.textContent=message;
-}
-
 if(!button||!status)return;
 let activeCheck=false, sending=false;
 const updateButtons=()=>{
@@ -13533,9 +13186,8 @@ window.addEventListener('sbpay-send-end',()=>{sending=false;updateButtons();});
 const run=async(endpoint, extra={})=>{
   const form=new URLSearchParams();form.set('csrf_token',CSRF);
   for(const [key,val] of Object.entries(extra))form.set(key,String(val));
-  const response=await sbpayJob(endpoint,form);
-  const contentType=(response.headers.get('content-type')||'').toLowerCase();
-  if(!contentType.includes('application/json'))throw Error('Cloud-Server oder Anmeldung nicht erreichbar.');
+  const response=await fetch(endpoint,{method:'POST',body:form,
+          headers:{'Accept':'application/json'},credentials:'same-origin',cache:'no-store'});
   const result=await response.json();
   if(result.session_required){
     window.dispatchEvent(new Event('sbpay-session-required'));
@@ -13556,34 +13208,27 @@ const meanings={
   uncertain:'Weiter gesperrt: Mitarbeiter-Dateiliste nicht sicher lesbar',
   first_absence:'Weiter gesperrt: nur eine Abwesenheitspruefung bestaetigt'
 };
-function showRowResult(number,result,diagnostic=''){
+function showRowResult(number,result){
   const row=document.getElementById('sbpay-person-'+number);
   if(!row)return;
   const cell=row.querySelector('.sbpay-status');
   const check=row.querySelector('.sbpay-choice');
-  if(result==='released'||result==='available'){
-    if(cell)cell.textContent=result==='released'?'Bereit – zweimal keine Monatsdatei gefunden':'Bereit – keine Monatsdatei gefunden';
-    row.dataset.delivery='';
+  if(result==='released'){
+    if(cell)cell.textContent='Bereit – zweimal keine Monatsdatei gefunden';
     row.style.background='#e8f8ef';
-    // Only the server's explicit 'released' or verified no-claim 'available' response may reenable a checkbox.
+    // Only the server's durable 'released' response may reenable a checkbox.
     // The actual upload endpoint rechecks identity and delivery locks anyway.
     if(check){check.disabled=false;check.checked=false;}
   } else if(result==='found'){
     if(cell)cell.textContent='Monatsdatei in Shiftbase gefunden – nicht erneut senden';
-    if(!['observed_ui','observed_ui_visibility_unverified','confirmed'].includes(row.dataset.delivery))row.dataset.delivery='found_remote';
-    row.style.background=row.dataset.delivery==='observed_ui'?'#e8f8ef':'#fff7e8';
+    row.style.background='#fff7e8';
     if(check){check.disabled=true;check.checked=false;}
-  }else{
-    if(cell){const note=document.createElement('small');note.className='sbpay-live-note';note.style.display='block';note.textContent=(meanings[result]||'Pruefung unklar')+(diagnostic?' – '+diagnostic:'');cell.querySelector('.sbpay-live-note')?.remove();cell.appendChild(note);}
   }
 }
 function refreshReadyCount(){
   const ready=[...document.querySelectorAll('.sbpay-choice:not(:disabled)')].length;
   const counter=document.getElementById('sbpay-ready-count');
   if(counter)counter.textContent=String(ready);
-  const delivery=document.getElementById('sbpay-delivery-count');
-  const states=[...document.querySelectorAll('#sbpay-table tbody tr')].map(r=>r.dataset.delivery||'');
-  if(delivery)delivery.textContent=states.filter(x=>['confirmed','observed_ui'].includes(x)).length+' / '+states.filter(x=>x&&!['confirmed','observed_ui'].includes(x)).length;
   const markAll=document.getElementById('sbpay-all');
   if(markAll)markAll.textContent='Alle markieren ('+ready+')';
   window.dispatchEvent(new Event('sbpay-sync-updated'));
@@ -13601,7 +13246,7 @@ function showResults(results,uncheckable){
   for(const entry of entries){
     const li=document.createElement('li');
     li.textContent=entry.name+' (PDF '+entry.page+'): '+(meanings[entry.result]||
-      'Status nicht eindeutig – weiter gesperrt')+(entry.diagnostic?' – '+entry.diagnostic:'');
+      'Status nicht eindeutig – weiter gesperrt');
     reportNames.appendChild(li);
   }
   for(const entry of uncheckable){
@@ -13630,17 +13275,17 @@ for(const checkButton of singleButtons){
     checkButton.textContent='Pruefe…';
     try{
       checkStatus.textContent='Pruefe nur diese persoenliche Mitarbeiterakte (kein Upload)…';
-      syncProgress(0,1,checkStatus.textContent);
       let result=await run(ONE,{page_no:pageNo});
       if(result.needs_second_check){
         checkStatus.textContent='Monatsdatei fehlt im ersten Abgleich. Zweite Kontrolle folgt automatisch…';
         await new Promise(resolve=>setTimeout(resolve,5300));
         result=await run(ONE,{page_no:pageNo});
       }
-      checkStatus.textContent=(meanings[result.result]||'Pruefung nicht eindeutig; keine Freigabe.')+(result.diagnostic?' – '+result.diagnostic:'');
-      showRowResult(pageNo,result.result,result.diagnostic);
-      refreshReadyCount();
-      syncProgress(1,1,'Einzelpruefung abgeschlossen. Kein PDF gesendet.');
+      checkStatus.textContent=meanings[result.result]||'Pruefung nicht eindeutig; keine Freigabe.';
+      if(result.result==='released'||result.result==='found'){
+        showRowResult(pageNo,result.result);
+        refreshReadyCount();
+      }
     }catch(e){
       checkStatus.textContent=e.sessionRequired?'Shiftbase-Anmeldung erneuern. Kein Upload.':
         'Einzelpruefung fehlgeschlagen. Es wurde nichts gesendet; Sperren bleiben erhalten.';
@@ -13663,28 +13308,22 @@ async function bulkCheck(scope){
   try{
     status.textContent=scope==='problems'? 'Nur fehlgeschlagene Uploads werden vorbereitet…':
       'Empfaenger und Shiftbase-IDs werden frisch geprueft…';
-    syncProgress(0,1,status.textContent);
     const manifest=await run(MANIFEST,{scope:scope});
     const targets=manifest.pages||[];
     unavailable=manifest.not_checkable||[];
     const pending=[];
     status.textContent='0 von '+targets.length+' Mitarbeiterakten geprueft.';
-    syncProgress(0,targets.length,status.textContent);
     for(const pageNo of targets){
-      status.textContent=finished+' / '+targets.length+' – pruefe '+employeeName(pageNo)+'…';
-      syncProgress(finished,targets.length,status.textContent);
-      let outcome='uncertain', diagnostic='';
+      let outcome='uncertain';
       try{
         const result=await run(ONE,{page_no:pageNo});
-        outcome=result.result||'uncertain';diagnostic=result.diagnostic||'';
+        outcome=result.result||'uncertain';
         if(result.needs_second_check)pending.push(pageNo);
-      }catch(e){if(e.sessionRequired)throw e;diagnostic=e.message||'Serverantwort nicht lesbar';}
-      results.set(String(pageNo),{page:pageNo,name:employeeName(pageNo),result:outcome,diagnostic});
-      showRowResult(pageNo,outcome,diagnostic);refreshReadyCount();
+      }catch(e){if(e.sessionRequired)throw e;}
+      results.set(String(pageNo),{page:pageNo,name:employeeName(pageNo),result:outcome});
       finished++;
       status.textContent=finished+' von '+targets.length+' Mitarbeiterakten geprueft. '+
         pending.length+' zweite Kontrolle(n) vorgemerkt.';
-      syncProgress(finished,targets.length,status.textContent);
     }
     if(pending.length){
       status.textContent='Zweite unabhaengige Kontrolle fuer '+pending.length+' Datei(en)…';
@@ -13693,24 +13332,23 @@ async function bulkCheck(scope){
       await new Promise(resolve=>setTimeout(resolve,5300));
       for(let i=0;i<pending.length;i++){
         const pageNo=pending[i];
-        let outcome='uncertain',diagnostic='';
-        syncProgress(i,pending.length,'Zweite Kontrolle: '+employeeName(pageNo)+'…');
+        let outcome='uncertain';
         try{
           const result=await run(ONE,{page_no:pageNo});
-          outcome=result.result||'uncertain';diagnostic=result.diagnostic||'';
-        }catch(e){if(e.sessionRequired)throw e;diagnostic=e.message||'Serverantwort nicht lesbar';}
-        results.set(String(pageNo),{page:pageNo,name:employeeName(pageNo),result:outcome,diagnostic});
-        showRowResult(pageNo,outcome,diagnostic);refreshReadyCount();
+          outcome=result.result||'uncertain';
+        }catch(e){if(e.sessionRequired)throw e;}
+        results.set(String(pageNo),{page:pageNo,name:employeeName(pageNo),result:outcome});
         status.textContent='Zweite Kontrolle '+(i+1)+'/'+pending.length+' abgeschlossen.';
-        syncProgress(i+1,pending.length,status.textContent);
       }
     }
+    for(const entry of results.values())
+      if(entry.result==='released'||entry.result==='found')
+        showRowResult(entry.page,entry.result);
     refreshReadyCount();
     showResults(results,unavailable);
     const released=[...results.values()].filter(x=>x.result==='released').length;
     status.textContent='Pruefung abgeschlossen: '+released+' wieder freigegeben, '+
       unavailable.length+' wegen Zuordnung nicht pruefbar. Liste unten.';
-    syncProgress(targets.length,targets.length,status.textContent+' Kein PDF gesendet.');
     if(problemsButton&&scope==='problems'){
       const available=[...results.values()].filter(x=>x.result==='available').length;
       const remaining=results.size+unavailable.length-released-available;
@@ -13720,7 +13358,6 @@ async function bulkCheck(scope){
   }catch(e){
     status.textContent='Abgleich nicht abgeschlossen: '+(e.message||'Unbekannter Fehler')+
       '. Keine PDF gesendet. Bestehende Sperren bleiben erhalten.';
-    if(syncInfo)syncInfo.textContent=status.textContent;
     if(results.size||unavailable.length){
       showResults(results,unavailable);
     }
@@ -13763,27 +13400,6 @@ const reportProblems=document.getElementById('sbpay-report-problems');
 const reportAction=document.getElementById('sbpay-report-action');
 if(!send||!meter||!info)return;
 let sending=false, checking=false;
-async function sbpayJob(endpoint, form, onWait){
-  const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
-  const deadline=Date.now()+360000;
-  const poll=new URLSearchParams();poll.set('csrf_token',form.get('csrf_token'));poll.set('job_id',id);poll.set('job_action','poll');
-  form.set('job_id',id);form.set('job_action','start');
-  async function post(body){
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),20000);
-    try{return await fetch(endpoint,{method:'POST',body,credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'},signal:controller.signal});}
-    finally{clearTimeout(timer);}
-  }
-  let response;
-  try{response=await post(form);}catch(e){response=null;}
-  while(Date.now()<deadline){
-    if(response && ![202,502,504].includes(response.status))return response;
-    if(onWait)onWait();
-    await new Promise(resolve=>setTimeout(resolve,1800));
-    try{response=await post(poll);}catch(e){response=null;}
-  }
-  throw Error('Serverauftrag noch nicht bestaetigt. Keine Wiederholung gestartet.');
-}
 function chosen(){return boxes.filter(b=>b.checked&&!b.disabled);}
 function employeeName(number){
  const row=document.getElementById('sbpay-person-'+number);
@@ -13863,7 +13479,6 @@ send.addEventListener('click',async()=>{
  sending=true;update();
  window.dispatchEvent(new Event('sbpay-send-start'));
  if(report)report.hidden=true;
- const label=document.getElementById('sbpay-progress-label');if(label)label.textContent='Versandfortschritt';
  meter.max=picked.length;meter.value=0;
  info.textContent='0 von '+picked.length+' Mitarbeitern verarbeitet. Bitte diese Seite waehrend des Versands offen lassen.';
  const success=[],problems=[];
@@ -13878,8 +13493,7 @@ send.addEventListener('click',async()=>{
    params.set('csrf_token',CSRF);params.set('mode','single');params.set('page_no',number);
    let reason='',result=null,globalFailure='';
    try{
-    info.textContent=processed+' / '+picked.length+' – sende '+recipient.name+'…';
-    const response=await sbpayJob(ROUTE,params,()=>{info.textContent=processed+' / '+picked.length+' – '+recipient.name+' wird verarbeitet ('+Math.round((performance.now()-recipientStarted)/1000)+' s).';});
+    const response=await fetch(ROUTE,{method:'POST',body:params,credentials:'same-origin',cache:'no-store'});
     const contentType=(response.headers.get('content-type')||'').toLowerCase();
     if(!contentType.includes('application/json')){
      reason='Serverantwort nicht lesbar; Ergebnis in Shiftbase pruefen.';
@@ -13914,13 +13528,7 @@ send.addEventListener('click',async()=>{
    meter.value=processed;
    if(reason){
     problems.push({number,name:recipient.name,reason});
-    setStatus(number,reason);
-    const checkbox=boxes.find(b=>b.value===number);
-    if(checkbox){checkbox.checked=false;checkbox.disabled=true;}
-    const row=document.getElementById('sbpay-person-'+number);
-    if(row){row.dataset.delivery=result?.state==='unknown'?'unknown':(row.dataset.delivery||'unknown');row.style.background='#fff0ed';}
-    const checkButton=document.getElementById('sbpay-sync-problems');
-    if(checkButton){const count=Number(checkButton.dataset.remaining||'0')+1;checkButton.dataset.remaining=String(count);checkButton.textContent='Nur Fehler / gesperrte Uploads pruefen ('+count+')';}
+    setStatus(number,'Probleme beim Versand – persoenliche Shiftbase-Akte pruefen');
     // A single employee's ambiguous UI outcome is an isolated, permanently
     // claimed attempt; it must not cancel remaining employees. The server
     // never repeats that employee's file selection or final Save.
@@ -13929,7 +13537,6 @@ send.addEventListener('click',async()=>{
     if(result?.state==='observed_ui_visibility_unverified')visibilityPending++;
     const checkbox=boxes.find(b=>b.value===number);
     if(checkbox){checkbox.checked=false;checkbox.disabled=true;}
-    const row=document.getElementById('sbpay-person-'+number);if(row)row.dataset.delivery=result.state;
     setStatus(number,result.state==='confirmed'?'API-bestaetigt':
       result.state==='observed_ui_visibility_unverified'?
       'Im persoenlichen Profil gesehen – Mitarbeitersichtbarkeit selbst pruefen':
@@ -13943,12 +13550,6 @@ send.addEventListener('click',async()=>{
   }
  }finally{
   sending=false;update();
-  const ready=document.getElementById('sbpay-ready-count');if(ready)ready.textContent=String(boxes.filter(b=>!b.disabled).length);
-  const delivery=document.getElementById('sbpay-delivery-count');const states=rows.map(r=>r.dataset.delivery||'');
-  if(delivery)delivery.textContent=states.filter(x=>['confirmed','observed_ui'].includes(x)).length+' / '+states.filter(x=>x&&!['confirmed','observed_ui'].includes(x)).length;
-  const checkButton=document.getElementById('sbpay-sync-problems');
-  if(checkButton){const count=states.filter(x=>x&&x!=='confirmed').length;checkButton.dataset.remaining=String(count);checkButton.textContent='Nur Fehler / gesperrte Uploads pruefen ('+count+')';}
-  if(all)all.textContent='Alle markieren ('+boxes.filter(b=>!b.disabled).length+')';
   window.dispatchEvent(new Event('sbpay-send-end'));
   const remaining=picked.slice(processed);
   const seconds=((performance.now()-startTime)/1000).toFixed(1);
@@ -13969,26 +13570,22 @@ update();
 @admin_login_required
 def admin_shiftbase_payroll_upload_step(batch_id):
     _sbpay_token_check()
-    return _sbpay_http_job(batch_id,'upload',lambda form: _sbpay_upload_step_work(batch_id,form))
-
-
-def _sbpay_upload_step_work(batch_id,form):
     contract = _sbpay_upload_contract()
     if not contract:
         return _sbpay_no_cache(jsonify({'error':_SBPAY_SESSION_RENEW_MESSAGE,
                                         'session_required':True})), 503
     # Explicit admin-side choice: exactly one identified page OR all eligible
     # pages in a sequential run. An unset/invalid mode must NEVER imply bulk.
-    mode = (form.get('mode') or '').strip()
+    mode = (request.form.get('mode') or '').strip()
     if mode not in ('single', 'all'):
         return _sbpay_no_cache(jsonify({'error': 'Einzel- oder Gesamtversand muss explizit gewaehlt werden.'})), 400
     requested_page = None
     if mode == 'single':
-        raw_page = (form.get('page_no') or '').strip()
+        raw_page = (request.form.get('page_no') or '').strip()
         if not re.fullmatch(r'[1-9][0-9]{0,5}', raw_page):
             return _sbpay_no_cache(jsonify({'error': 'Eine eindeutige Mitarbeiter-PDF ist erforderlich.'})), 400
         requested_page = int(raw_page)
-    elif form.get('page_no'):
+    elif request.form.get('page_no'):
         return _sbpay_no_cache(jsonify({'error': 'Unzulaessige Einzelseite beim Gesamtversand.'})), 400
     # Claim one row BEFORE network activity; UNIQUE(batch_id,page_no) makes every
     # attempt at most once, including timeouts, lost HTTP replies, or page reloads.
@@ -14049,7 +13646,6 @@ def _sbpay_upload_step_work(batch_id,form):
             return _sbpay_no_cache(jsonify({'done':False,'state':'bereits in Bearbeitung'}))
     # Preflight is outside the transaction. Errors are recorded and never retried.
     started_at = _sbpay_time.monotonic()
-    app.logger.warning('SBPAY_UPLOAD_START page_no=%s attempt=%s',page_no,attempt_id[:12])
     diagnostic = ''
     document_id=''
     browser_reused = False
@@ -14058,7 +13654,7 @@ def _sbpay_upload_step_work(batch_id,form):
         with db_conn() as conn:
             batch, row, driver, content = _sbpay_verified_pdf(conn,batch_id,page_no)
         if contract.get('mode') == 'browser':
-            app.logger.warning('SBPAY_PDF_PREFLIGHT_TIMING elapsed_s=%.2f',
+            app.logger.info('SBPAY_PDF_PREFLIGHT_TIMING elapsed_s=%.2f',
                             _sbpay_time.monotonic()-started_at)
             def mark_before_browser_save():
                 # An interrupted connection after this point is UNKNOWN, never
@@ -14087,8 +13683,8 @@ def _sbpay_upload_step_work(batch_id,form):
                           else 'Unbekannter Browserfehler. Render-Logs auf Fehlertyp pruefen.')
         diagnostic = safe_preflight
         session_required = _sbpay_is_session_error(exc)
-        app.logger.warning('SBPAY_UPLOAD_RESULT page_no=%s outcome=interrupted type=%s session_required=%s',
-                           page_no,type(exc).__name__,session_required)
+        app.logger.warning('Payroll Shiftbase browser send interrupted: type=%s reason=%s',
+                           type(exc).__name__, diagnostic[:200])
         # BEFORE set_input_files, a browser attempt is provably write-free.
         # Once file bytes enter the DOM, upload may already have started even
         # without clicking Save. Keep that claim forever until manual review.
@@ -14098,12 +13694,9 @@ def _sbpay_upload_step_work(batch_id,form):
                   WHERE batch_id=? AND page_no=? AND attempt_id=?''',
                   (batch_id,page_no,attempt_id)).fetchone()
                 if current_state and current_state['state'] == 'preparing':
-                    deleted=rconn.execute('''DELETE FROM shiftbase_payroll_deliveries
+                    rconn.execute('''DELETE FROM shiftbase_payroll_deliveries
                       WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='preparing' ''',
                       (batch_id,page_no,attempt_id))
-                    if deleted.rowcount!=1:
-                        return _sbpay_no_cache(jsonify({'done':False,'error':
-                            'Versandstatus wurde zwischenzeitlich geaendert. Nicht erneut senden.'})),409
                     _sbpay_record_attempt_diagnostic(rconn,batch_id,page_no,attempt_id,
                         'preflight_failed',safe_preflight,_sbpay_time.monotonic()-started_at)
                     rconn.commit()
@@ -14114,18 +13707,13 @@ def _sbpay_upload_step_work(batch_id,form):
         state='unknown'
     with db_conn() as conn:
         _sbpay_delivery_schema(conn)
-        changed=conn.execute('''UPDATE shiftbase_payroll_deliveries
+        conn.execute('''UPDATE shiftbase_payroll_deliveries
             SET state=?,document_id=?,updated_at=?
-            WHERE batch_id=? AND page_no=? AND attempt_id=? AND state='sending' ''',
+            WHERE batch_id=? AND page_no=? AND attempt_id=?''',
             (state,document_id,now_iso(),batch_id,page_no,attempt_id))
-        if changed.rowcount!=1:
-            return _sbpay_no_cache(jsonify({'done':False,'error':
-                'Versandstatus wurde zwischenzeitlich abgeglichen. Mitarbeiterakte pruefen; nicht erneut senden.'})),409
         _sbpay_record_attempt_diagnostic(conn,batch_id,page_no,attempt_id,state,
             diagnostic if state=='unknown' else '',_sbpay_time.monotonic()-started_at)
         conn.commit()
-    app.logger.warning('SBPAY_UPLOAD_RESULT page_no=%s outcome=%s total_s=%.2f',
-                       page_no,state,_sbpay_time.monotonic()-started_at)
     return _sbpay_no_cache(jsonify({'done':False,'state':state,
                                     'elapsed_seconds':round(_sbpay_time.monotonic()-started_at, 1),
                                     'browser_reused':browser_reused,
